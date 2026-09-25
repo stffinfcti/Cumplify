@@ -386,9 +386,7 @@ export default function M4RecordsPage() {
               columns={registerColumns}
               data={registerRows}
               rowKey={(r) => r.record.id}
-              onRowClick={(r) =>
-                router.push(`/m4/forms?tpl=${r.template.id}&rec=${r.record.id}`)
-              }
+              onRowClick={(r) => router.push(`/m4/forms?tpl=${r.template.id}&rec=${r.record.id}`)}
               emptyMessage={t('emptyRecords')}
             />
           )}

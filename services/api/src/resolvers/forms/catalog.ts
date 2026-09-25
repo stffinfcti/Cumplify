@@ -4,9 +4,7 @@
  * — no semantic changes).
  */
 
-import {
-  beginTenantTransaction,
-} from '../shared.js';
+import { beginTenantTransaction } from '../shared.js';
 import type { SqlParameter } from '@aws-sdk/client-rds-data';
 import {
   marshalTemplates,

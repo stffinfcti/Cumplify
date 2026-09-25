@@ -53,9 +53,7 @@ vi.mock('@/components/shared', () => ({
       {children}
     </section>
   ),
-  EmptyState: ({ message }: { message: string }) => (
-    <div data-testid="empty-state">{message}</div>
-  ),
+  EmptyState: ({ message }: { message: string }) => <div data-testid="empty-state">{message}</div>,
 }));
 
 // window.location.assign is called on success — spy on it (jsdom navigation).

@@ -72,7 +72,14 @@ const SAVE_SECTION_EDIT = `mutation SaveDocumentSectionEdit($input: SaveDocument
   saveDocumentSectionEdit(input: $input) { id versionNo changeSummary createdAt }
 }`;
 
-export function DocumentEditor({ sections, runId, documentId: _documentId, versionId, onSaved, onConverge }: DocumentEditorProps) {
+export function DocumentEditor({
+  sections,
+  runId,
+  documentId: _documentId,
+  versionId,
+  onSaved,
+  onConverge,
+}: DocumentEditorProps) {
   const t = useTranslations('editor');
   const { user } = useAuth();
   const { mutate } = useGraphQL();
@@ -119,10 +126,7 @@ export function DocumentEditor({ sections, runId, documentId: _documentId, versi
           continue;
         }
         if (text === draft.baseContent || text === draft.editorContent) continue;
-        next.set(
-          section.harmonizationKey,
-          addAgentProposal({ ...draft, baseContent: text }, text),
-        );
+        next.set(section.harmonizationKey, addAgentProposal({ ...draft, baseContent: text }, text));
         changed = true;
       }
       return changed ? next : prev;
@@ -254,20 +258,12 @@ export function DocumentEditor({ sections, runId, documentId: _documentId, versi
   return (
     <div className={styles.editor}>
       {/* RS-9 sync-pending banner — honest, never faked */}
-      {hasPendingSync && (
-        <GuidanceBanner message={t('syncPending')} variant="warning" />
-      )}
+      {hasPendingSync && <GuidanceBanner message={t('syncPending')} variant="warning" />}
 
       {/* Per-section editors */}
       {sections.map((section) => {
         if (section.kind !== 'prose' && section.kind !== 'PROSE') {
-          return (
-            <SectionNonEditable
-              key={section.harmonizationKey}
-              section={section}
-              t={t}
-            />
-          );
+          return <SectionNonEditable key={section.harmonizationKey} section={section} t={t} />;
         }
         const draft = drafts.get(section.harmonizationKey);
         if (!draft) return null;
@@ -344,18 +340,11 @@ function SectionEditor({
       <div className={styles.sectionHeader}>
         <span className={styles.sectionKey}>{draft.harmonizationKey}</span>
         <div className={styles.sectionActions}>
-          {converged && (
-            <StatusBadge status="APPROVED" />
-          )}
-          <SecondaryButton
-            onClick={() => editor?.chain().focus().insertMermaidBlock().run()}
-          >
+          {converged && <StatusBadge status="APPROVED" />}
+          <SecondaryButton onClick={() => editor?.chain().focus().insertMermaidBlock().run()}>
             {t('insertDiagram')}
           </SecondaryButton>
-          <SecondaryButton
-            onClick={onRegenerate}
-            disabled={isRegenerating}
-          >
+          <SecondaryButton onClick={onRegenerate} disabled={isRegenerating}>
             {isRegenerating ? t('regenerating') : t('iterateWithAgent')}
           </SecondaryButton>
           {/* RS-9 save — enabled once the draft has unsynced changes */}
@@ -414,9 +403,7 @@ function TrackedChangeItem({
           {isAgent ? '🤖 ' : '👤 '}
           {change.actor.name}
         </span>
-        <span className={styles.changeTime}>
-          {new Date(change.timestamp).toLocaleTimeString()}
-        </span>
+        <span className={styles.changeTime}>{new Date(change.timestamp).toLocaleTimeString()}</span>
       </div>
       <p className={styles.changeContent}>
         {change.content.length > 100 ? `${change.content.slice(0, 100)}…` : change.content}

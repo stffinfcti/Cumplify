@@ -84,7 +84,15 @@ export const CAPA_GURU_TOOLS: ToolConfig[] = [
       inputSchema: {
         json: {
           type: 'object',
-          required: ['standard', 'ncType', 'clauseRef', 'severity', 'source', 'description', 'rationale'],
+          required: [
+            'standard',
+            'ncType',
+            'clauseRef',
+            'severity',
+            'source',
+            'description',
+            'rationale',
+          ],
           properties: {
             standard: {
               type: 'string',
@@ -100,7 +108,10 @@ export const CAPA_GURU_TOOLS: ToolConfig[] = [
                 'The governing clause number of the chosen standard (e.g. 8.7 for nonconforming outputs, 10.2 for nonconformity and corrective action)',
             },
             severity: { type: 'string', description: 'One of: low | medium | high | critical' },
-            source: { type: 'string', description: 'One of: audit | incident | complaint | process' },
+            source: {
+              type: 'string',
+              description: 'One of: audit | incident | complaint | process',
+            },
             description: {
               type: 'string',
               description: 'The refined, audit-ready problem statement (facts only, no invention)',

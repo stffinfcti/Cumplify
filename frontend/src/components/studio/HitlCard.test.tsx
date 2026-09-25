@@ -62,7 +62,10 @@ describe('HitlCard (shared studio card)', () => {
     fireEvent.click(screen.getByText('hitlCard.approve'));
 
     await waitFor(() => expect(screen.getByTestId('provenance')).toBeInTheDocument());
-    expect(onApproved).toHaveBeenCalledWith('item-1', expect.objectContaining({ auditEventId: 'evt-1' }));
+    expect(onApproved).toHaveBeenCalledWith(
+      'item-1',
+      expect.objectContaining({ auditEventId: 'evt-1' }),
+    );
     const input = mockMutate.mock.calls[0][1].input;
     expect(input).toMatchObject({ hitlItemId: 'item-1', decision: 'APPROVE' });
   });

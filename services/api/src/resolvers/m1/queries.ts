@@ -3,11 +3,7 @@
  * (mechanical decomposition — no semantic changes).
  */
 
-import {
-  beginTenantTransaction,
-  marshalOne,
-  marshalMany,
-} from '../shared.js';
+import { beginTenantTransaction, marshalOne, marshalMany } from '../shared.js';
 import { mapEnum, DOC_STATUS_MAP } from '../enum-mappings.js';
 import { LIST_QUERY_LIMIT, type AppSyncEvent } from './common.js';
 

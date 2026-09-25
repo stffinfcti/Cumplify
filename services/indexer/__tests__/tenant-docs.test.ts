@@ -170,9 +170,7 @@ describe('Tenant-docs indexer (B3)', () => {
   });
 
   it('missing contentRef in payload → skip with warn (old-format event drain)', async () => {
-    await processDocumentPublished(
-      makeEvent({ versionId: 'v1', documentId: 'doc-1' }),
-    );
+    await processDocumentPublished(makeEvent({ versionId: 'v1', documentId: 'doc-1' }));
 
     // No S3, embed, or AOSS calls — graceful skip
     expect(mockS3Send).not.toHaveBeenCalled();

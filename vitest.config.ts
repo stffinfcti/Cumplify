@@ -25,7 +25,12 @@ export default defineConfig({
   plugins: [mdAsTextPlugin()],
   test: {
     globals: true,
-    include: ['services/**/*.test.ts', 'services/**/*.property.test.ts', 'infra/**/*.unit.test.ts', 'scripts/**/*.unit.test.ts'],
+    include: [
+      'services/**/*.test.ts',
+      'services/**/*.property.test.ts',
+      'infra/**/*.unit.test.ts',
+      'scripts/**/*.unit.test.ts',
+    ],
     exclude: ['node_modules', 'dist', 'cdk.out', 'infra/readback/**', '**/*.int.test.ts'],
     reporters: ['verbose'],
     testTimeout: 60_000,

@@ -15,14 +15,33 @@ vi.mock('../src/embed.js', () => ({
 
 // We need to mock the entire module graph that invoke() pulls in
 vi.mock('../src/register-resolver.js', () => ({
-  resolveModel: () => ({ modelId: 'us.amazon.nova-pro-v1:0', tier: 'workhorse', cachingSupported: true }),
+  resolveModel: () => ({
+    modelId: 'us.amazon.nova-pro-v1:0',
+    tier: 'workhorse',
+    cachingSupported: true,
+  }),
 }));
 vi.mock('../src/converse.js', () => ({
-  converse: () => Promise.resolve({ text: 'ok', toolUseBlocks: [], stopReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheWriteInputTokens: 0 }, rawResponse: {} }),
+  converse: () =>
+    Promise.resolve({
+      text: 'ok',
+      toolUseBlocks: [],
+      stopReason: 'end_turn',
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheWriteInputTokens: 0 },
+      rawResponse: {},
+    }),
 }));
 vi.mock('../src/metering.js', () => ({
   computeCredits: () => 0.001,
-  loadWeights: () => Promise.resolve({ modelId: 'x', wIn: 800, wOut: 3200, wCache: 200, effectiveFrom: '', sourceCommit: '' }),
+  loadWeights: () =>
+    Promise.resolve({
+      modelId: 'x',
+      wIn: 800,
+      wOut: 3200,
+      wCache: 200,
+      effectiveFrom: '',
+      sourceCommit: '',
+    }),
   incrementMeter: () => Promise.resolve(),
   emitCreditsTelemetry: () => Promise.resolve(),
 }));
@@ -57,11 +76,13 @@ describe('handler dispatch (F-1)', () => {
     });
 
     expect(mockEmbed).toHaveBeenCalledTimes(1);
-    expect(mockEmbed).toHaveBeenCalledWith(expect.objectContaining({
-      op: 'embed',
-      tenantId: 'tenant-1',
-      text: 'hello',
-    }));
+    expect(mockEmbed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        op: 'embed',
+        tenantId: 'tenant-1',
+        text: 'hello',
+      }),
+    );
     expect(result).toEqual({ embedding: [0.1], tokenCount: 5, credits: 0.0001 });
   });
 

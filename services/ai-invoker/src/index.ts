@@ -52,7 +52,9 @@ export type { DocComposerOutput } from './doc-composer-schema.js';
  * - {op:'embed', ...} → embed path (EMB-1..5)
  * - absent op / {op:'invoke', ...} → existing invoke path (back-compat)
  */
-export async function handler(event: InvokeRequest | EmbedOp): Promise<InvokeResponse | EmbedResult> {
+export async function handler(
+  event: InvokeRequest | EmbedOp,
+): Promise<InvokeResponse | EmbedResult> {
   if ('op' in event && event.op === 'embed') {
     return embed(event);
   }
@@ -155,11 +157,16 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
     const credits = computeCredits(usage, weights);
     await incrementMeter(tenantId, credits, cap);
     await emitCreditsTelemetry({
-      tenantId, agent, module, feature,
+      tenantId,
+      agent,
+      module,
+      feature,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       cacheReadTokens: usage.cacheReadInputTokens,
-      creditsConsumed: credits, modelId, seat,
+      creditsConsumed: credits,
+      modelId,
+      seat,
     });
 
     return {
@@ -181,7 +188,8 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
       if (isAgentRoutingTool(toolBlock.name)) {
         // Extract target agent from tool input if available
         const inputObj = toolBlock.input as Record<string, unknown> | undefined;
-        const targetAgent = (inputObj?.targetAgent as string) ?? (inputObj?.agent as string) ?? 'unknown';
+        const targetAgent =
+          (inputObj?.targetAgent as string) ?? (inputObj?.agent as string) ?? 'unknown';
 
         try {
           await checkHopPayload({
@@ -202,11 +210,16 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
             const credits = computeCredits(usage, weights);
             await incrementMeter(tenantId, credits, cap);
             await emitCreditsTelemetry({
-              tenantId, agent, module, feature,
+              tenantId,
+              agent,
+              module,
+              feature,
               inputTokens: usage.inputTokens,
               outputTokens: usage.outputTokens,
               cacheReadTokens: usage.cacheReadInputTokens,
-              creditsConsumed: credits, modelId, seat,
+              creditsConsumed: credits,
+              modelId,
+              seat,
             });
           }
           throw err;
@@ -238,7 +251,9 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
         {
           role: 'user' as const,
           content: [
-            { text: `${GROUNDING_RETRY_INSTRUCTION}\n\nSource:\n${request.groundingContext.source}` },
+            {
+              text: `${GROUNDING_RETRY_INSTRUCTION}\n\nSource:\n${request.groundingContext.source}`,
+            },
           ],
         },
       ];
@@ -274,11 +289,16 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
         const credits = computeCredits(usage, weights);
         await incrementMeter(tenantId, credits, cap);
         await emitCreditsTelemetry({
-          tenantId, agent, module, feature,
+          tenantId,
+          agent,
+          module,
+          feature,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
           cacheReadTokens: usage.cacheReadInputTokens,
-          creditsConsumed: credits, modelId, seat,
+          creditsConsumed: credits,
+          modelId,
+          seat,
         });
 
         return {
@@ -363,11 +383,16 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
         const credits = computeCredits(usage, weights);
         await incrementMeter(tenantId, credits, cap);
         await emitCreditsTelemetry({
-          tenantId, agent, module, feature,
+          tenantId,
+          agent,
+          module,
+          feature,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
           cacheReadTokens: usage.cacheReadInputTokens,
-          creditsConsumed: credits, modelId, seat,
+          creditsConsumed: credits,
+          modelId,
+          seat,
         });
 
         return {
@@ -456,11 +481,16 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
           const credits = computeCredits(usage, weights);
           await incrementMeter(tenantId, credits, cap);
           await emitCreditsTelemetry({
-            tenantId, agent, module, feature,
+            tenantId,
+            agent,
+            module,
+            feature,
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,
             cacheReadTokens: usage.cacheReadInputTokens,
-            creditsConsumed: credits, modelId, seat,
+            creditsConsumed: credits,
+            modelId,
+            seat,
           });
 
           return {
@@ -504,7 +534,10 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
       if (err instanceof InvokeError) throw err;
       logger.error('AR check infra failure — failing open with arVerdict=error', {
         error: err instanceof Error ? err.message : String(err),
-        arPath, seat, feature, tenantId,
+        arPath,
+        seat,
+        feature,
+        tenantId,
       });
       guardrailEvidence = {
         groundingScore: guardrailEvidence?.groundingScore ?? null,
@@ -554,11 +587,16 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
           const credits = computeCredits(usage, weights);
           await incrementMeter(tenantId, credits, cap);
           await emitCreditsTelemetry({
-            tenantId, agent, module, feature,
+            tenantId,
+            agent,
+            module,
+            feature,
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,
             cacheReadTokens: usage.cacheReadInputTokens,
-            creditsConsumed: credits, modelId, seat,
+            creditsConsumed: credits,
+            modelId,
+            seat,
           });
           throw retryErr;
         }
@@ -574,15 +612,22 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
   // Emit telemetry (non-blocking)
   await emitCreditsTelemetry({
-    tenantId, agent, module, feature,
+    tenantId,
+    agent,
+    module,
+    feature,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     cacheReadTokens: usage.cacheReadInputTokens,
-    creditsConsumed: credits, modelId, seat,
+    creditsConsumed: credits,
+    modelId,
+    seat,
   });
 
   logger.info('Invocation complete', {
-    seat, modelId, tenantId,
+    seat,
+    modelId,
+    tenantId,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     credits: credits.toFixed(4),
@@ -622,31 +667,19 @@ const CLAUSE_CITING_SEATS: ReadonlySet<string> = new Set([
 ]);
 
 /** Features that indicate clause-citing content */
-const CLAUSE_CITING_FEATURES: ReadonlySet<string> = new Set([
-  'clause-qa',
-  'record-write',
-]);
+const CLAUSE_CITING_FEATURES: ReadonlySet<string> = new Set(['clause-qa', 'record-write']);
 
 /** Features that indicate role-advisory content */
-const ROLE_ADVISORY_FEATURES: ReadonlySet<string> = new Set([
-  'role-advisory',
-  'permission-check',
-]);
+const ROLE_ADVISORY_FEATURES: ReadonlySet<string> = new Set(['role-advisory', 'permission-check']);
 
 /** Features that indicate plan-advisory content */
-const PLAN_ADVISORY_FEATURES: ReadonlySet<string> = new Set([
-  'plan-advisory',
-  'entitlement-check',
-]);
+const PLAN_ADVISORY_FEATURES: ReadonlySet<string> = new Set(['plan-advisory', 'entitlement-check']);
 
 /**
  * Resolve the AR invocation path from seat + feature.
  * Returns undefined if the invocation is not subject to AR validation.
  */
-function resolveArInvocationPath(
-  seat: string,
-  feature: string,
-): ArInvocationPath | undefined {
+function resolveArInvocationPath(seat: string, feature: string): ArInvocationPath | undefined {
   // Role/plan advisory features take precedence (advisory guardrail)
   if (ROLE_ADVISORY_FEATURES.has(feature)) return 'role-advisory';
   if (PLAN_ADVISORY_FEATURES.has(feature)) return 'plan-advisory';

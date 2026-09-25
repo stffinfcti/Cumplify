@@ -22,7 +22,10 @@ let capturedContent = '';
 const chainCommands: string[] = [];
 
 vi.mock('@tiptap/react', () => ({
-  useEditor: (opts: { content?: string; onUpdate?: (args: { editor: { getHTML: () => string } }) => void }) => {
+  useEditor: (opts: {
+    content?: string;
+    onUpdate?: (args: { editor: { getHTML: () => string } }) => void;
+  }) => {
     capturedOnUpdate = opts.onUpdate ?? null;
     capturedContent = opts.content ?? '';
     return {
@@ -121,9 +124,7 @@ describe('DocumentEditor — human edit attribution', () => {
     expect(screen.queryByTestId('guidance-banner')).not.toBeInTheDocument();
 
     act(() => {
-
       capturedOnUpdate!({ editor: { getHTML: () => '<p>Edited content.</p>' } });
-
     });
 
     expect(screen.getByTestId('guidance-banner')).toBeInTheDocument();
@@ -207,9 +208,7 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
 
     // Effect-driven: converged content = accepted human edit (a 'replace'
     // carries the full editor HTML)
-    await waitFor(() =>
-      expect(onConverge).toHaveBeenCalledWith('4.1', '<p>Edited content.</p>'),
-    );
+    await waitFor(() => expect(onConverge).toHaveBeenCalledWith('4.1', '<p>Edited content.</p>'));
     expect(onConverge).toHaveBeenCalledTimes(1);
   });
 
@@ -287,7 +286,12 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
 describe('DocumentEditor — RS-9 save wire (owner 2026-07-22: drafts must be editable)', () => {
   it('an edit enables Save version; save calls saveDocumentSectionEdit with versionId + body + trackedChanges', async () => {
     mockMutate.mockResolvedValue({
-      saveDocumentSectionEdit: { id: 'v2', versionNo: 2, changeSummary: 'Section edit: 4.1', createdAt: 'now' },
+      saveDocumentSectionEdit: {
+        id: 'v2',
+        versionNo: 2,
+        changeSummary: 'Section edit: 4.1',
+        createdAt: 'now',
+      },
     });
     const onSaved = vi.fn();
     render(

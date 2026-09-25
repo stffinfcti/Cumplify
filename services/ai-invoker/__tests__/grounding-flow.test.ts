@@ -56,14 +56,16 @@ describe('runGroundingFlow', () => {
   it('returns pass result when grounding check passes', async () => {
     mockBedrockSend.mockResolvedValueOnce({
       action: 'NONE',
-      assessments: [{
-        contextualGroundingPolicy: {
-          filters: [
-            { type: 'GROUNDING', score: 0.92, action: 'NONE' },
-            { type: 'RELEVANCE', score: 0.88, action: 'NONE' },
-          ],
+      assessments: [
+        {
+          contextualGroundingPolicy: {
+            filters: [
+              { type: 'GROUNDING', score: 0.92, action: 'NONE' },
+              { type: 'RELEVANCE', score: 0.88, action: 'NONE' },
+            ],
+          },
         },
-      }],
+      ],
     });
 
     const result = await runGroundingFlow({
@@ -87,14 +89,16 @@ describe('runGroundingFlow', () => {
   it('returns flagged result when grounding check blocks', async () => {
     mockBedrockSend.mockResolvedValueOnce({
       action: 'GUARDRAIL_INTERVENED',
-      assessments: [{
-        contextualGroundingPolicy: {
-          filters: [
-            { type: 'GROUNDING', score: 0.40, action: 'BLOCKED' },
-            { type: 'RELEVANCE', score: 0.60, action: 'BLOCKED' },
-          ],
+      assessments: [
+        {
+          contextualGroundingPolicy: {
+            filters: [
+              { type: 'GROUNDING', score: 0.4, action: 'BLOCKED' },
+              { type: 'RELEVANCE', score: 0.6, action: 'BLOCKED' },
+            ],
+          },
         },
-      }],
+      ],
     });
 
     const result = await runGroundingFlow({
@@ -109,36 +113,41 @@ describe('runGroundingFlow', () => {
 
     expect(result.flagged).toBe(true);
     expect(result.isHonestMiss).toBe(false); // orchestration decides honest-miss
-    expect(result.groundingScore).toBe(0.40);
+    expect(result.groundingScore).toBe(0.4);
   });
 
   it('uses worst score across multiple sections', async () => {
     // Response > 5000 chars → splits into sections
-    const longResponse = '## Section 1\n' + 'a'.repeat(3000) + '\n## Section 2\n' + 'b'.repeat(3000);
+    const longResponse =
+      '## Section 1\n' + 'a'.repeat(3000) + '\n## Section 2\n' + 'b'.repeat(3000);
 
     // First section passes, second blocks
     mockBedrockSend
       .mockResolvedValueOnce({
         action: 'NONE',
-        assessments: [{
-          contextualGroundingPolicy: {
-            filters: [
-              { type: 'GROUNDING', score: 0.95, action: 'NONE' },
-              { type: 'RELEVANCE', score: 0.90, action: 'NONE' },
-            ],
+        assessments: [
+          {
+            contextualGroundingPolicy: {
+              filters: [
+                { type: 'GROUNDING', score: 0.95, action: 'NONE' },
+                { type: 'RELEVANCE', score: 0.9, action: 'NONE' },
+              ],
+            },
           },
-        }],
+        ],
       })
       .mockResolvedValueOnce({
         action: 'GUARDRAIL_INTERVENED',
-        assessments: [{
-          contextualGroundingPolicy: {
-            filters: [
-              { type: 'GROUNDING', score: 0.50, action: 'BLOCKED' },
-              { type: 'RELEVANCE', score: 0.70, action: 'BLOCKED' },
-            ],
+        assessments: [
+          {
+            contextualGroundingPolicy: {
+              filters: [
+                { type: 'GROUNDING', score: 0.5, action: 'BLOCKED' },
+                { type: 'RELEVANCE', score: 0.7, action: 'BLOCKED' },
+              ],
+            },
           },
-        }],
+        ],
       });
 
     const result = await runGroundingFlow({
@@ -152,8 +161,8 @@ describe('runGroundingFlow', () => {
     });
 
     expect(result.flagged).toBe(true);
-    expect(result.groundingScore).toBe(0.50); // worst of the two
-    expect(result.relevanceScore).toBe(0.70);
+    expect(result.groundingScore).toBe(0.5); // worst of the two
+    expect(result.relevanceScore).toBe(0.7);
     expect(mockBedrockSend).toHaveBeenCalledTimes(2); // two sections checked
   });
 });
@@ -170,13 +179,17 @@ describe('emitGroundingBlockedAndHonestMiss', () => {
       agent: 'guru-9001',
       module: 'M1',
       groundingScore: 0.35,
-      relevanceScore: 0.60,
+      relevanceScore: 0.6,
       locale: 'en',
     });
 
     // Event published
     expect(mockEbSend).toHaveBeenCalledTimes(1);
-    const entry = (mockEbSend.mock.calls[0][0] as { input: { Entries: Array<{ DetailType: string; Detail: string }> } }).input.Entries[0];
+    const entry = (
+      mockEbSend.mock.calls[0][0] as {
+        input: { Entries: Array<{ DetailType: string; Detail: string }> };
+      }
+    ).input.Entries[0];
     expect(entry.DetailType).toBe('Ai.GroundingBlocked');
     const detail = JSON.parse(entry.Detail);
     expect(detail.payload.groundingScore).toBe(0.35);
@@ -193,7 +206,7 @@ describe('emitGroundingBlockedAndHonestMiss', () => {
       tenantId: 't1',
       agent: 'guru-9001',
       module: 'M1',
-      groundingScore: 0.40,
+      groundingScore: 0.4,
       relevanceScore: 0.55,
       locale: 'es',
     });

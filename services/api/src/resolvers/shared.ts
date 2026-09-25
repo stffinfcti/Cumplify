@@ -312,9 +312,8 @@ export function extractAgentContext(
   agentName: string,
   identity?: { userArn?: string; username?: string },
 ): { tenantId: string; actor: string } {
-  const tenantId = (args.tenantId ?? (args.input as Record<string, unknown> | undefined)?.tenantId) as
-    | string
-    | undefined;
+  const tenantId = (args.tenantId ??
+    (args.input as Record<string, unknown> | undefined)?.tenantId) as string | undefined;
   if (!tenantId) {
     throw new Error('Missing tenantId — required on every agent* mutation input (RS-7)');
   }
@@ -582,12 +581,7 @@ import { z } from 'zod';
  * Recursive JSON value — the declared shape of every free-form AWSJSON slot.
  */
 export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+  string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([

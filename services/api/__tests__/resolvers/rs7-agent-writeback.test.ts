@@ -67,9 +67,9 @@ beforeEach(() => {
 
 describe('extractAgentContext — SCHEMA-5 narrow exception (RS-7)', () => {
   it('throws when tenantId is missing from a bare-arg call', async () => {
-    await expect(m3Handler(makeAgentEvent('agentScoreReadiness', { standard: 'ISO9001' }))).rejects.toThrow(
-      'Missing tenantId',
-    );
+    await expect(
+      m3Handler(makeAgentEvent('agentScoreReadiness', { standard: 'ISO9001' })),
+    ).rejects.toThrow('Missing tenantId');
   });
 
   it('throws when tenantId is missing from a nested input call', async () => {
@@ -112,7 +112,8 @@ describe('extractAgentContext — IAM session-tag tenant binding (RS-7a)', () =>
       info: { fieldName: 'agentScoreReadiness' },
       arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
       identity: {
-        userArn: 'arn:aws:sts::123456789012:assumed-role/tenant-data-role/resolver-tenant-a-1750000000',
+        userArn:
+          'arn:aws:sts::123456789012:assumed-role/tenant-data-role/resolver-tenant-a-1750000000',
       },
     });
     expect(result).toEqual([]);
@@ -124,7 +125,8 @@ describe('extractAgentContext — IAM session-tag tenant binding (RS-7a)', () =>
         info: { fieldName: 'agentScoreReadiness' },
         arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
         identity: {
-          userArn: 'arn:aws:sts::123456789012:assumed-role/tenant-data-role/resolver-zzzzzzzz-1750000000',
+          userArn:
+            'arn:aws:sts::123456789012:assumed-role/tenant-data-role/resolver-zzzzzzzz-1750000000',
         },
       }),
     ).rejects.toThrow('FORBIDDEN');
@@ -165,7 +167,7 @@ describe('agentDraftDocument (m1, DocStudio) — direct write', () => {
 
     expect(result).toEqual({ id: 'doc-1' });
     const [docSql, docParams] = mockExecute.mock.calls[0];
-    expect(docSql).toContain("INSERT INTO m1.documents");
+    expect(docSql).toContain('INSERT INTO m1.documents');
     expect(docSql).toContain("'draft'");
     expect(docParams).toContainEqual({ name: 'actor', value: { stringValue: 'agent:DocStudio' } });
 
@@ -224,7 +226,7 @@ describe('agentProposeCorrectiveAction (m2, CAPAGuru) — direct write, dueDate 
     expect(result).toEqual({ id: 'ca-1', status: 'OPEN' }); // REVERSE_ENUMS: DB 'open' -> CAPAStatus.OPEN
 
     const [sql, params] = mockExecute.mock.calls[0];
-    expect(sql).toContain("INSERT INTO m2.corrective_actions");
+    expect(sql).toContain('INSERT INTO m2.corrective_actions');
     expect(sql).toContain("'open'");
     const dueDateParam = params.find((p: { name: string }) => p.name === 'dueDate');
     const dueDateMs = new Date(dueDateParam.value.stringValue).getTime();
@@ -297,16 +299,27 @@ describe('agentGenerateChecklist (m3, LeadAuditor) — delegates to generateAudi
           { name: 'required_sources' },
         ],
       })
-      .mockResolvedValueOnce({ records: [[{ stringValue: 'chk-1' }]], columnMetadata: [{ name: 'id' }] })
+      .mockResolvedValueOnce({
+        records: [[{ stringValue: 'chk-1' }]],
+        columnMetadata: [{ name: 'id' }],
+      })
       .mockResolvedValueOnce(EMPTY_RESULT);
 
-    await m3Handler(makeAgentEvent('agentGenerateChecklist', { auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d', tenantId: 'tenant-agent' }));
+    await m3Handler(
+      makeAgentEvent('agentGenerateChecklist', {
+        auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d',
+        tenantId: 'tenant-agent',
+      }),
+    );
     // Same internal function as generateAuditChecklist — SQL shape assertions
     // live in m3-m4-m5-fixes.test.ts; here we assert it ran at all under the
     // agent path with actor 'agent:LeadAuditor'.
     const insertCall = mockExecute.mock.calls[2];
     expect(insertCall[0]).toContain('INSERT INTO m3.audit_checklists');
-    expect(insertCall[1]).toContainEqual({ name: 'actor', value: { stringValue: 'agent:LeadAuditor' } });
+    expect(insertCall[1]).toContainEqual({
+      name: 'actor',
+      value: { stringValue: 'agent:LeadAuditor' },
+    });
   });
 });
 
@@ -405,7 +418,9 @@ describe('agentAssessRisk (m5, RiskSentinel) — direct write, updates existing 
     expect((result as { severity: number }).severity).toBe(5);
 
     const [updateSql, updateParams] = mockExecute.mock.calls[0];
-    expect(updateSql).toContain('UPDATE m5.risks SET likelihood = :likelihood, severity = :severity');
+    expect(updateSql).toContain(
+      'UPDATE m5.risks SET likelihood = :likelihood, severity = :severity',
+    );
     expect(updateParams).toContainEqual({ name: 'likelihood', value: { longValue: 4 } });
 
     // Refresh now runs post-commit in a second transaction (MV lock isolation).

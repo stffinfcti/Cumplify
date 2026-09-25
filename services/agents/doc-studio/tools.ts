@@ -40,7 +40,8 @@ export const DOC_STUDIO_TOOLS: ToolConfig[] = [
                   heading: { type: 'string', description: 'Section heading' },
                   body: {
                     type: 'string',
-                    description: 'Drafted prose for this section — facts and practice, no invention',
+                    description:
+                      'Drafted prose for this section — facts and practice, no invention',
                   },
                 },
               },

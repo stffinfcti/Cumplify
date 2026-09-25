@@ -65,8 +65,15 @@ export interface StoreTokenInput {
  */
 export async function handler(event: StoreTokenInput): Promise<{ stored: true }> {
   const { taskToken, sfnExecutionArn } = event;
-  const { tenantId, hitlItemId, agentName, proposedAction, createdAt, guardrailEvidence, requestedBy } =
-    event.input;
+  const {
+    tenantId,
+    hitlItemId,
+    agentName,
+    proposedAction,
+    createdAt,
+    guardrailEvidence,
+    requestedBy,
+  } = event.input;
 
   logger.info('Creating/updating HITL item with task token', {
     tenantId,
@@ -138,7 +145,7 @@ export async function handler(event: StoreTokenInput): Promise<{ stored: true }>
         // PENDING with a dead task token.
         ConditionExpression: 'attribute_not_exists(#status) OR #status = :status',
       }),
-  );
+    );
   } catch (err: unknown) {
     if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
       logger.warn('HITL item already resolved — skipping token write', {

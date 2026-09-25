@@ -69,25 +69,19 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'recordRootCause':
       return requireModuleRole(role, 'M2', () => recordRootCause(event, tenantId, sub));
     case 'createCorrectiveAction':
-      return requireModuleRole(role, 'M2', () =>
-        createCorrectiveAction(event, tenantId, sub),
-      );
+      return requireModuleRole(role, 'M2', () => createCorrectiveAction(event, tenantId, sub));
     case 'closeCapa':
       return requireModuleRole(role, 'M2', () => closeCapa(event, tenantId, sub));
     case 'verifyEffectiveness':
       return requireModuleRole(role, 'M2', () => verifyEffectiveness(event, tenantId, sub));
     case 'disposeNonconformingOutput':
-      return requireModuleRole(role, 'M2', () =>
-        disposeNonconformingOutput(event, tenantId, sub),
-      );
+      return requireModuleRole(role, 'M2', () => disposeNonconformingOutput(event, tenantId, sub));
     case 'runCapaAnalysis':
       return requireModuleRole(role, 'M2', () => runCapaAnalysis(event, tenantId, sub));
     case 'runNcIntake':
       return requireModuleRole(role, 'M2', () => runNcIntake(event, tenantId, sub));
     case 'runRootCauseAnalysis':
-      return requireModuleRole(role, 'M2', () =>
-        runRootCauseAnalysis(event, tenantId, sub),
-      );
+      return requireModuleRole(role, 'M2', () => runRootCauseAnalysis(event, tenantId, sub));
     case 'listRootCauseAnalyses':
       return listRootCauseAnalyses(event, tenantId);
     case 'getNonconformity':

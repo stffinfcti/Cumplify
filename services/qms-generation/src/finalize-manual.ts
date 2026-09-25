@@ -114,9 +114,7 @@ async function insertDocument(
       `SELECT COALESCE(MAX(version_no), 0) + 1 AS next FROM m1.document_versions WHERE document_id = :docId::uuid`,
       [{ name: 'docId', value: { stringValue: documentId } }],
     );
-    const versionNo = Number(
-      (versionResult.records![0][0] as { longValue?: number }).longValue,
-    );
+    const versionNo = Number((versionResult.records![0][0] as { longValue?: number }).longValue);
     return { documentId, versionNo };
   }
 

@@ -162,8 +162,12 @@ export class FrontendStack extends cdk.Stack {
     this.distributionDomainName = distribution.distributionDomainName;
 
     // CfnOutputs for readback + pipeline deploy step
-    this.bucketNameOutput = new cdk.CfnOutput(this, 'FrontendBucketName', { value: bucket.bucketName });
-    this.distributionIdOutput = new cdk.CfnOutput(this, 'FrontendDistributionId', { value: distribution.distributionId });
+    this.bucketNameOutput = new cdk.CfnOutput(this, 'FrontendBucketName', {
+      value: bucket.bucketName,
+    });
+    this.distributionIdOutput = new cdk.CfnOutput(this, 'FrontendDistributionId', {
+      value: distribution.distributionId,
+    });
     this.distributionDomainOutput = new cdk.CfnOutput(this, 'FrontendDistributionDomain', {
       value: distribution.distributionDomainName,
     });
@@ -243,7 +247,7 @@ export class FrontendStack extends cdk.Stack {
         {
           id: 'AwsSolutions-IAM5',
           reason:
-            'S3 object-level actions (PutObject, DeleteObject) require /*-suffixed resource for s3 sync; scoped to this stack\'s bucket only.',
+            "S3 object-level actions (PutObject, DeleteObject) require /*-suffixed resource for s3 sync; scoped to this stack's bucket only.",
         },
       ],
       true,

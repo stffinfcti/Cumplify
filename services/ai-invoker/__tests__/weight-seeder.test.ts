@@ -96,7 +96,7 @@ describe('weight-seeder', () => {
       expect(seed.models[id].wIn).toBeGreaterThan(0);
     }
     // Generation models must have wOut > 0; embedding models have wOut = 0
-    const GENERATION_MODELS = IN_SCOPE_MODELS.filter(m => m !== 'amazon.titan-embed-text-v2:0');
+    const GENERATION_MODELS = IN_SCOPE_MODELS.filter((m) => m !== 'amazon.titan-embed-text-v2:0');
     for (const id of GENERATION_MODELS) {
       expect(seed.models[id].wOut).toBeGreaterThan(0);
     }

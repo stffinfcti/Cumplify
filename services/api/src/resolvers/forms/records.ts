@@ -3,12 +3,7 @@
  * forms.ts (mechanical decomposition — no semantic changes).
  */
 
-import {
-  beginTenantTransaction,
-  publishAuditEvent,
-  parseAwsJson,
-  unwrapField,
-} from '../shared.js';
+import { beginTenantTransaction, publishAuditEvent, parseAwsJson, unwrapField } from '../shared.js';
 import {
   logger,
   CONTENT_BUCKET,
@@ -131,7 +126,10 @@ export async function createFormRecord(
  * Immutability guard: rejects writes on complete/approved status.
  * REC-3: no validation on save, only on submit.
  */
-export async function saveFormRecordValues(event: AppSyncEvent, tenantId: string): Promise<unknown> {
+export async function saveFormRecordValues(
+  event: AppSyncEvent,
+  tenantId: string,
+): Promise<unknown> {
   const input = event.arguments.input as {
     recordId: string;
     values: string | Record<string, unknown>;

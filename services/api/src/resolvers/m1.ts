@@ -12,11 +12,7 @@
  * Only the field→function dispatch remains here; exported symbols unchanged.
  */
 
-import {
-  extractContext,
-  extractAgentContext,
-  requireModuleRole,
-} from './shared.js';
+import { extractContext, extractAgentContext, requireModuleRole } from './shared.js';
 import { logger, type AppSyncEvent } from './m1/common.js';
 import { runDocDraft, createDocumentDraft, agentDraftDocument } from './m1/drafts.js';
 import {
@@ -50,15 +46,11 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'createDocumentDraft':
       return requireModuleRole(role, 'M1', () => createDocumentDraft(event, tenantId, sub));
     case 'submitDocumentForApproval':
-      return requireModuleRole(role, 'M1', () =>
-        submitDocumentForApproval(event, tenantId, sub),
-      );
+      return requireModuleRole(role, 'M1', () => submitDocumentForApproval(event, tenantId, sub));
     case 'approveDocumentVersion':
       return requireModuleRole(role, 'M1', () => approveDocumentVersion(event, tenantId, sub));
     case 'publishControlledDocument':
-      return requireModuleRole(role, 'M1', () =>
-        publishControlledDocument(event, tenantId, sub),
-      );
+      return requireModuleRole(role, 'M1', () => publishControlledDocument(event, tenantId, sub));
     case 'updatePolicy':
       return requireModuleRole(role, 'M1', () => updatePolicy(event, tenantId, sub));
     case 'updateImsScope':
@@ -74,9 +66,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'getDocumentContent':
       return getDocumentContent(event, tenantId);
     case 'saveDocumentSectionEdit':
-      return requireModuleRole(role, 'M1', () =>
-        saveDocumentSectionEdit(event, tenantId, sub),
-      );
+      return requireModuleRole(role, 'M1', () => saveDocumentSectionEdit(event, tenantId, sub));
     case 'runDocDraft':
       return requireModuleRole(role, 'M1', () => runDocDraft(event, tenantId, sub));
     default:

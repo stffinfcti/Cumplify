@@ -136,8 +136,7 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
   // L5-2 (Task 32): If guardrailEvidence.flagged=true, approval REQUIRES justification.
   // Flagged items had grounding issues — approver must explicitly justify the override.
   const guardrailEvidence = item.guardrailEvidence as
-    | { flagged?: boolean; groundingScore?: number; relevanceScore?: number }
-    | undefined;
+    { flagged?: boolean; groundingScore?: number; relevanceScore?: number } | undefined;
   const isFlagged = guardrailEvidence?.flagged === true;
 
   if (isFlagged && decision === 'APPROVE' && !justification) {

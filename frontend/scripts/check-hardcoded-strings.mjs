@@ -33,7 +33,8 @@ const SAFE_PATTERNS = [
 
 // Regex to find JSX string literals: text between > and < (children),
 // or quoted-expression children like >{'Some text'}<
-const JSX_STRING_CHILD = />\s*(?:['"]([A-Z][a-z][\w\s,.!?:;"-]{3,})['"]|([A-Z][a-z][\w\s,.!?:;'"-]{3,}))\s*</g;
+const JSX_STRING_CHILD =
+  />\s*(?:['"]([A-Z][a-z][\w\s,.!?:;"-]{3,})['"]|([A-Z][a-z][\w\s,.!?:;'"-]{3,}))\s*</g;
 
 // User-facing attribute literals — FE-11: aria-*/placeholder/alt/title must
 // also route through next-intl, in both attr="text" and attr={'text'} forms.

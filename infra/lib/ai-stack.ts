@@ -149,7 +149,7 @@ export class AiStack extends cdk.Stack {
       },
       contextualGroundingPolicyConfig: {
         filtersConfig: [
-          { type: 'GROUNDING', threshold: 0.90 },
+          { type: 'GROUNDING', threshold: 0.9 },
           { type: 'RELEVANCE', threshold: 0.75 },
         ],
       },
@@ -178,10 +178,7 @@ export class AiStack extends cdk.Stack {
     // ─── AR Policies (spec-35 Task 25: L2 Automated Reasoning) ─────────────
     // Read pre-authored PolicyDefinition from exported JSON files at synth time.
     // These JSONs were built via headless CLI in Tasks 22-24 and exported verbatim.
-    const arPoliciesDir = resolve(
-      dirname(fileURLToPath(import.meta.url)),
-      '../data/ar-policies',
-    );
+    const arPoliciesDir = resolve(dirname(fileURLToPath(import.meta.url)), '../data/ar-policies');
     const clauseCanonDef = JSON.parse(
       readFileSync(resolve(arPoliciesDir, 'clause-canon.json'), 'utf-8'),
     ).policyDefinition;
@@ -194,21 +191,31 @@ export class AiStack extends cdk.Stack {
 
     const clauseCanonPolicy = new bedrock.CfnAutomatedReasoningPolicy(this, 'ClauseCanonPolicy', {
       name: `cumplify-clause-canon-${envConfig.envName}`,
-      description: 'Clause-canon AR policy: validates ISO clause references (152 tuples: 9001/14001/45001)',
+      description:
+        'Clause-canon AR policy: validates ISO clause references (152 tuples: 9001/14001/45001)',
       policyDefinition: clauseCanonDef,
     });
 
-    const rolePermissionsPolicy = new bedrock.CfnAutomatedReasoningPolicy(this, 'RolePermissionsPolicy', {
-      name: `cumplify-role-permissions-${envConfig.envName}`,
-      description: 'Role-permissions AR policy: validates Part 13 v2 12-role RBAC + SoD assertions',
-      policyDefinition: rolePermissionsDef,
-    });
+    const rolePermissionsPolicy = new bedrock.CfnAutomatedReasoningPolicy(
+      this,
+      'RolePermissionsPolicy',
+      {
+        name: `cumplify-role-permissions-${envConfig.envName}`,
+        description:
+          'Role-permissions AR policy: validates Part 13 v2 12-role RBAC + SoD assertions',
+        policyDefinition: rolePermissionsDef,
+      },
+    );
 
-    const planEntitlementsPolicy = new bedrock.CfnAutomatedReasoningPolicy(this, 'PlanEntitlementsPolicy', {
-      name: `cumplify-plan-entitlements-${envConfig.envName}`,
-      description: 'Plan-entitlements AR policy: validates Part 17.2 pricing tier feature gates',
-      policyDefinition: planEntitlementsDef,
-    });
+    const planEntitlementsPolicy = new bedrock.CfnAutomatedReasoningPolicy(
+      this,
+      'PlanEntitlementsPolicy',
+      {
+        name: `cumplify-plan-entitlements-${envConfig.envName}`,
+        description: 'Plan-entitlements AR policy: validates Part 17.2 pricing tier feature gates',
+        policyDefinition: planEntitlementsDef,
+      },
+    );
 
     // ─── AR-clause CfnGuardrail (spec-35 §1.1: clause-canon only) ──────────
     // One AR policy (clause-canon). CrossRegionConfig required for AR.
@@ -218,8 +225,7 @@ export class AiStack extends cdk.Stack {
       blockedInputMessaging: 'Response contains invalid clause citation.',
       blockedOutputsMessaging: 'Response contains invalid clause citation.',
       crossRegionConfig: {
-        guardrailProfileArn:
-          `arn:aws:bedrock:us-east-1:${this.account}:guardrail-profile/us.guardrail.v1:0`,
+        guardrailProfileArn: `arn:aws:bedrock:us-east-1:${this.account}:guardrail-profile/us.guardrail.v1:0`,
       },
       automatedReasoningPolicyConfig: {
         policies: [clauseCanonPolicy.attrPolicyArn],
@@ -235,8 +241,7 @@ export class AiStack extends cdk.Stack {
       blockedInputMessaging: 'Response contains invalid advisory claim.',
       blockedOutputsMessaging: 'Response contains invalid advisory claim.',
       crossRegionConfig: {
-        guardrailProfileArn:
-          `arn:aws:bedrock:us-east-1:${this.account}:guardrail-profile/us.guardrail.v1:0`,
+        guardrailProfileArn: `arn:aws:bedrock:us-east-1:${this.account}:guardrail-profile/us.guardrail.v1:0`,
       },
       automatedReasoningPolicyConfig: {
         policies: [rolePermissionsPolicy.attrPolicyArn, planEntitlementsPolicy.attrPolicyArn],
@@ -287,9 +292,7 @@ export class AiStack extends cdk.Stack {
         sid: 'AutomatedReasoningChecks',
         effect: iam.Effect.ALLOW,
         actions: ['bedrock:InvokeAutomatedReasoningPolicy'],
-        resources: [
-          `arn:aws:bedrock:us-east-1:${this.account}:automated-reasoning-policy/*`,
-        ],
+        resources: [`arn:aws:bedrock:us-east-1:${this.account}:automated-reasoning-policy/*`],
       }),
     );
 
@@ -1295,12 +1298,7 @@ export class AiStack extends cdk.Stack {
     }
 
     // GEN-5 progress events: compose + finalize publish the @aws_iam mutation
-    for (const fn of [
-      composeSectionFn,
-      finalizeManualFn,
-      regenerateSectionFn,
-      markRunFailedFn,
-    ]) {
+    for (const fn of [composeSectionFn, finalizeManualFn, regenerateSectionFn, markRunFailedFn]) {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           effect: iam.Effect.ALLOW,
@@ -1374,9 +1372,18 @@ export class AiStack extends cdk.Stack {
       causePath: sfn.JsonPath.stringAt('$.stageError'),
     });
     const markRunFailedThenFail = markRunFailed.next(runFailed);
-    seedTask.addCatch(markRunFailedThenFail, { errors: ['States.ALL'], resultPath: '$.stageError' });
-    composeMap.addCatch(markRunFailedThenFail, { errors: ['States.ALL'], resultPath: '$.stageError' });
-    finalizeTask.addCatch(markRunFailedThenFail, { errors: ['States.ALL'], resultPath: '$.stageError' });
+    seedTask.addCatch(markRunFailedThenFail, {
+      errors: ['States.ALL'],
+      resultPath: '$.stageError',
+    });
+    composeMap.addCatch(markRunFailedThenFail, {
+      errors: ['States.ALL'],
+      resultPath: '$.stageError',
+    });
+    finalizeTask.addCatch(markRunFailedThenFail, {
+      errors: ['States.ALL'],
+      resultPath: '$.stageError',
+    });
 
     const docGenStateMachine = new sfn.StateMachine(this, 'DocGenStateMachine', {
       stateMachineName: `cumplify-docgen-${envConfig.envName}`,
@@ -1388,8 +1395,12 @@ export class AiStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'DocGenStateMachineArn', { value: docGenStateMachine.stateMachineArn });
-    new cdk.CfnOutput(this, 'RecordWriteGuardrailId', { value: recordWriteGuardrail.attrGuardrailId });
-    new cdk.CfnOutput(this, 'RecordWriteGuardrailVersion', { value: recordWriteGuardrail.attrVersion });
+    new cdk.CfnOutput(this, 'RecordWriteGuardrailId', {
+      value: recordWriteGuardrail.attrGuardrailId,
+    });
+    new cdk.CfnOutput(this, 'RecordWriteGuardrailVersion', {
+      value: recordWriteGuardrail.attrVersion,
+    });
     new cdk.CfnOutput(this, 'SeedSectionsFnArn', { value: seedSectionsFn.functionArn });
     new cdk.CfnOutput(this, 'ComposeSectionFnArn', { value: composeSectionFn.functionArn });
     new cdk.CfnOutput(this, 'FinalizeManualFnArn', { value: finalizeManualFn.functionArn });
@@ -1602,38 +1613,42 @@ export class AiStack extends cdk.Stack {
 
     // AOSS data-access policy for seeder (ACCESS-1b) — additive union with
     // the main policy below (D-4: no priority, AOSS policies are additive).
-    const isoKbSeederAccessPolicy = new opensearchserverless.CfnAccessPolicy(this, 'IsoKbSeederAccessPolicy', {
-      name: `iso-kb-seeder-access`,
-      type: 'data',
-      policy: JSON.stringify([
-        {
-          Rules: [
-            {
-              ResourceType: 'collection',
-              Resource: ['collection/cumplify-iso-kb'],
-              Permission: [
-                'aoss:CreateCollectionItems',
-                'aoss:UpdateCollectionItems',
-                'aoss:DescribeCollectionItems',
-              ],
-            },
-            {
-              ResourceType: 'index',
-              Resource: ['index/cumplify-iso-kb/*'],
-              Permission: [
-                'aoss:CreateIndex',
-                'aoss:DeleteIndex',
-                'aoss:UpdateIndex',
-                'aoss:DescribeIndex',
-                'aoss:ReadDocument',
-                'aoss:WriteDocument',
-              ],
-            },
-          ],
-          Principal: [isoKbSeederFn.role!.roleArn],
-        },
-      ]),
-    });
+    const isoKbSeederAccessPolicy = new opensearchserverless.CfnAccessPolicy(
+      this,
+      'IsoKbSeederAccessPolicy',
+      {
+        name: `iso-kb-seeder-access`,
+        type: 'data',
+        policy: JSON.stringify([
+          {
+            Rules: [
+              {
+                ResourceType: 'collection',
+                Resource: ['collection/cumplify-iso-kb'],
+                Permission: [
+                  'aoss:CreateCollectionItems',
+                  'aoss:UpdateCollectionItems',
+                  'aoss:DescribeCollectionItems',
+                ],
+              },
+              {
+                ResourceType: 'index',
+                Resource: ['index/cumplify-iso-kb/*'],
+                Permission: [
+                  'aoss:CreateIndex',
+                  'aoss:DeleteIndex',
+                  'aoss:UpdateIndex',
+                  'aoss:DescribeIndex',
+                  'aoss:ReadDocument',
+                  'aoss:WriteDocument',
+                ],
+              },
+            ],
+            Principal: [isoKbSeederFn.role!.roleArn],
+          },
+        ]),
+      },
+    );
 
     // FIX-P12-3: CFN-direct CustomResource — serviceToken invokes Lambda directly.
     // No provider Lambda, no invoke policy, no IAM propagation race.
@@ -1817,8 +1832,12 @@ export class AiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DocGenGuardrailVersion', { value: docGenGuardrail.attrVersion });
     new cdk.CfnOutput(this, 'ArClauseGuardrailId', { value: arClauseGuardrail.attrGuardrailId });
     new cdk.CfnOutput(this, 'ArClauseGuardrailVersion', { value: arClauseGuardrail.attrVersion });
-    new cdk.CfnOutput(this, 'ArAdvisoryGuardrailId', { value: arAdvisoryGuardrail.attrGuardrailId });
-    new cdk.CfnOutput(this, 'ArAdvisoryGuardrailVersion', { value: arAdvisoryGuardrail.attrVersion });
+    new cdk.CfnOutput(this, 'ArAdvisoryGuardrailId', {
+      value: arAdvisoryGuardrail.attrGuardrailId,
+    });
+    new cdk.CfnOutput(this, 'ArAdvisoryGuardrailVersion', {
+      value: arAdvisoryGuardrail.attrVersion,
+    });
     new cdk.CfnOutput(this, 'HitlStateMachineArn', { value: hitlStateMachine.stateMachineArn });
 
     new cdk.CfnOutput(this, 'DocStudioQueueUrl', { value: docStudioQueue.queueUrl });

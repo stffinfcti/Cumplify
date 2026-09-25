@@ -24,8 +24,7 @@ function makeDeployFrontendStep(
   envName: string,
 ): pipelines.CodeBuildStep {
   // Synth-time ARN — deterministic role name enables IAM grant without runtime env vars (A-1)
-  const contentDeployRoleArn =
-    `arn:aws:iam::${envAccount}:role/cumplify-${envName}-frontend-content-deploy`;
+  const contentDeployRoleArn = `arn:aws:iam::${envAccount}:role/cumplify-${envName}-frontend-content-deploy`;
 
   return new pipelines.CodeBuildStep('DeployFrontendContent', {
     envFromCfnOutputs: {
@@ -143,7 +142,9 @@ export class PipelineStack extends cdk.Stack {
       envConfig: ENV_CONFIGS.staging,
     });
     const stagingDeployContent = makeDeployFrontendStep(
-      stagingStage, ENV_CONFIGS.staging.account, 'staging',
+      stagingStage,
+      ENV_CONFIGS.staging.account,
+      'staging',
     );
     const smokeTest = new pipelines.ShellStep('SmokeTest', {
       envFromCfnOutputs: {

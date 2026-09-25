@@ -44,7 +44,7 @@ const FALLBACK_CHUNK_SIZE = 4_000;
 
 export interface GroundingContext {
   source: string; // concatenated retrieval chunks (≤100k)
-  query: string;  // user question (≤1,000)
+  query: string; // user question (≤1,000)
 }
 
 export interface GroundingResult {
@@ -204,8 +204,7 @@ export function parseGroundingResponse(response: ApplyGuardrailCommandOutput): G
 
   const assessments = response.assessments ?? [];
   for (const assessment of assessments) {
-    const filters =
-      (assessment as any).contextualGroundingPolicy?.filters ?? [];
+    const filters = (assessment as any).contextualGroundingPolicy?.filters ?? [];
     for (const filter of filters) {
       if (filter.type === 'GROUNDING') {
         if (typeof filter.score === 'number') groundingScore = filter.score;
@@ -234,10 +233,7 @@ const CHUNK_PREVIEW_LENGTH = 200;
  * Splits source on delimiter, extracts clauseRef from metadata prefix,
  * assigns scores, returns top-N sorted by score.
  */
-export function buildCitations(
-  groundingSource: string,
-  groundingScore: number,
-): Citation[] {
+export function buildCitations(groundingSource: string, groundingScore: number): Citation[] {
   const chunks = groundingSource.split(CHUNK_DELIMITER).filter((c) => c.trim());
   const citations: Citation[] = [];
 
@@ -253,11 +249,8 @@ export function buildCitations(
   }
 
   // Sort by score descending (for future per-chunk scoring), take top-N
-  return citations
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_CITATIONS);
+  return citations.sort((a, b) => b.score - a.score).slice(0, MAX_CITATIONS);
 }
-
 
 // ─── Retry + Honest-Miss Flow (L1-7, L1-8) ─────────────────────────────────
 

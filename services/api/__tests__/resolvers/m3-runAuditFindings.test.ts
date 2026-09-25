@@ -52,7 +52,8 @@ vi.mock('@aws-lambda-powertools/logger', () => ({
 }));
 
 // L4: env var read at CALL time — set before import
-process.env.LEAD_AUDITOR_FN_ARN = 'arn:aws:lambda:us-east-1:123:function:cumplify-lead-auditor-test';
+process.env.LEAD_AUDITOR_FN_ARN =
+  'arn:aws:lambda:us-east-1:123:function:cumplify-lead-auditor-test';
 
 import { handler } from '../../src/resolvers/m3.js';
 
@@ -86,12 +87,7 @@ describe('runAuditFindings (S4 Audit Studio dispatch)', () => {
           { stringValue: 'planned' },
         ],
       ],
-      columnMetadata: [
-        { name: 'id' },
-        { name: 'standard' },
-        { name: 'scope' },
-        { name: 'status' },
-      ],
+      columnMetadata: [{ name: 'id' }, { name: 'standard' }, { name: 'scope' }, { name: 'status' }],
     });
     // 2: checklist rows
     mockExecute.mockResolvedValueOnce({
@@ -102,11 +98,7 @@ describe('runAuditFindings (S4 Audit Studio dispatch)', () => {
           { stringValue: 'audit plans, records' },
         ],
       ],
-      columnMetadata: [
-        { name: 'clause_ref' },
-        { name: 'question' },
-        { name: 'expected_evidence' },
-      ],
+      columnMetadata: [{ name: 'clause_ref' }, { name: 'question' }, { name: 'expected_evidence' }],
     });
     // 3: prior findings
     mockExecute.mockResolvedValueOnce({
@@ -123,7 +115,9 @@ describe('runAuditFindings (S4 Audit Studio dispatch)', () => {
 
   it('reads context, Event-invokes LeadAuditor with findingsIntent, acks DISPATCHED — and publishes NO audit event (L3: fail-closed registry, HITL plane owns the trail)', async () => {
     wireReads();
-    const result = (await handler(makeEvent('runAuditFindings', { auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' }))) as {
+    const result = (await handler(
+      makeEvent('runAuditFindings', { auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' }),
+    )) as {
       runId: string;
       status: string;
     };
@@ -170,9 +164,9 @@ describe('runAuditFindings (S4 Audit Studio dispatch)', () => {
   it('AUDIT_NOT_FOUND when audit does not exist', async () => {
     mockExecute.mockResolvedValueOnce({ records: [], columnMetadata: [] });
 
-    await expect(handler(makeEvent('runAuditFindings', { auditId: 'b4e2d7f3-9c5a-4e6b-8d7f-2a3b4c5d6e7f' }))).rejects.toThrow(
-      'AUDIT_NOT_FOUND',
-    );
+    await expect(
+      handler(makeEvent('runAuditFindings', { auditId: 'b4e2d7f3-9c5a-4e6b-8d7f-2a3b4c5d6e7f' })),
+    ).rejects.toThrow('AUDIT_NOT_FOUND');
     expect(mockLambdaSend).not.toHaveBeenCalled();
   });
 
@@ -180,9 +174,9 @@ describe('runAuditFindings (S4 Audit Studio dispatch)', () => {
     const original = process.env.LEAD_AUDITOR_FN_ARN;
     process.env.LEAD_AUDITOR_FN_ARN = '';
     try {
-      await expect(handler(makeEvent('runAuditFindings', { auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' }))).rejects.toThrow(
-        'LEAD_AUDITOR_NOT_AVAILABLE',
-      );
+      await expect(
+        handler(makeEvent('runAuditFindings', { auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' })),
+      ).rejects.toThrow('LEAD_AUDITOR_NOT_AVAILABLE');
       expect(mockLambdaSend).not.toHaveBeenCalled();
     } finally {
       process.env.LEAD_AUDITOR_FN_ARN = original;

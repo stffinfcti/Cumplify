@@ -23,9 +23,7 @@ export function GuidanceBanner({ message, action, variant = 'info' }: GuidanceBa
     <div className={styles.banner}>
       <span className={`${styles.accent} ${styles[variant]}`} aria-hidden="true" />
       <span className={styles.message}>{message}</span>
-      {action && (
-        <SecondaryButton onClick={action.onClick}>{action.label}</SecondaryButton>
-      )}
+      {action && <SecondaryButton onClick={action.onClick}>{action.label}</SecondaryButton>}
     </div>
   );
 }

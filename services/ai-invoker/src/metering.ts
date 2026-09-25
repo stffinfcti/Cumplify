@@ -126,8 +126,7 @@ export async function incrementMeter(
         // the equality edge is rejected exactly as the pre-check's >= gate was.
         ...(capped
           ? {
-              ConditionExpression:
-                'attribute_not_exists(creditsUsed) OR creditsUsed < :cap',
+              ConditionExpression: 'attribute_not_exists(creditsUsed) OR creditsUsed < :cap',
             }
           : {}),
         UpdateExpression: 'ADD creditsUsed :credits SET lastUpdated = :ts',

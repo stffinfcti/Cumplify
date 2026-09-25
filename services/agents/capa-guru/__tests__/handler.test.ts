@@ -59,14 +59,24 @@ describe('CAPAGuru handler() dispatch', () => {
   });
 
   it('routes direct-invoke payloads (no Records key) to runCapaAnalysis', async () => {
-    mockToolLoop.mockResolvedValueOnce({ finalResponse: 'ok', turns: 1, totalUsage: { inputTokens: 1, outputTokens: 1 } });
+    mockToolLoop.mockResolvedValueOnce({
+      finalResponse: 'ok',
+      turns: 1,
+      totalUsage: { inputTokens: 1, outputTokens: 1 },
+    });
     const input = {
       tenantId: 'tenant-1',
       runId: 'run-1',
       ncId: 'nc-1',
       requestedBy: 'user-9',
       context: {
-        nc: { description: 'desc', ncType: 'nc', severity: 'high', standard: 'ISO9001' as const, status: 'open' },
+        nc: {
+          description: 'desc',
+          ncType: 'nc',
+          severity: 'high',
+          standard: 'ISO9001' as const,
+          status: 'open',
+        },
         correctiveActions: [],
       },
     };
@@ -98,27 +108,43 @@ describe('runCapaAnalysis', () => {
   };
 
   it('threads requestedBy + all five HITL tools into toolLoop (SOD-1, stage-aware set + S1 intake + C1 RCA)', async () => {
-    mockToolLoop.mockResolvedValueOnce({ finalResponse: 'ok', turns: 1, totalUsage: { inputTokens: 1, outputTokens: 1 } });
+    mockToolLoop.mockResolvedValueOnce({
+      finalResponse: 'ok',
+      turns: 1,
+      totalUsage: { inputTokens: 1, outputTokens: 1 },
+    });
 
     await runCapaAnalysis(baseInput);
 
     const [, opts] = mockToolLoop.mock.calls[0];
     expect(opts.requestedBy).toBe('user-9');
     expect(opts.hitlTools).toEqual(
-      new Set(['nc-draft-write', 'nc-triage-write', 'rca-write', 'capa-open', 'capa-verify-effectiveness']),
+      new Set([
+        'nc-draft-write',
+        'nc-triage-write',
+        'rca-write',
+        'capa-open',
+        'capa-verify-effectiveness',
+      ]),
     );
     expect(opts.agent).toBe('CAPAGuru');
     expect(opts.module).toBe('M2');
   });
 
   it('includes existing corrective actions in the prompt message (stage context)', async () => {
-    mockToolLoop.mockResolvedValueOnce({ finalResponse: 'ok', turns: 1, totalUsage: { inputTokens: 1, outputTokens: 1 } });
+    mockToolLoop.mockResolvedValueOnce({
+      finalResponse: 'ok',
+      turns: 1,
+      totalUsage: { inputTokens: 1, outputTokens: 1 },
+    });
 
     await runCapaAnalysis({
       ...baseInput,
       context: {
         ...baseInput.context,
-        correctiveActions: [{ id: 'ca-1', actionDesc: 'Retrain packers', status: 'open', ownerId: 'owner-1' }],
+        correctiveActions: [
+          { id: 'ca-1', actionDesc: 'Retrain packers', status: 'open', ownerId: 'owner-1' },
+        ],
       },
     });
 

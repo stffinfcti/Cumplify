@@ -351,7 +351,10 @@ export default function CapaStudioPage() {
             fetchAll();
           }}
         />
-        <SecondaryButton className={studioStyles.manualFallback} onClick={() => setDrawerOpen(true)}>
+        <SecondaryButton
+          className={studioStyles.manualFallback}
+          onClick={() => setDrawerOpen(true)}
+        >
           {tStudio('raiseManually')}
         </SecondaryButton>
       </Panel>

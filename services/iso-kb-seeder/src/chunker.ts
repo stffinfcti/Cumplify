@@ -75,9 +75,7 @@ function parseStandardSource(source: string, standard: Standard, stdNum: string)
     const guidanceBody = lines.slice(1).join('\n').trim();
 
     // Compose chunk text: prefix line + newline + guidance body
-    const text = guidanceBody
-      ? `${firstLine}\n${guidanceBody}`
-      : firstLine;
+    const text = guidanceBody ? `${firstLine}\n${guidanceBody}` : firstLine;
 
     chunks.push({
       text,
@@ -110,9 +108,7 @@ function parseHlsSource(source: string): Chunk[] {
     if (!match) continue;
 
     const guidanceBody = lines.slice(1).join('\n').trim();
-    const text = guidanceBody
-      ? `${firstLine}\n${guidanceBody}`
-      : firstLine;
+    const text = guidanceBody ? `${firstLine}\n${guidanceBody}` : firstLine;
 
     chunks.push({
       text,

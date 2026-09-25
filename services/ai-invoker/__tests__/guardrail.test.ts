@@ -122,7 +122,8 @@ describe('AR guardrail configs (separate from inline routing)', () => {
   it('AR configs return undefined when not deployed yet', async () => {
     delete process.env.ARCLAUSE_GUARDRAIL_ID;
     delete process.env.ARADVISORY_GUARDRAIL_ID;
-    const { buildArClauseGuardrailConfig, buildArAdvisoryGuardrailConfig } = await import('../src/guardrail.js');
+    const { buildArClauseGuardrailConfig, buildArAdvisoryGuardrailConfig } =
+      await import('../src/guardrail.js');
     expect(buildArClauseGuardrailConfig()).toBeUndefined();
     expect(buildArAdvisoryGuardrailConfig()).toBeUndefined();
   });

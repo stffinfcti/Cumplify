@@ -117,14 +117,16 @@ describe('checkGrounding', () => {
   it('calls ApplyGuardrail with correct qualifiers and source:OUTPUT', async () => {
     mockSend.mockResolvedValueOnce({
       action: 'NONE',
-      assessments: [{
-        contextualGroundingPolicy: {
-          filters: [
-            { type: 'GROUNDING', score: 0.92, action: 'NONE' },
-            { type: 'RELEVANCE', score: 0.88, action: 'NONE' },
-          ],
+      assessments: [
+        {
+          contextualGroundingPolicy: {
+            filters: [
+              { type: 'GROUNDING', score: 0.92, action: 'NONE' },
+              { type: 'RELEVANCE', score: 0.88, action: 'NONE' },
+            ],
+          },
         },
-      }],
+      ],
     });
 
     const result = await checkGrounding({
@@ -152,14 +154,16 @@ describe('checkGrounding', () => {
   it('returns blocked verdict when filters have action BLOCKED', async () => {
     mockSend.mockResolvedValueOnce({
       action: 'GUARDRAIL_INTERVENED',
-      assessments: [{
-        contextualGroundingPolicy: {
-          filters: [
-            { type: 'GROUNDING', score: 0.42, action: 'BLOCKED' },
-            { type: 'RELEVANCE', score: 0.65, action: 'BLOCKED' },
-          ],
+      assessments: [
+        {
+          contextualGroundingPolicy: {
+            filters: [
+              { type: 'GROUNDING', score: 0.42, action: 'BLOCKED' },
+              { type: 'RELEVANCE', score: 0.65, action: 'BLOCKED' },
+            ],
+          },
         },
-      }],
+      ],
     });
 
     const result = await checkGrounding({
@@ -187,18 +191,20 @@ describe('parseGroundingResponse', () => {
     // Grounding filter explicitly BLOCKED
     const result = parseGroundingResponse({
       action: 'GUARDRAIL_INTERVENED',
-      assessments: [{
-        contextualGroundingPolicy: {
-          filters: [
-            { type: 'GROUNDING', score: 0.42, action: 'BLOCKED' },
-            { type: 'RELEVANCE', score: 0.80, action: 'NONE' },
-          ],
+      assessments: [
+        {
+          contextualGroundingPolicy: {
+            filters: [
+              { type: 'GROUNDING', score: 0.42, action: 'BLOCKED' },
+              { type: 'RELEVANCE', score: 0.8, action: 'NONE' },
+            ],
+          },
         },
-      }],
+      ],
     } as any);
     expect(result.verdict).toBe('blocked');
     expect(result.groundingScore).toBe(0.42);
-    expect(result.relevanceScore).toBe(0.80);
+    expect(result.relevanceScore).toBe(0.8);
   });
 
   it('returns pass when PII intervened but grounding filters passed (FIX-V1 mixed assessment)', () => {
@@ -207,18 +213,20 @@ describe('parseGroundingResponse', () => {
     // Before FIX-V1 this would incorrectly return 'blocked'.
     const result = parseGroundingResponse({
       action: 'GUARDRAIL_INTERVENED',
-      assessments: [{
-        sensitiveInformationPolicy: {
-          piiEntities: [{ type: 'NAME', match: 'John', action: 'ANONYMIZED' }],
-          regexes: [],
+      assessments: [
+        {
+          sensitiveInformationPolicy: {
+            piiEntities: [{ type: 'NAME', match: 'John', action: 'ANONYMIZED' }],
+            regexes: [],
+          },
+          contextualGroundingPolicy: {
+            filters: [
+              { type: 'GROUNDING', score: 0.92, action: 'NONE' },
+              { type: 'RELEVANCE', score: 0.88, action: 'NONE' },
+            ],
+          },
         },
-        contextualGroundingPolicy: {
-          filters: [
-            { type: 'GROUNDING', score: 0.92, action: 'NONE' },
-            { type: 'RELEVANCE', score: 0.88, action: 'NONE' },
-          ],
-        },
-      }],
+      ],
     } as any);
     expect(result.verdict).toBe('pass');
     expect(result.groundingScore).toBe(0.92);
@@ -228,24 +236,27 @@ describe('parseGroundingResponse', () => {
   it('returns blocked when relevance filter is BLOCKED', () => {
     const result = parseGroundingResponse({
       action: 'GUARDRAIL_INTERVENED',
-      assessments: [{
-        contextualGroundingPolicy: {
-          filters: [
-            { type: 'GROUNDING', score: 0.90, action: 'NONE' },
-            { type: 'RELEVANCE', score: 0.50, action: 'BLOCKED' },
-          ],
+      assessments: [
+        {
+          contextualGroundingPolicy: {
+            filters: [
+              { type: 'GROUNDING', score: 0.9, action: 'NONE' },
+              { type: 'RELEVANCE', score: 0.5, action: 'BLOCKED' },
+            ],
+          },
         },
-      }],
+      ],
     } as any);
     expect(result.verdict).toBe('blocked');
-    expect(result.groundingScore).toBe(0.90);
-    expect(result.relevanceScore).toBe(0.50);
+    expect(result.groundingScore).toBe(0.9);
+    expect(result.relevanceScore).toBe(0.5);
   });
 });
 
 describe('buildCitations', () => {
   it('extracts clauseRef from chunk metadata prefix', () => {
-    const source = '[ISO 9001 4.1] Context of the organization\n---\n[ISO 14001 6.1.2] Environmental aspects';
+    const source =
+      '[ISO 9001 4.1] Context of the organization\n---\n[ISO 14001 6.1.2] Environmental aspects';
     const citations = buildCitations(source, 0.91);
     expect(citations).toHaveLength(2);
     expect(citations[0].clauseRef).toBe('ISO 9001 4.1');

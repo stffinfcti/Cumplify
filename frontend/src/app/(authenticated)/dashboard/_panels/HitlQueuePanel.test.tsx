@@ -341,9 +341,7 @@ describe('HitlQueuePanel', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
 
-      await waitFor(() =>
-        expect(screen.getByTestId('hitl-card-item-page2')).toBeInTheDocument(),
-      );
+      await waitFor(() => expect(screen.getByTestId('hitl-card-item-page2')).toBeInTheDocument());
       // Original item still visible
       expect(screen.getByTestId('hitl-card-item-1')).toBeInTheDocument();
       // Load more disappears (nextToken now null)
@@ -412,9 +410,7 @@ describe('HitlQueuePanel', () => {
         expect(screen.getByRole('button', { name: 'Load more' })).toBeInTheDocument(),
       );
       fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
-      await waitFor(() =>
-        expect(screen.getByTestId('hitl-card-item-21')).toBeInTheDocument(),
-      );
+      await waitFor(() => expect(screen.getByTestId('hitl-card-item-21')).toBeInTheDocument());
       expect(screen.getAllByTestId('hitl-card-item-shared')).toHaveLength(1);
       expect(screen.getAllByTestId(/^hitl-card-/)).toHaveLength(3);
     });

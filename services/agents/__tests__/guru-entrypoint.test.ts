@@ -46,11 +46,13 @@ const GURUS = [
 ] as const;
 
 function embedPayload(): Uint8Array {
-  return Buffer.from(JSON.stringify({
-    embedding: new Array(1024).fill(0.01),
-    tokenCount: 5,
-    credits: 0.002,
-  }));
+  return Buffer.from(
+    JSON.stringify({
+      embedding: new Array(1024).fill(0.01),
+      tokenCount: 5,
+      credits: 0.002,
+    }),
+  );
 }
 
 function invokerPayload(text: string): Uint8Array {

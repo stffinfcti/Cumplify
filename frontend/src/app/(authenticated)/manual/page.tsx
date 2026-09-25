@@ -416,7 +416,10 @@ export default function ManualPage() {
         <Panel title={t('generationProgress')} subtitle={t('generationRunning')}>
           <div className={styles.sectionList}>
             {activeRun.sections.map((section) => (
-              <div key={section.id} className={`${styles.sectionRow} ${styles[`kind${section.kind}`] ?? ''}`}>
+              <div
+                key={section.id}
+                className={`${styles.sectionRow} ${styles[`kind${section.kind}`] ?? ''}`}
+              >
                 <span className={styles.sectionKey}>{section.harmonizationKey}</span>
                 <StatusBadge
                   status={
@@ -444,7 +447,11 @@ export default function ManualPage() {
             <div className={styles.statRow}>
               <StatTile label={t('statTotal')} value={stats.total} />
               <StatTile label={t('statProse')} value={stats.prose} variant="success" />
-              <StatTile label={t('statGaps')} value={stats.gaps} variant={stats.gaps > 0 ? 'warning' : 'success'} />
+              <StatTile
+                label={t('statGaps')}
+                value={stats.gaps}
+                variant={stats.gaps > 0 ? 'warning' : 'success'}
+              />
               <StatTile label={t('statReviewed')} value={`${stats.reviewed}/${stats.total}`} />
             </div>
           )}
@@ -471,7 +478,10 @@ export default function ManualPage() {
           <Panel title={t('sections')} className={styles.sectionPanel}>
             <div className={styles.sectionList}>
               {activeRun.sections.map((section) => (
-                <div key={section.id} className={`${styles.sectionRow} ${styles[`kind${section.kind}`] ?? ''}`}>
+                <div
+                  key={section.id}
+                  className={`${styles.sectionRow} ${styles[`kind${section.kind}`] ?? ''}`}
+                >
                   <span className={styles.sectionKey}>{section.harmonizationKey}</span>
                   <StatusBadge
                     status={
@@ -533,9 +543,7 @@ export default function ManualPage() {
       )}
 
       {/* Loading */}
-      {pageState === 'loading' && (
-        <p className={styles.loading}>{t('loading')}</p>
-      )}
+      {pageState === 'loading' && <p className={styles.loading}>{t('loading')}</p>}
     </>
   );
 }

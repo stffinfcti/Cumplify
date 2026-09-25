@@ -50,9 +50,15 @@ const findingsInput = {
     auditId: 'audit-31',
     audit: { standard: 'ISO9001', scope: 'Fabrication shop', status: 'in_progress' },
     checklist: [
-      { clauseRef: '8.5.1', question: 'Is production controlled?', expectedEvidence: 'Work orders' },
+      {
+        clauseRef: '8.5.1',
+        question: 'Is production controlled?',
+        expectedEvidence: 'Work orders',
+      },
     ],
-    priorFindings: [{ findingType: 'observation', clauseRef: '7.2', description: 'Training log gap' }],
+    priorFindings: [
+      { findingType: 'observation', clauseRef: '7.2', description: 'Training log gap' },
+    ],
   },
 };
 
@@ -91,8 +97,14 @@ describe('runAuditFindings (S4)', () => {
 
     const [messages, opts] = mockToolLoop.mock.calls[0];
     const blocks = messages[0].content as Array<{ text?: string; guardedText?: string }>;
-    const plain = blocks.filter((b) => b.text).map((b) => b.text).join('\n');
-    const guarded = blocks.filter((b) => b.guardedText).map((b) => b.guardedText).join('\n');
+    const plain = blocks
+      .filter((b) => b.text)
+      .map((b) => b.text)
+      .join('\n');
+    const guarded = blocks
+      .filter((b) => b.guardedText)
+      .map((b) => b.guardedText)
+      .join('\n');
 
     // Trusted framing: plain text only — never guard-evaluated
     expect(plain).toContain('FINDINGS MODE');
@@ -121,7 +133,9 @@ describe('runAuditFindings (S4)', () => {
 
     await runAuditFindings(findingsInput);
 
-    const calls = mockRetrieve.mock.calls.map((c) => c[0] as { indexName: string; tenantId: string });
+    const calls = mockRetrieve.mock.calls.map(
+      (c) => c[0] as { indexName: string; tenantId: string },
+    );
     expect(calls.find((c) => c.indexName === 'cumplify-iso-kb')!.tenantId).toBe('__ISO_CANON__');
     expect(calls.find((c) => c.indexName === 'cumplify-tenant-docs')!.tenantId).toBe('tenant-1');
   });

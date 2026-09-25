@@ -150,36 +150,41 @@ export default function DocumentsPage() {
   }, [chipDraft]);
 
   // ─── Detail view ───────────────────────────────────────────────────────────
-  const openDetail = useCallback(async (doc: Document) => {
-    setSelectedDoc(doc);
-    setDetailLoading(true);
-    setDocumentContent(null);
-    router.replace(`?doc=${doc.id}`, { scroll: false });
+  const openDetail = useCallback(
+    async (doc: Document) => {
+      setSelectedDoc(doc);
+      setDetailLoading(true);
+      setDocumentContent(null);
+      router.replace(`?doc=${doc.id}`, { scroll: false });
 
-    try {
-      const vData = await query<{ listDocumentVersions: DocumentVersion[] }>(LIST_VERSIONS, {
-        documentId: doc.id,
-      });
-      setVersions(vData.listDocumentVersions);
+      try {
+        const vData = await query<{ listDocumentVersions: DocumentVersion[] }>(LIST_VERSIONS, {
+          documentId: doc.id,
+        });
+        setVersions(vData.listDocumentVersions);
 
-      if (vData.listDocumentVersions.length > 0) {
-        // "latest" = max(versionNo) — never assume the API returns sorted rows
-        const latest = [...vData.listDocumentVersions].sort((a, b) => b.versionNo - a.versionNo)[0];
-        try {
-          const cData = await query<{ getDocumentContent: string }>(GET_CONTENT, {
-            versionId: latest.id,
-          });
-          setDocumentContent(cData.getDocumentContent);
-        } catch {
-          // Content may not be available — graceful
+        if (vData.listDocumentVersions.length > 0) {
+          // "latest" = max(versionNo) — never assume the API returns sorted rows
+          const latest = [...vData.listDocumentVersions].sort(
+            (a, b) => b.versionNo - a.versionNo,
+          )[0];
+          try {
+            const cData = await query<{ getDocumentContent: string }>(GET_CONTENT, {
+              versionId: latest.id,
+            });
+            setDocumentContent(cData.getDocumentContent);
+          } catch {
+            // Content may not be available — graceful
+          }
         }
+      } catch {
+        // Non-critical
+      } finally {
+        setDetailLoading(false);
       }
-    } catch {
-      // Non-critical
-    } finally {
-      setDetailLoading(false);
-    }
-  }, [router, query]);
+    },
+    [router, query],
+  );
 
   // URL-sync for detail: a shared ?doc=<id> link restores the detail view
   // once the document list has loaded (the param must map to a real row).
@@ -520,82 +525,80 @@ export default function DocumentsPage() {
     <>
       <PageHeader title={t('title')} />
       <StudioShell rail={rail} railLabel={tStudio('railLabel')}>
-
-      {/* Filter bar: standard pills visible only in IMS mode */}
-      <div className={styles.filters}>
-        {isIMS && (
-          <div className={styles.pills}>
-            {STANDARDS.map((s) => (
-              <button
-                key={s || 'all'}
-                type="button"
-                className={`${styles.pill} ${localFilterStandard === s ? styles.pillActive : ''}`}
-                onClick={() => setLocalFilterStandard(s)}
-              >
-                {s ? s.replace('ISO', 'ISO ') : tM1('filterAll')}
-              </button>
+        {/* Filter bar: standard pills visible only in IMS mode */}
+        <div className={styles.filters}>
+          {isIMS && (
+            <div className={styles.pills}>
+              {STANDARDS.map((s) => (
+                <button
+                  key={s || 'all'}
+                  type="button"
+                  className={`${styles.pill} ${localFilterStandard === s ? styles.pillActive : ''}`}
+                  onClick={() => setLocalFilterStandard(s)}
+                >
+                  {s ? s.replace('ISO', 'ISO ') : tM1('filterAll')}
+                </button>
+              ))}
+            </div>
+          )}
+          <select
+            className={styles.statusSelect}
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            aria-label={tM1('filterStatus')}
+          >
+            {STATUSES.map((s) => (
+              <option key={s || 'all'} value={s}>
+                {s ? tStatus(s) : tM1('filterAll')}
+              </option>
             ))}
-          </div>
-        )}
-        <select
-          className={styles.statusSelect}
-          value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
-          aria-label={tM1('filterStatus')}
-        >
-          {STATUSES.map((s) => (
-            <option key={s || 'all'} value={s}>
-              {s ? tStatus(s) : tM1('filterAll')}
-            </option>
-          ))}
-        </select>
-      </div>
+          </select>
+        </div>
 
-      {loading ? (
-        <p className={styles.loading}>{tM1('loading')}</p>
-      ) : groupedDocs ? (
-        /* Clause-family grouped view (RS-1 available) */
-        <>
-          {CLAUSE_FAMILIES.map((family) => {
-            const familyDocs = groupedDocs.get(family.label);
-            if (!familyDocs || familyDocs.length === 0) return null;
-            return (
-              <div key={family.prefix} className={styles.clauseGroup}>
-                <h3 className={styles.clauseGroupHeader}>{family.label}</h3>
+        {loading ? (
+          <p className={styles.loading}>{tM1('loading')}</p>
+        ) : groupedDocs ? (
+          /* Clause-family grouped view (RS-1 available) */
+          <>
+            {CLAUSE_FAMILIES.map((family) => {
+              const familyDocs = groupedDocs.get(family.label);
+              if (!familyDocs || familyDocs.length === 0) return null;
+              return (
+                <div key={family.prefix} className={styles.clauseGroup}>
+                  <h3 className={styles.clauseGroupHeader}>{family.label}</h3>
+                  <DataTable
+                    columns={columns}
+                    data={familyDocs}
+                    rowKey={(d) => d.id}
+                    onRowClick={openDetail}
+                    emptyMessage={tM1('emptyList')}
+                  />
+                </div>
+              );
+            })}
+            {groupedDocs.has(t('ungrouped')) && (
+              <div className={styles.clauseGroup}>
+                <h3 className={styles.clauseGroupHeader}>{t('ungrouped')}</h3>
                 <DataTable
                   columns={columns}
-                  data={familyDocs}
+                  data={groupedDocs.get(t('ungrouped'))!}
                   rowKey={(d) => d.id}
                   onRowClick={openDetail}
                   emptyMessage={tM1('emptyList')}
                 />
               </div>
-            );
-          })}
-          {groupedDocs.has(t('ungrouped')) && (
-            <div className={styles.clauseGroup}>
-              <h3 className={styles.clauseGroupHeader}>{t('ungrouped')}</h3>
-              <DataTable
-                columns={columns}
-                data={groupedDocs.get(t('ungrouped'))!}
-                rowKey={(d) => d.id}
-                onRowClick={openDetail}
-                emptyMessage={tM1('emptyList')}
-              />
-            </div>
-          )}
-        </>
-      ) : (
-        /* Flat list (RS-1 not yet available — graceful degradation) */
-        <DataTable
-          columns={columns}
-          data={docs}
-          rowKey={(d) => d.id}
-          onRowClick={openDetail}
-          emptyMessage={tM1('emptyList')}
-        />
-      )}
-
+            )}
+          </>
+        ) : (
+          /* Flat list (RS-1 not yet available — graceful degradation) */
+          <DataTable
+            columns={columns}
+            data={docs}
+            rowKey={(d) => d.id}
+            onRowClick={openDetail}
+            emptyMessage={tM1('emptyList')}
+          />
+        )}
       </StudioShell>
 
       <FormDrawer

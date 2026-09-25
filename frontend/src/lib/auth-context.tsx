@@ -62,7 +62,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Shared completion: a signed-in result updates context + navigates;
   // anything else maps Cognito's nextStep to the page-level UI state.
   const completeSignIn = useCallback(
-    async (output: { isSignedIn: boolean; nextStep: { signInStep: string } }): Promise<SignInOutcome> => {
+    async (output: {
+      isSignedIn: boolean;
+      nextStep: { signInStep: string };
+    }): Promise<SignInOutcome> => {
       if (output.isSignedIn || output.nextStep.signInStep === 'DONE') {
         const session = await fetchAuthSession();
         const jwt = session.tokens?.idToken;

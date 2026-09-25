@@ -50,7 +50,8 @@ function createTestStack(): Template {
     recordsQueueArn: 'arn:aws:sqs:us-east-1:123456789012:RecordsQueue',
     recordsDlqUrl: 'https://sqs.us-east-1.amazonaws.com/123456789012/RecordsDlq',
     tenantDocsIndexerQueueArn: 'arn:aws:sqs:us-east-1:123456789012:TenantDocsIndexerQueue',
-    tenantDocsIndexerDlqUrl: 'https://sqs.us-east-1.amazonaws.com/123456789012/TenantDocsIndexerDlq',
+    tenantDocsIndexerDlqUrl:
+      'https://sqs.us-east-1.amazonaws.com/123456789012/TenantDocsIndexerDlq',
     aossVpcEndpointId: 'vpce-0123456789abcdef0',
     vpc: ec2.Vpc.fromVpcAttributes(stack, 'MockVpc', {
       vpcId: 'vpc-0123456789abcdef0',
@@ -686,8 +687,8 @@ describe('AOSS Apply-Template CR (Task 9)', () => {
   it('T-9a: AOSS data-access policy — seeder/apply-template WRITE + prover-only DeleteIndex', () => {
     const policies = template.findResources('AWS::OpenSearchServerless::AccessPolicy');
     // Find the main AI access policy (not the iso-kb-seeder-specific one)
-    const mainPolicy = Object.entries(policies).find(
-      ([id]) => id.includes('AiAossDataAccessPolicy'),
+    const mainPolicy = Object.entries(policies).find(([id]) =>
+      id.includes('AiAossDataAccessPolicy'),
     );
     expect(mainPolicy).toBeDefined();
     const dataPolicy = mainPolicy![1] as any;
@@ -707,8 +708,8 @@ describe('AOSS Apply-Template CR (Task 9)', () => {
 
   it('iso-kb-seeding Task 5: seeder access policy grants DeleteIndex on iso-kb', () => {
     const policies = template.findResources('AWS::OpenSearchServerless::AccessPolicy');
-    const seederPolicy = Object.entries(policies).find(
-      ([id]) => id.includes('IsoKbSeederAccessPolicy'),
+    const seederPolicy = Object.entries(policies).find(([id]) =>
+      id.includes('IsoKbSeederAccessPolicy'),
     );
     expect(seederPolicy).toBeDefined();
     const policyStr = JSON.stringify((seederPolicy![1] as any).Properties.Policy);
@@ -952,7 +953,9 @@ describe('spec-35 FIX-T20-3: guru handlers VPC-placed for AOSS data-plane access
 
   it('non-retrieving consumers stay OUT of the VPC until their endpoint needs are mapped', () => {
     for (const service of ['agent-records-vault']) {
-      expect((fnByService(service).Properties as { VpcConfig?: unknown }).VpcConfig).toBeUndefined();
+      expect(
+        (fnByService(service).Properties as { VpcConfig?: unknown }).VpcConfig,
+      ).toBeUndefined();
     }
   });
 });

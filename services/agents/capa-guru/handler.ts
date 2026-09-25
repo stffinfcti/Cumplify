@@ -140,7 +140,9 @@ export async function runCapaAnalysis(input: RunAnalysisInput): Promise<RunAnaly
   const caSummary =
     context.correctiveActions.length > 0
       ? context.correctiveActions
-          .map((ca) => `  - ${ca.id}: "${ca.actionDesc}" (status=${ca.status}, owner=${ca.ownerId})`)
+          .map(
+            (ca) => `  - ${ca.id}: "${ca.actionDesc}" (status=${ca.status}, owner=${ca.ownerId})`,
+          )
           .join('\n')
       : '  (none yet)';
 

@@ -29,10 +29,10 @@ export function useDialog(
   open: boolean,
   onClose: () => void,
 ): {
-  dialogRef: RefObject<HTMLElement | null>;
+  dialogRef: RefObject<HTMLElement>;
   dialogProps: Pick<HTMLAttributes<HTMLElement>, 'role' | 'aria-modal' | 'tabIndex'>;
 } {
-  const dialogRef = useRef<HTMLElement | null>(null);
+  const dialogRef = useRef<HTMLElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;

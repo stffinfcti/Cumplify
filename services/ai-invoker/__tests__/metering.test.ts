@@ -45,9 +45,7 @@ vi.mock('@aws-sdk/client-dynamodb', () => ({
 
 vi.stubEnv('TABLE_NAME', 'CumplifyCore');
 
-const { computeCredits, emitCreditsTelemetry, incrementMeter } = await import(
-  '../src/metering.js'
-);
+const { computeCredits, emitCreditsTelemetry, incrementMeter } = await import('../src/metering.js');
 import { InvokeError } from '../src/types.js';
 import type { ModelWeight, TokenUsage } from '../src/types.js';
 

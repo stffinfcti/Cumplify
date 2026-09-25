@@ -3,10 +3,7 @@
  * forms.ts (mechanical decomposition — no semantic changes).
  */
 
-import {
-  beginTenantTransaction,
-  unwrapField,
-} from '../shared.js';
+import { beginTenantTransaction, unwrapField } from '../shared.js';
 import { GetObjectCommand, PutObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
 import { InvokeCommand } from '@aws-sdk/client-lambda';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -362,4 +359,3 @@ export async function buildRecordContent(
     versionNo: (rec.version as number) ?? 1,
   };
 }
-

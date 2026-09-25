@@ -67,7 +67,15 @@ function toISOValues(
   return result;
 }
 
-export function FormDrawer({ open, onClose, title, fields, onSubmit, keepOpen, children }: FormDrawerProps) {
+export function FormDrawer({
+  open,
+  onClose,
+  title,
+  fields,
+  onSubmit,
+  keepOpen,
+  children,
+}: FormDrawerProps) {
   const t = useTranslations('common');
   const [values, setValues] = useState<Record<string, string | boolean>>(() =>
     computeDefaults(fields),
@@ -112,12 +120,7 @@ export function FormDrawer({ open, onClose, title, fields, onSubmit, keepOpen, c
   return (
     <div className={styles.overlay}>
       <div className={styles.backdrop} onClick={onClose} />
-      <aside
-        className={styles.drawer}
-        aria-label={title}
-        ref={dialogRef}
-        {...dialogProps}
-      >
+      <aside className={styles.drawer} aria-label={title} ref={dialogRef} {...dialogProps}>
         <div className={styles.header}>
           <h2 className={styles.title}>{title}</h2>
           <button

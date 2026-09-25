@@ -122,7 +122,7 @@ describe('parseClauseRef', () => {
     });
   });
 
-  describe('D-3\' — cross-standard: parsed standard wins', () => {
+  describe("D-3' — cross-standard: parsed standard wins", () => {
     it('"ISO 14001 4.1" → standard="ISO14001" (not the guru\'s own ISO9001)', () => {
       // When ISO9001Guru receives this question, the PARSER returns ISO14001.
       // The guru handler must use parsed.standard, not override with its own.

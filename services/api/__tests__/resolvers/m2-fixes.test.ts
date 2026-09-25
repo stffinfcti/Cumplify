@@ -174,9 +174,9 @@ describe('m2 closeCapa — stale-schema fix regression', () => {
   });
 
   it('rejects a double-close — empty RETURNING throws CAPA_NOT_FOUND_OR_ALREADY_CLOSED', async () => {
-    await expect(
-      m2Handler(makeEvent('closeCapa', { input: { id: 'ca-1' } })),
-    ).rejects.toThrow('CAPA_NOT_FOUND_OR_ALREADY_CLOSED');
+    await expect(m2Handler(makeEvent('closeCapa', { input: { id: 'ca-1' } }))).rejects.toThrow(
+      'CAPA_NOT_FOUND_OR_ALREADY_CLOSED',
+    );
   });
 });
 

@@ -86,9 +86,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'getAuditReadiness':
       return getAuditReadiness(event, tenantId);
     case 'generateAuditChecklist':
-      return requireModuleRole(role, 'M3', () =>
-        generateAuditChecklist(event, tenantId, sub),
-      );
+      return requireModuleRole(role, 'M3', () => generateAuditChecklist(event, tenantId, sub));
     default:
       throw new Error(`Unknown field: ${event.info.fieldName}`);
   }
@@ -379,7 +377,11 @@ async function agentScoreReadiness(event: AppSyncEvent, tenantId: string, actor:
       payload: { standard, clauseCount: rows.length },
     });
 
-    logger.info('Agent readiness scoring complete', { tenantId, standard, clauseCount: rows.length });
+    logger.info('Agent readiness scoring complete', {
+      tenantId,
+      standard,
+      clauseCount: rows.length,
+    });
     return marshalMany(scoresResult);
   } catch (err) {
     await txn.rollback();
@@ -524,7 +526,6 @@ async function generateAuditChecklist(event: AppSyncEvent, tenantId: string, act
     throw err;
   }
 }
-
 
 // ─── S4 Audit Studio read surfaces + LeadAuditor findings dispatch ──────────
 

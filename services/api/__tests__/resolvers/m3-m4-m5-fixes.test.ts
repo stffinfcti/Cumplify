@@ -122,7 +122,9 @@ describe('m3 completeAudit — argument-shape fix regression', () => {
     const [sql, params] = mockExecute.mock.calls[0];
     expect(sql).not.toContain('conclusion');
     expect(sql).toContain(`AND status <> 'completed'`); // check-then-act predicate rides the UPDATE
-    expect(params).toEqual([{ name: 'id', value: { stringValue: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' } }]);
+    expect(params).toEqual([
+      { name: 'id', value: { stringValue: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' } },
+    ]);
   });
 
   it('rejects a double-complete — empty RETURNING throws AUDIT_NOT_FOUND_OR_ALREADY_COMPLETED', async () => {
@@ -536,7 +538,9 @@ describe('generateAuditChecklist — M3-native clause-registry checklist', () =>
     });
 
     await expect(
-      m3Handler(makeEvent('generateAuditChecklist', { auditId: 'b4e2d7f3-9c5a-4e6b-8d7f-2a3b4c5d6e7f' })),
+      m3Handler(
+        makeEvent('generateAuditChecklist', { auditId: 'b4e2d7f3-9c5a-4e6b-8d7f-2a3b4c5d6e7f' }),
+      ),
     ).rejects.toThrow('AUDIT_NOT_FOUND');
 
     expect(mockRollback).toHaveBeenCalled();
@@ -588,7 +592,9 @@ describe('generateAuditChecklist — M3-native clause-registry checklist', () =>
       ],
     });
 
-    await m3Handler(makeEvent('generateAuditChecklist', { auditId: 'c5f3e8a4-0d6b-4f7c-9e8a-3b4c5d6e7f8a' }));
+    await m3Handler(
+      makeEvent('generateAuditChecklist', { auditId: 'c5f3e8a4-0d6b-4f7c-9e8a-3b4c5d6e7f8a' }),
+    );
 
     // INSERT params contain the wrapped question
     const [, insertParams] = mockExecute.mock.calls[2];

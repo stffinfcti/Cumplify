@@ -24,10 +24,7 @@ import { Logger } from '@aws-lambda-powertools/logger';
 const logger = new Logger({ serviceName: 'ai-invoker-exempt' });
 
 /** Internal/system principals allowed to carry a credit-exemption flag. */
-const EXEMPT_PRINCIPALS: ReadonlySet<string> = new Set([
-  'iso-kb-seeder',
-  'TenantDocsIndexer',
-]);
+const EXEMPT_PRINCIPALS: ReadonlySet<string> = new Set(['iso-kb-seeder', 'TenantDocsIndexer']);
 
 /**
  * Resolve the effective value of a caller-supplied exemption flag.

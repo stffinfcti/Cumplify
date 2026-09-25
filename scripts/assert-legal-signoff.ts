@@ -61,7 +61,9 @@ function main(): void {
   try {
     parsed = JSON.parse(readFileSync(manifestPath, 'utf8'));
   } catch (e) {
-    console.error(`LegalSignoffGuard: FAIL — ${manifestPath} is not valid JSON: ${(e as Error).message}`);
+    console.error(
+      `LegalSignoffGuard: FAIL — ${manifestPath} is not valid JSON: ${(e as Error).message}`,
+    );
     process.exit(1);
   }
 
@@ -78,6 +80,5 @@ function main(): void {
 }
 
 const isDirectRun =
-  process.argv[1] !== undefined &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) main();

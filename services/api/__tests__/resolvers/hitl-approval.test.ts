@@ -434,7 +434,9 @@ describe('hitl-approval resolver — L5-2 flagged justification enforcement (Tas
 
   it('approves flagged item when justification is provided + stamps flaggedApproval on audit event', async () => {
     mockDdbSend.mockResolvedValueOnce({
-      Item: makeDdbItem({ guardrailEvidence: { flagged: true, groundingScore: 0.42, relevanceScore: 0.6 } }),
+      Item: makeDdbItem({
+        guardrailEvidence: { flagged: true, groundingScore: 0.42, relevanceScore: 0.6 },
+      }),
     });
     mockDdbSend.mockResolvedValueOnce({}); // conditional update
 
@@ -443,7 +445,8 @@ describe('hitl-approval resolver — L5-2 flagged justification enforcement (Tas
         input: {
           hitlItemId: 'hitl-item-123',
           decision: 'APPROVE',
-          justification: 'Reviewed with domain expert — content is accurate despite low grounding score',
+          justification:
+            'Reviewed with domain expert — content is accurate despite low grounding score',
         },
       }),
     );
@@ -583,7 +586,10 @@ describe('hitl-approval resolver — RS-6 approval-matrix narrowing', () => {
 
     await expect(
       handler(
-        makeEvent({ input: { hitlItemId: 'hitl-item-123', decision: 'APPROVE' } }, 'employee') as never,
+        makeEvent(
+          { input: { hitlItemId: 'hitl-item-123', decision: 'APPROVE' } },
+          'employee',
+        ) as never,
       ),
     ).rejects.toThrow(/cannot approve items in module/);
     // exactly ONE ddb call (the item Get) — floor 403'd before matrix read

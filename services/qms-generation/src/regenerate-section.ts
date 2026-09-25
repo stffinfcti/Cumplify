@@ -225,8 +225,9 @@ async function applyApprovedDraft(
       `SELECT clause_registry_ids FROM qms.generation_sections WHERE id = :id::uuid`,
       [{ name: 'id', value: { stringValue: sectionId } }],
     );
-    const clauseIds =
-      ((marshalMany(secResult)[0]?.clauseRegistryIds as string[] | undefined) ?? []).filter(Boolean);
+    const clauseIds = (
+      (marshalMany(secResult)[0]?.clauseRegistryIds as string[] | undefined) ?? []
+    ).filter(Boolean);
     let clauseRefs: Array<{ standard: string; clauseNo: string }> = [];
     if (clauseIds.length) {
       const clausesResult = await txn.execute(

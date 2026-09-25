@@ -79,7 +79,10 @@ export async function withRetry(
 
     if (attempt < MAX_ATTEMPTS) {
       const elapsed = attempt - 1;
-      const delay = Math.min(BACKOFF_BASE_MS * Math.pow(BACKOFF_FACTOR, elapsed), BACKOFF_CEILING_MS);
+      const delay = Math.min(
+        BACKOFF_BASE_MS * Math.pow(BACKOFF_FACTOR, elapsed),
+        BACKOFF_CEILING_MS,
+      );
       const jitter = Math.random() * delay * JITTER_RATIO;
       await new Promise((r) => setTimeout(r, delay + jitter));
     }

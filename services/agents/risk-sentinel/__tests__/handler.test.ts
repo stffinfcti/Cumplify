@@ -43,7 +43,11 @@ const baseInput = {
 
 describe('runAssessment', () => {
   it('threads requestedBy + the risk-assessment-write tool into toolLoop (SOD-1)', async () => {
-    mockToolLoop.mockResolvedValueOnce({ finalResponse: 'ok', turns: 1, totalUsage: { inputTokens: 1, outputTokens: 1 } });
+    mockToolLoop.mockResolvedValueOnce({
+      finalResponse: 'ok',
+      turns: 1,
+      totalUsage: { inputTokens: 1, outputTokens: 1 },
+    });
 
     await runAssessment(baseInput);
 
@@ -56,7 +60,11 @@ describe('runAssessment', () => {
   });
 
   it('includes the current rating + related-register context in the prompt message', async () => {
-    mockToolLoop.mockResolvedValueOnce({ finalResponse: 'ok', turns: 1, totalUsage: { inputTokens: 1, outputTokens: 1 } });
+    mockToolLoop.mockResolvedValueOnce({
+      finalResponse: 'ok',
+      turns: 1,
+      totalUsage: { inputTokens: 1, outputTokens: 1 },
+    });
 
     await runAssessment({
       ...baseInput,
@@ -70,7 +78,11 @@ describe('runAssessment', () => {
   });
 
   it('omits the related-register block entirely when no context is supplied', async () => {
-    mockToolLoop.mockResolvedValueOnce({ finalResponse: 'ok', turns: 1, totalUsage: { inputTokens: 1, outputTokens: 1 } });
+    mockToolLoop.mockResolvedValueOnce({
+      finalResponse: 'ok',
+      turns: 1,
+      totalUsage: { inputTokens: 1, outputTokens: 1 },
+    });
 
     await runAssessment(baseInput);
 
@@ -105,7 +117,11 @@ describe('runAssessment', () => {
 
 describe('handler (Lambda:Invoke entry point)', () => {
   it('delegates directly to runAssessment', async () => {
-    mockToolLoop.mockResolvedValueOnce({ finalResponse: 'ok', turns: 1, totalUsage: { inputTokens: 1, outputTokens: 1 } });
+    mockToolLoop.mockResolvedValueOnce({
+      finalResponse: 'ok',
+      turns: 1,
+      totalUsage: { inputTokens: 1, outputTokens: 1 },
+    });
 
     const result = await handler(baseInput);
     expect(result).toEqual({ runId: 'run-1', status: 'NO_PROPOSAL' });

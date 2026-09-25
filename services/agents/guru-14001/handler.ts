@@ -37,8 +37,8 @@ export async function handleQuery(
   // LEG-2: parse clause reference from question (iso-kb-content-depth)
   const parsed = parseClauseRef(truncatedQuery);
   // D-3': parsed standard WINS when question names one explicitly (priority 1)
-  const clauseRef = parsed.clauseRef
-    ?? (parsed.clauseNum ? `ISO ${GURU_STD_NUM} ${parsed.clauseNum}` : null);
+  const clauseRef =
+    parsed.clauseRef ?? (parsed.clauseNum ? `ISO ${GURU_STD_NUM} ${parsed.clauseNum}` : null);
   const standard = parsed.standard ?? (clauseRef ? GURU_STANDARD : undefined);
 
   // Task 19 step 2: embed the question via the one-door embed path

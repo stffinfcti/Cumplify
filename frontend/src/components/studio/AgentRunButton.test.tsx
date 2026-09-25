@@ -118,11 +118,7 @@ describe('AgentRunButton', () => {
     mockMutate.mockResolvedValueOnce({ runCapaAnalysis: { runId: 'r1', status: 'DISPATCHED' } });
 
     render(
-      <AgentRunButton
-        label="Analyze with CAPAGuru"
-        mutation={RUN_MUTATION}
-        agentName="CAPAGuru"
-      />,
+      <AgentRunButton label="Analyze with CAPAGuru" mutation={RUN_MUTATION} agentName="CAPAGuru" />,
     );
 
     fireEvent.click(screen.getByText('Analyze with CAPAGuru'));
@@ -144,9 +140,7 @@ describe('AgentRunButton', () => {
     mockQuery.mockResolvedValueOnce(pendingResponse([]));
     mockMutate.mockRejectedValueOnce(new Error('NC_NOT_FOUND'));
 
-    render(
-      <AgentRunButton label="Analyze" mutation={RUN_MUTATION} agentName="CAPAGuru" />,
-    );
+    render(<AgentRunButton label="Analyze" mutation={RUN_MUTATION} agentName="CAPAGuru" />);
 
     fireEvent.click(screen.getByText('Analyze'));
     await act(async () => {

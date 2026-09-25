@@ -221,9 +221,7 @@ function buildKnnQuery(
   hybrid?: HybridRetrievalOptions,
 ): Record<string, unknown> {
   // Build filter clauses — always includes tenantId (REQ-RET-1)
-  const filterClauses: Record<string, unknown>[] = [
-    { term: { 'metadata.tenantId': tenantId } },
-  ];
+  const filterClauses: Record<string, unknown>[] = [{ term: { 'metadata.tenantId': tenantId } }];
 
   // Add clauseRef term filter when hybrid parsing detected a clause reference
   if (hybrid?.clauseRef) {
@@ -236,10 +234,7 @@ function buildKnnQuery(
   }
 
   // Compose filter: single term or bool.must array
-  const filter =
-    filterClauses.length === 1
-      ? filterClauses[0]
-      : { bool: { must: filterClauses } };
+  const filter = filterClauses.length === 1 ? filterClauses[0] : { bool: { must: filterClauses } };
 
   const query: Record<string, unknown> = {
     size: topK,

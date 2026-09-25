@@ -136,9 +136,7 @@ const LIVE = awsReachable();
 // green while proving nothing. Fails loudly when neither live AWS nor any
 // C7 token is provisioned, so an unprovisioned lane never reports a pass.
 it('int lane provisioned: live AWS or a C7 token is available', () => {
-  expect(
-    LIVE || process.env.C7_POOL_A_TOKEN || process.env.C7_POOL_B_TOKEN,
-  ).toBeTruthy();
+  expect(LIVE || process.env.C7_POOL_A_TOKEN || process.env.C7_POOL_B_TOKEN).toBeTruthy();
 });
 
 /** RLS helper: run `sql` inside a txn with app.tenant_id set (or unset), rollback. */

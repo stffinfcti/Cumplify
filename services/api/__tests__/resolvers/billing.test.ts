@@ -108,7 +108,11 @@ describe('createBillingPortalSession', () => {
   it('creates a Stripe customer stamped with tenantId when the tenant is unmapped, and persists the mapping', async () => {
     mockSecretSend
       .mockResolvedValueOnce(
-        secretResp({ secretKey: 'sk_test_x', portalConfigurationId: 'bpc_x', customersByTenant: {} }),
+        secretResp({
+          secretKey: 'sk_test_x',
+          portalConfigurationId: 'bpc_x',
+          customersByTenant: {},
+        }),
       )
       // persistCustomerMapping re-reads the secret before writing
       .mockResolvedValueOnce(

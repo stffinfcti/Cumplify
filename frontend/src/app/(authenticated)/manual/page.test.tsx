@@ -13,7 +13,13 @@ vi.mock('@/lib/api', () => ({
 
 vi.mock('@/lib/auth-context', () => ({
   useAuth: () => ({
-    user: { sub: 'u1', email: 'test@test.com', tenantId: 'T1', role: 'QualityManager', locale: 'en' },
+    user: {
+      sub: 'u1',
+      email: 'test@test.com',
+      tenantId: 'T1',
+      role: 'QualityManager',
+      locale: 'en',
+    },
     isAuthenticated: true,
     isLoading: false,
     idToken: 'tok',
@@ -92,9 +98,36 @@ const LIGHTWEIGHT_RUN = {
 const FULL_RUN = {
   ...LIGHTWEIGHT_RUN,
   sections: [
-    { id: 's1', harmonizationKey: '4.1', kind: 'PROSE', clauseRefs: ['c1'], contentSha256: 'sha', reviewedBy: null, reviewedAt: null, error: null },
-    { id: 's2', harmonizationKey: '4.2', kind: 'GAP', clauseRefs: ['c2'], contentSha256: null, reviewedBy: null, reviewedAt: null, error: null },
-    { id: 's3', harmonizationKey: '5.1', kind: 'PROSE', clauseRefs: ['c3'], contentSha256: 'sha', reviewedBy: 'u1', reviewedAt: '2026-07-22T13:05:00Z', error: null },
+    {
+      id: 's1',
+      harmonizationKey: '4.1',
+      kind: 'PROSE',
+      clauseRefs: ['c1'],
+      contentSha256: 'sha',
+      reviewedBy: null,
+      reviewedAt: null,
+      error: null,
+    },
+    {
+      id: 's2',
+      harmonizationKey: '4.2',
+      kind: 'GAP',
+      clauseRefs: ['c2'],
+      contentSha256: null,
+      reviewedBy: null,
+      reviewedAt: null,
+      error: null,
+    },
+    {
+      id: 's3',
+      harmonizationKey: '5.1',
+      kind: 'PROSE',
+      clauseRefs: ['c3'],
+      contentSha256: 'sha',
+      reviewedBy: 'u1',
+      reviewedAt: '2026-07-22T13:05:00Z',
+      error: null,
+    },
   ],
   gapCount: 1,
 };
@@ -106,7 +139,14 @@ describe('ManualPage — State 4 hydration (found live 2026-07-22)', () => {
     mockQuery.mockReset();
     mockQuery.mockImplementation(async (q: string) => {
       if (q.includes('GetOrgProfile')) {
-        return { getOrgProfile: { id: 'p1', currentVersion: 2, payload: { legalName: 'X' }, updatedAt: '2026-07-22' } };
+        return {
+          getOrgProfile: {
+            id: 'p1',
+            currentVersion: 2,
+            payload: { legalName: 'X' },
+            updatedAt: '2026-07-22',
+          },
+        };
       }
       if (q.includes('ListGenerationRuns')) {
         return { listGenerationRuns: [LIGHTWEIGHT_RUN] };
@@ -132,7 +172,9 @@ describe('ManualPage — State 4 hydration (found live 2026-07-22)', () => {
     expect(screen.getByTestId('stat-statReviewed')).toHaveTextContent('1/3');
 
     // The detail query was actually issued for the latest run
-    const detailCall = mockQuery.mock.calls.find(([q]) => (q as string).includes('GetGenerationRun'));
+    const detailCall = mockQuery.mock.calls.find(([q]) =>
+      (q as string).includes('GetGenerationRun'),
+    );
     expect(detailCall).toBeTruthy();
     expect(detailCall![1]).toEqual({ id: 'run-1' });
   });
@@ -143,7 +185,14 @@ describe('ManualPage — S3 gap burn-down (Manual Studio)', () => {
     mockQuery.mockReset();
     mockQuery.mockImplementation(async (q: string) => {
       if (q.includes('GetOrgProfile')) {
-        return { getOrgProfile: { id: 'p1', currentVersion: 2, payload: { legalName: 'X' }, updatedAt: '2026-07-22' } };
+        return {
+          getOrgProfile: {
+            id: 'p1',
+            currentVersion: 2,
+            payload: { legalName: 'X' },
+            updatedAt: '2026-07-22',
+          },
+        };
       }
       if (q.includes('ListGenerationRuns')) return { listGenerationRuns: [LIGHTWEIGHT_RUN] };
       if (q.includes('GetGenerationRun')) return { getGenerationRun: FULL_RUN };

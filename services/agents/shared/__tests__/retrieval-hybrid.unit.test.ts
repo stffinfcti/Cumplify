@@ -44,7 +44,9 @@ function extractFilter(body: Record<string, unknown>): unknown {
 describe('hybrid retrieval', () => {
   describe('filter construction', () => {
     it('without hybrid → single-term tenantId filter (backward compat)', async () => {
-      const client = mockClient([{ hits: { hits: [{ _source: { text: 'test', metadata: {} }, _score: 0.9 }] } }]);
+      const client = mockClient([
+        { hits: { hits: [{ _source: { text: 'test', metadata: {} }, _score: 0.9 }] } },
+      ]);
       const request = makeRequest();
 
       await retrieve(request, client);
@@ -55,7 +57,9 @@ describe('hybrid retrieval', () => {
     });
 
     it('with clauseRef → bool.must includes clauseRef term', async () => {
-      const client = mockClient([{ hits: { hits: [{ _source: { text: 'test', metadata: {} }, _score: 0.9 }] } }]);
+      const client = mockClient([
+        { hits: { hits: [{ _source: { text: 'test', metadata: {} }, _score: 0.9 }] } },
+      ]);
       const request = makeRequest({ hybrid: { clauseRef: 'ISO 9001 4.1' } });
 
       await retrieve(request, client);
@@ -73,7 +77,9 @@ describe('hybrid retrieval', () => {
     });
 
     it('with clauseRef + standard → bool.must includes all three terms', async () => {
-      const client = mockClient([{ hits: { hits: [{ _source: { text: 'test', metadata: {} }, _score: 0.9 }] } }]);
+      const client = mockClient([
+        { hits: { hits: [{ _source: { text: 'test', metadata: {} }, _score: 0.9 }] } },
+      ]);
       const request = makeRequest({ hybrid: { clauseRef: 'ISO 9001 4.1', standard: 'ISO9001' } });
 
       await retrieve(request, client);
@@ -92,7 +98,9 @@ describe('hybrid retrieval', () => {
     });
 
     it('with standard only (no clauseRef) → bool.must with tenantId + standard', async () => {
-      const client = mockClient([{ hits: { hits: [{ _source: { text: 'test', metadata: {} }, _score: 0.9 }] } }]);
+      const client = mockClient([
+        { hits: { hits: [{ _source: { text: 'test', metadata: {} }, _score: 0.9 }] } },
+      ]);
       const request = makeRequest({ hybrid: { standard: 'ISO9001' } });
 
       await retrieve(request, client);
@@ -110,7 +118,9 @@ describe('hybrid retrieval', () => {
     });
 
     it('tenantId is ALWAYS present regardless of hybrid options', async () => {
-      const client = mockClient([{ hits: { hits: [{ _source: { text: 'x', metadata: {} }, _score: 0.5 }] } }]);
+      const client = mockClient([
+        { hits: { hits: [{ _source: { text: 'x', metadata: {} }, _score: 0.5 }] } },
+      ]);
       const request = makeRequest({ hybrid: { clauseRef: 'ISO 9001 4.1', standard: 'ISO9001' } });
 
       await retrieve(request, client);
@@ -126,7 +136,9 @@ describe('hybrid retrieval', () => {
 
   describe('verified-clear pin: no min_score when scoreThreshold undefined', () => {
     it('query does NOT contain min_score key when scoreThreshold is undefined', async () => {
-      const client = mockClient([{ hits: { hits: [{ _source: { text: 'x', metadata: {} }, _score: 0.3 }] } }]);
+      const client = mockClient([
+        { hits: { hits: [{ _source: { text: 'x', metadata: {} }, _score: 0.3 }] } },
+      ]);
       const request = makeRequest({ scoreThreshold: undefined });
 
       await retrieve(request, client);
@@ -136,7 +148,9 @@ describe('hybrid retrieval', () => {
     });
 
     it('query DOES contain min_score when scoreThreshold is set', async () => {
-      const client = mockClient([{ hits: { hits: [{ _source: { text: 'x', metadata: {} }, _score: 0.5 }] } }]);
+      const client = mockClient([
+        { hits: { hits: [{ _source: { text: 'x', metadata: {} }, _score: 0.5 }] } },
+      ]);
       const request = makeRequest({ scoreThreshold: 0.5 });
 
       await retrieve(request, client);
@@ -149,7 +163,9 @@ describe('hybrid retrieval', () => {
   describe('RETRIEVAL-2f: zero-result fallback', () => {
     it('falls back to kNN-only when hybrid returns zero results', async () => {
       const emptyResponse = { hits: { hits: [] } };
-      const fallbackResponse = { hits: { hits: [{ _source: { text: 'fallback', metadata: {} }, _score: 0.4 }] } };
+      const fallbackResponse = {
+        hits: { hits: [{ _source: { text: 'fallback', metadata: {} }, _score: 0.4 }] },
+      };
       const client = mockClient([emptyResponse, fallbackResponse]);
 
       const request = makeRequest({ hybrid: { clauseRef: 'ISO 9001 99.9', standard: 'ISO9001' } });
@@ -167,7 +183,9 @@ describe('hybrid retrieval', () => {
     });
 
     it('does NOT fallback when hybrid returns results', async () => {
-      const response = { hits: { hits: [{ _source: { text: 'found', metadata: {} }, _score: 0.9 }] } };
+      const response = {
+        hits: { hits: [{ _source: { text: 'found', metadata: {} }, _score: 0.9 }] },
+      };
       const client = mockClient([response]);
 
       const request = makeRequest({ hybrid: { clauseRef: 'ISO 9001 4.1', standard: 'ISO9001' } });

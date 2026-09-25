@@ -7,6 +7,12 @@ import { ErrorState } from '@/components/shared';
  * alive, so the fallback stays localized. A fault in any non-authenticated
  * segment renders the shared ErrorState instead of blanking the app.
  */
-export default function Error({ error: _error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+export default function Error({
+  error: _error,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
   return <ErrorState onRetry={reset} />;
 }

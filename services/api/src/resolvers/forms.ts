@@ -19,10 +19,7 @@
  * remains here; exported symbols unchanged.
  */
 
-import {
-  extractContext,
-  requireModuleRole,
-} from './shared.js';
+import { extractContext, requireModuleRole } from './shared.js';
 import { logger, type AppSyncEvent } from './forms/common.js';
 import { listFormTemplates, getFormTemplate, listFormRecords } from './forms/catalog.js';
 import {

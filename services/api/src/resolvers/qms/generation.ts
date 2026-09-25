@@ -7,12 +7,7 @@
 import { InvokeCommand } from '@aws-sdk/client-lambda';
 import { StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { ulid } from 'ulid';
-import {
-  beginTenantTransaction,
-  marshalOne,
-  marshalMany,
-  jsonOut,
-} from '../shared.js';
+import { beginTenantTransaction, marshalOne, marshalMany, jsonOut } from '../shared.js';
 import {
   logger,
   sfnClient,
@@ -500,6 +495,11 @@ export async function runManualSectionDraft(event: AppSyncEvent, tenantId: strin
   // HITL plane audits gate-entry/approval, and the registry is fail-closed
   // (found live 2026-07-22: unregistered 'Agent.RunRequested' threw AFTER the
   // Event-invoke, erroring the mutation while the agent run proceeded).
-  logger.info('Manual section draft dispatched', { tenantId, runId, generationRunId, harmonizationKey });
+  logger.info('Manual section draft dispatched', {
+    tenantId,
+    runId,
+    generationRunId,
+    harmonizationKey,
+  });
   return { runId, status: 'DISPATCHED' };
 }

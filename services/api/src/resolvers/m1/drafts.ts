@@ -5,18 +5,9 @@
 
 import { InvokeCommand } from '@aws-sdk/client-lambda';
 import { ulid } from 'ulid';
-import {
-  beginTenantTransaction,
-  publishAuditEvent,
-  marshalOne,
-} from '../shared.js';
+import { beginTenantTransaction, publishAuditEvent, marshalOne } from '../shared.js';
 import { mapEnum, DOC_TYPE_MAP } from '../enum-mappings.js';
-import {
-  logger,
-  lambdaClient,
-  DOC_STUDIO_FN_ARN,
-  type AppSyncEvent,
-} from './common.js';
+import { logger, lambdaClient, DOC_STUDIO_FN_ARN, type AppSyncEvent } from './common.js';
 
 /**
  * runDocDraft (S2, studio wave) — Document Studio's front door: the user

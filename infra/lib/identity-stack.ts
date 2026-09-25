@@ -322,7 +322,9 @@ export class IdentityStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'PoolCId', { value: this.poolCId });
     new cdk.CfnOutput(this, 'PoolBArn', { value: this.poolBArn });
     new cdk.CfnOutput(this, 'PoolCArn', { value: this.poolCArn });
-    this.poolBClientIdOutput = new cdk.CfnOutput(this, 'PoolBClientId', { value: this.poolBClientId });
+    this.poolBClientIdOutput = new cdk.CfnOutput(this, 'PoolBClientId', {
+      value: this.poolBClientId,
+    });
     new cdk.CfnOutput(this, 'PoolCClientId', { value: this.poolCClientId });
     new cdk.CfnOutput(this, 'PoolAClientId', {
       value: poolAClient!.userPoolClientId,

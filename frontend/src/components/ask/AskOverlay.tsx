@@ -56,12 +56,7 @@ export function AskOverlay() {
       {open && (
         <div className={styles.overlay}>
           <div className={styles.backdrop} onClick={() => setOpen(false)} />
-          <aside
-            className={styles.sheet}
-            aria-label={t('title')}
-            ref={dialogRef}
-            {...dialogProps}
-          >
+          <aside className={styles.sheet} aria-label={t('title')} ref={dialogRef} {...dialogProps}>
             <button
               className={styles.closeBtn}
               onClick={() => setOpen(false)}

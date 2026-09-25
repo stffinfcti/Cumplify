@@ -98,7 +98,12 @@ beforeEach(() => {
     if (q.includes('AuditTrail')) {
       return {
         getAuditTrail: [
-          { eventId: 'e1', eventType: 'NC.Raised', actor: 'agent:CAPAGuru+human:u1', timestamp: '2026-07-22T10:00:00Z' },
+          {
+            eventId: 'e1',
+            eventType: 'NC.Raised',
+            actor: 'agent:CAPAGuru+human:u1',
+            timestamp: '2026-07-22T10:00:00Z',
+          },
         ],
       };
     }
@@ -126,7 +131,9 @@ describe('CAPA Studio (S1)', () => {
       expect(screen.getByTestId('arb-capaStudio.draftWithAgent')).not.toBeDisabled(),
     );
     expect(
-      JSON.parse(screen.getByTestId('arb-capaStudio.draftWithAgent').getAttribute('data-variables')!),
+      JSON.parse(
+        screen.getByTestId('arb-capaStudio.draftWithAgent').getAttribute('data-variables')!,
+      ),
     ).toEqual({ description: 'Paint booth filter overdue' });
 
     // Manual path demoted to a secondary action, still available

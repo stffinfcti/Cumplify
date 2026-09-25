@@ -69,7 +69,9 @@ export async function handler(event: {
     // overwrite the row, not silently skip it (metering would keep pricing
     // with the stale weights). Same hash → no-op.
     const contentHash = createHash('sha256')
-      .update(JSON.stringify({ modelId, wIn: weights.wIn, wOut: weights.wOut, wCache: weights.wCache }))
+      .update(
+        JSON.stringify({ modelId, wIn: weights.wIn, wOut: weights.wOut, wCache: weights.wCache }),
+      )
       .digest('hex');
 
     try {
@@ -92,8 +94,7 @@ export async function handler(event: {
             { removeUndefinedValues: true },
           ),
           // Put only when the row is absent or its stored weights differ.
-          ConditionExpression:
-            'attribute_not_exists(contentHash) OR contentHash <> :contentHash',
+          ConditionExpression: 'attribute_not_exists(contentHash) OR contentHash <> :contentHash',
           ExpressionAttributeValues: marshall({ ':contentHash': contentHash }),
         }),
       );

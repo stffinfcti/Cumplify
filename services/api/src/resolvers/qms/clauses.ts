@@ -3,15 +3,9 @@
  * qms.ts (mechanical decomposition — no semantic changes).
  */
 
-import {
-  beginTenantTransaction,
-  marshalOne,
-  marshalMany,
-  publishAuditEvent,
-} from '../shared.js';
+import { beginTenantTransaction, marshalOne, marshalMany, publishAuditEvent } from '../shared.js';
 import type { SqlParameter } from '@aws-sdk/client-rds-data';
 import type { AppSyncEvent } from './common.js';
-
 
 export async function listClauseRegistry(event: AppSyncEvent, tenantId: string) {
   const standard = event.arguments.standard as string | undefined;
@@ -60,9 +54,6 @@ export async function listClauseApplicability(tenantId: string) {
     throw err;
   }
 }
-
-
-
 
 /**
  * setClauseApplicability — exclusion REQUIRES justification (DB CHECK enforces;
@@ -133,4 +124,3 @@ export async function setClauseApplicability(event: AppSyncEvent, tenantId: stri
     throw err;
   }
 }
-

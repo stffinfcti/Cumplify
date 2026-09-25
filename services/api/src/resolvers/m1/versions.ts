@@ -33,7 +33,11 @@ import {
   type ContentJson,
 } from './common.js';
 
-export async function submitDocumentForApproval(event: AppSyncEvent, tenantId: string, actor: string) {
+export async function submitDocumentForApproval(
+  event: AppSyncEvent,
+  tenantId: string,
+  actor: string,
+) {
   const id = event.arguments.id as string;
   const txn = await beginTenantTransaction(tenantId);
   try {
@@ -197,7 +201,11 @@ export async function approveDocumentVersion(event: AppSyncEvent, tenantId: stri
  * them would regress the pre-existing M1 publish flow; the audit payload
  * carries sealed:false + reason.
  */
-export async function publishControlledDocument(event: AppSyncEvent, tenantId: string, actor: string) {
+export async function publishControlledDocument(
+  event: AppSyncEvent,
+  tenantId: string,
+  actor: string,
+) {
   const versionId = event.arguments.versionId as string;
   const txn = await beginTenantTransaction(tenantId);
   try {
@@ -456,7 +464,11 @@ export async function getDocumentContent(event: AppSyncEvent, tenantId: string) 
  * regenerate-section.ts clearing reviewed_by/reviewed_at (APR-1: review
  * state is not inheritable across content changes).
  */
-export async function saveDocumentSectionEdit(event: AppSyncEvent, tenantId: string, actor: string) {
+export async function saveDocumentSectionEdit(
+  event: AppSyncEvent,
+  tenantId: string,
+  actor: string,
+) {
   const input = event.arguments.input as Record<string, unknown>;
   const versionId = input.versionId as string;
   const harmonizationKey = input.harmonizationKey as string;
@@ -490,23 +502,24 @@ export async function saveDocumentSectionEdit(event: AppSyncEvent, tenantId: str
     // fixtures — accept both (same wire-shape class as saveOrgProfile, found
     // live 2026-07-22). Boundary zod: ChangeEntry[] array (item 8) — the
     // elements are stored verbatim, so only the array/object shape is gated.
-    const trackedChanges = parseAwsJson(TrackedChangesSchema, input.trackedChanges, 'trackedChanges');
+    const trackedChanges = parseAwsJson(
+      TrackedChangesSchema,
+      input.trackedChanges,
+      'trackedChanges',
+    );
     const newContent: ContentJson = {
       ...content,
       sections: content.sections.map((s, i) =>
-        i === sectionIdx
-          ? { ...s, humanEditedBody: input.body as string, trackedChanges }
-          : s,
+        i === sectionIdx ? { ...s, humanEditedBody: input.body as string, trackedChanges } : s,
       ),
     };
 
     // Lock the parent document row so concurrent edits serialize — two writers
     // reading MAX(version_no)+1 in the same window would otherwise insert
     // duplicate version numbers AND overwrite each other's S3 content key.
-    await txn.execute(
-      `SELECT id FROM m1.documents WHERE id = :docId::uuid FOR UPDATE`,
-      [{ name: 'docId', value: { stringValue: meta.documentId } }],
-    );
+    await txn.execute(`SELECT id FROM m1.documents WHERE id = :docId::uuid FOR UPDATE`, [
+      { name: 'docId', value: { stringValue: meta.documentId } },
+    ]);
     const versionResult = await txn.execute(
       `SELECT COALESCE(MAX(version_no), 0) + 1 AS next FROM m1.document_versions WHERE document_id = :docId::uuid`,
       [{ name: 'docId', value: { stringValue: meta.documentId } }],
@@ -543,9 +556,10 @@ export async function saveDocumentSectionEdit(event: AppSyncEvent, tenantId: str
 
     // An edit invalidates any prior review — back to DRAFT (APR-1: review
     // state is not inheritable across content changes).
-    await txn.execute(`UPDATE m1.documents SET status = 'draft', updated_at = NOW() WHERE id = :docId::uuid`, [
-      { name: 'docId', value: { stringValue: meta.documentId } },
-    ]);
+    await txn.execute(
+      `UPDATE m1.documents SET status = 'draft', updated_at = NOW() WHERE id = :docId::uuid`,
+      [{ name: 'docId', value: { stringValue: meta.documentId } }],
+    );
 
     await txn.commit();
     const version = marshalOne(insertResult);

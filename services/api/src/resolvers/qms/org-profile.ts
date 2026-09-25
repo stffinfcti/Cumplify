@@ -4,12 +4,7 @@
  */
 
 import { z } from 'zod';
-import {
-  beginTenantTransaction,
-  marshalOne,
-  publishAuditEvent,
-  jsonOut,
-} from '../shared.js';
+import { beginTenantTransaction, marshalOne, publishAuditEvent, jsonOut } from '../shared.js';
 import type { AppSyncEvent } from './common.js';
 
 // ─── ORG-1 Org Profile Schema (zod — full design §2.2) ──────────────────────
@@ -74,8 +69,6 @@ export async function getOrgProfile(tenantId: string) {
     throw err;
   }
 }
-
-
 
 /**
  * saveOrgProfile — zod-validated JSONB payload, versioned write (design §2.2).

@@ -157,9 +157,7 @@ async function processDocumentPublished(
   const indexName = 'cumplify-tenant-docs';
 
   // 1. Fetch content from S3
-  const s3Resp = await s3Client.send(
-    new GetObjectCommand({ Bucket: bucket, Key: contentRef }),
-  );
+  const s3Resp = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: contentRef }));
   const bodyStr = await s3Resp.Body!.transformToString('utf-8');
   const content: DocumentContent = JSON.parse(bodyStr);
 

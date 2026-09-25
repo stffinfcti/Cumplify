@@ -5,19 +5,9 @@
     "generator": "deterministic (necessity-direction encoding; ENTERPRISE unrestricted; Launch standards rule conditioned on the $199 additional-standard add-on)",
     "workbenchPolicyArn": "arn:aws:bedrock:us-east-1:697114252993:automated-reasoning-policy/cn3l74b3rel5:2",
     "arCheckGateMapping": {
-      "pass": [
-        "VALID",
-        "SATISFIABLE"
-      ],
-      "reject_steered_retry": [
-        "INVALID",
-        "IMPOSSIBLE"
-      ],
-      "flag_hitl": [
-        "TRANSLATION_AMBIGUOUS",
-        "NO_TRANSLATION",
-        "TOO_COMPLEX"
-      ]
+      "pass": ["VALID", "SATISFIABLE"],
+      "reject_steered_retry": ["INVALID", "IMPOSSIBLE"],
+      "flag_hitl": ["TRANSLATION_AMBIGUOUS", "NO_TRANSLATION", "TOO_COMPLEX"]
     },
     "confidenceThreshold": 0.9,
     "scopeNotes": [

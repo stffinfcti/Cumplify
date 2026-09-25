@@ -124,7 +124,15 @@ describe('execute-writeback dispatch: schema pinning', () => {
 
     it('scopes tenant_id via current_setting (RLS pattern) and mirrors raiseNonconformity columns', () => {
       expect(fnBody()).toContain("current_setting('app.tenant_id')");
-      for (const col of ['standard', 'source', 'nc_type', 'description', 'clause_ref', 'severity', 'raised_by']) {
+      for (const col of [
+        'standard',
+        'source',
+        'nc_type',
+        'description',
+        'clause_ref',
+        'severity',
+        'raised_by',
+      ]) {
         expect(fnBody()).toContain(col);
       }
       // Born open, like every human-raised NC (migration 003 status CHECK)
@@ -156,7 +164,7 @@ describe('execute-writeback dispatch: schema pinning', () => {
 
     it('passes classification straight through — the DB CHECK constraint is the validation backstop', () => {
       // migration 003: nc_type CHECK (nc_type IN ('nonconforming_output','nc','incident'))
-      expect(MIGRATION_003).toContain("nc_type TEXT NOT NULL CHECK (nc_type IN");
+      expect(MIGRATION_003).toContain('nc_type TEXT NOT NULL CHECK (nc_type IN');
       const fnBody = WRITEBACK_CODE.slice(
         WRITEBACK_CODE.indexOf('async function executeNcTriageWrite'),
         WRITEBACK_CODE.indexOf('async function executeRiskAssessmentWrite'),
@@ -175,8 +183,10 @@ describe('execute-writeback dispatch: schema pinning', () => {
       expect(fnBody).not.toContain('INSERT INTO');
     });
 
-    it('likelihood/severity match migration 006\'s CHECK(1-5) columns', () => {
-      expect(MIGRATION_006).toContain('likelihood INTEGER NOT NULL CHECK (likelihood BETWEEN 1 AND 5)');
+    it("likelihood/severity match migration 006's CHECK(1-5) columns", () => {
+      expect(MIGRATION_006).toContain(
+        'likelihood INTEGER NOT NULL CHECK (likelihood BETWEEN 1 AND 5)',
+      );
       expect(MIGRATION_006).toContain('severity INTEGER NOT NULL CHECK (severity BETWEEN 1 AND 5)');
     });
 
@@ -187,7 +197,9 @@ describe('execute-writeback dispatch: schema pinning', () => {
       );
       expect(fnBody).toContain('m5_views.refresh_risk_register_view()');
       // Same transactionId threaded to the refresh call, not a fresh one.
-      expect(fnBody).toContain('transactionId,\n      sql: `SELECT m5_views.refresh_risk_register_view()`');
+      expect(fnBody).toContain(
+        'transactionId,\n      sql: `SELECT m5_views.refresh_risk_register_view()`',
+      );
     });
   });
 
@@ -249,7 +261,9 @@ describe('execute-writeback dispatch: schema pinning', () => {
 
     describe('rca-write (C1 CAPA Studio RCA — m2.root_cause_analyses, 003)', () => {
       it('INSERT matches migration 003 columns; method validated against the CHECK', () => {
-        expect(MIGRATION_003).toContain("method TEXT NOT NULL CHECK (method IN ('5why', 'fishbone', 'fta'))");
+        expect(MIGRATION_003).toContain(
+          "method TEXT NOT NULL CHECK (method IN ('5why', 'fishbone', 'fta'))",
+        );
         expect(WRITEBACK_CODE).toMatch(
           /INSERT INTO m2\.root_cause_analyses \(tenant_id, nc_id, method, findings, root_cause_summary, created_by\)/,
         );
@@ -275,9 +289,7 @@ describe('execute-writeback dispatch: schema pinning', () => {
         expect(WRITEBACK_CODE).toMatch(
           /executeManualSectionDraft[\s\S]*?FunctionName: REGEN_FN_NAME/,
         );
-        expect(WRITEBACK_CODE).toMatch(
-          /executeManualSectionDraft[\s\S]*?override: \{ sentences/,
-        );
+        expect(WRITEBACK_CODE).toMatch(/executeManualSectionDraft[\s\S]*?override: \{ sentences/);
         // Actor (agent+human) threads through to the engine's version author
         expect(WRITEBACK_CODE).toMatch(/executeManualSectionDraft[\s\S]*?actor,/);
         // No direct SQL inside the executor body (delegation, not duplication)

@@ -48,7 +48,11 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
   // RS-7: agent* (@aws_iam) fields never carry resolverContext — branch
   // BEFORE extractContext, which would throw for them.
   if (event.info.fieldName === 'agentAssessRisk') {
-    const { tenantId, actor } = extractAgentContext(event.arguments, 'RiskSentinel', event.identity);
+    const { tenantId, actor } = extractAgentContext(
+      event.arguments,
+      'RiskSentinel',
+      event.identity,
+    );
     logger.appendKeys({ tenantId, requestField: event.info.fieldName });
     return agentAssessRisk(event, tenantId, actor);
   }

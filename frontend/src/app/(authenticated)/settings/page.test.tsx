@@ -62,9 +62,7 @@ vi.mock('@/components/shared', () => ({
       <button onClick={onRetry}>retry-action</button>
     </div>
   ),
-  EmptyState: ({ message }: { message: string }) => (
-    <div data-testid="empty-state">{message}</div>
-  ),
+  EmptyState: ({ message }: { message: string }) => <div data-testid="empty-state">{message}</div>,
 }));
 
 vi.mock('@/components/shell/LocaleSwitcher', () => ({

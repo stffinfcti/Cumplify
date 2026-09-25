@@ -36,7 +36,9 @@ function parseCanonRefs(): Set<string> {
 
   for (const line of content.split('\n')) {
     // Match table rows: | standard | edition | clauseNum | title |
-    const match = line.match(/^\|\s*ISO\s+(9001|14001|45001)\s*\|\s*\d{4}\s*\|\s*(\d+(?:\.\d+)+)\s*\|/);
+    const match = line.match(
+      /^\|\s*ISO\s+(9001|14001|45001)\s*\|\s*\d{4}\s*\|\s*(\d+(?:\.\d+)+)\s*\|/,
+    );
     if (match) {
       refs.add(`ISO ${match[1]} ${match[2]}`);
     }
@@ -83,12 +85,8 @@ describe('property-based tests (fast-check)', () => {
           chunks.length === 109 &&
           chunks.every((c) => c.metadata.tenantId === '__ISO_CANON__') &&
           chunks.every((c) => c.metadata.lang === 'en') &&
-          chunks
-            .filter((c) => c.metadata.standard !== 'HLS')
-            .every((c) => c.text.length >= 200) &&
-          chunks.every(
-            (c) => c.text.startsWith('[ISO ') || c.text.startsWith('[Annex SL HLS]'),
-          )
+          chunks.filter((c) => c.metadata.standard !== 'HLS').every((c) => c.text.length >= 200) &&
+          chunks.every((c) => c.text.startsWith('[ISO ') || c.text.startsWith('[Annex SL HLS]'))
         );
       }),
       { numRuns: 10 }, // deterministic input — multiple runs confirm stability

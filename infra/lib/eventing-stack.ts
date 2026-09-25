@@ -297,7 +297,10 @@ export class EventingStack extends cdk.Stack {
 
     // R-8: tenant-docs-indexer rule (B3: indexes published documents into AOSS)
     const tenantDocsIndexerDlq = this.createStdDlq('TenantDocsIndexerDlq');
-    const tenantDocsIndexerQueue = this.createStdQueue('TenantDocsIndexerQueue', tenantDocsIndexerDlq);
+    const tenantDocsIndexerQueue = this.createStdQueue(
+      'TenantDocsIndexerQueue',
+      tenantDocsIndexerDlq,
+    );
 
     const tenantDocsIndexerRule = new events.Rule(this, 'TenantDocsIndexerRule', {
       eventBus: bus,

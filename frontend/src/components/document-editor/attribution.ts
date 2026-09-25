@@ -92,10 +92,7 @@ export function addHumanChange(
  * Record an agent iteration as a tracked proposal.
  * Agent content is ADDITIVE — never silently replaces human edits.
  */
-export function addAgentProposal(
-  draft: SectionDraft,
-  agentContent: string,
-): SectionDraft {
+export function addAgentProposal(draft: SectionDraft, agentContent: string): SectionDraft {
   const entry: ChangeEntry = {
     id: `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     actor: { type: 'agent', id: 'DocStudio', name: 'DocStudio' },

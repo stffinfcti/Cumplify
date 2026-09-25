@@ -177,12 +177,12 @@ export async function handler(
   const txnResult = await withResumeRetry(
     () =>
       rds.send(
-      new BeginTransactionCommand({
-        resourceArn: CLUSTER_ARN,
-        secretArn: SECRET_ARN,
-        database: DB_NAME,
-      }),
-    ),
+        new BeginTransactionCommand({
+          resourceArn: CLUSTER_ARN,
+          secretArn: SECRET_ARN,
+          database: DB_NAME,
+        }),
+      ),
     context?.getRemainingTimeInMillis.bind(context),
   );
   const transactionId = txnResult.transactionId!;
@@ -485,8 +485,7 @@ async function executeManualSectionDraft(
   const generationRunId = args.generationRunId as string;
   const harmonizationKey = args.harmonizationKey as string;
   const sentences = (args.sentences ?? []) as Array<{ text: string }>;
-  if (!generationRunId || !harmonizationKey)
-    throw new Error('MANUAL_SECTION_DRAFT_MISSING_TARGET');
+  if (!generationRunId || !harmonizationKey) throw new Error('MANUAL_SECTION_DRAFT_MISSING_TARGET');
   if (!Array.isArray(sentences) || sentences.length === 0)
     throw new Error('MANUAL_SECTION_DRAFT_EMPTY');
   if (!REGEN_FN_NAME) throw new Error('REGEN_FN_UNCONFIGURED');
@@ -700,9 +699,15 @@ async function executeAuditFindingWrite(
             RETURNING id`,
         parameters: [
           { name: 'standard', value: { stringValue: standard } },
-          { name: 'description', value: { stringValue: `Audit finding (${findingType}): ${args.description as string}` } },
+          {
+            name: 'description',
+            value: { stringValue: `Audit finding (${findingType}): ${args.description as string}` },
+          },
           { name: 'clauseRef', value: { stringValue: clauseNum } },
-          { name: 'severity', value: { stringValue: findingType === 'major_nc' ? 'high' : 'medium' } },
+          {
+            name: 'severity',
+            value: { stringValue: findingType === 'major_nc' ? 'high' : 'medium' },
+          },
           { name: 'actor', value: { stringValue: actor } },
         ],
       }),

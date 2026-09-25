@@ -56,9 +56,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'registerRecord':
       return requireModuleRole(role, 'M4', () => registerRecord(event, tenantId, sub));
     case 'registerMeasuringResource':
-      return requireModuleRole(role, 'M4', () =>
-        registerMeasuringResource(event, tenantId, sub),
-      );
+      return requireModuleRole(role, 'M4', () => registerMeasuringResource(event, tenantId, sub));
     case 'recordCalibration':
       return requireModuleRole(role, 'M4', () => recordCalibration(event, tenantId, sub));
     case 'createRetentionPolicy':
@@ -93,7 +91,9 @@ interface MatrixEntryOut {
 function entryFromItem(item: Record<string, unknown>): MatrixEntryOut {
   const rawSteps = item.steps;
   const steps =
-    typeof rawSteps === 'string' ? (JSON.parse(rawSteps) as ApprovalStep[]) : ([] as ApprovalStep[]);
+    typeof rawSteps === 'string'
+      ? (JSON.parse(rawSteps) as ApprovalStep[])
+      : ([] as ApprovalStep[]);
   const standard = (item.standard as string) === 'ANY' ? null : ((item.standard as string) ?? null);
   return {
     id: item.SK as string,
@@ -174,7 +174,7 @@ async function setApprovalMatrixEntry(
       Key: marshall({ PK: governancePk(tenantId), SK: sk }),
     }),
   );
-  const version = existing.Item ? (((unmarshall(existing.Item).version as number) ?? 0) + 1) : 1;
+  const version = existing.Item ? ((unmarshall(existing.Item).version as number) ?? 0) + 1 : 1;
   const now = new Date().toISOString();
 
   await ddb.send(

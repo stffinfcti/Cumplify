@@ -7,19 +7,9 @@
     "definitionHash": "d6704316ec34efb42f6dce23eb0dc9dec3a9304d9cb2e25c5a28ff59869a78a3642005dbaab4abef3a94983e08308d67f9af1c4ac1a0b669d7e59369ddd89c0c",
     "versionCreatedAt": "2026-07-17T00:28:03Z",
     "arCheckGateMapping": {
-      "pass": [
-        "VALID",
-        "SATISFIABLE"
-      ],
-      "reject_steered_retry": [
-        "INVALID",
-        "IMPOSSIBLE"
-      ],
-      "flag_hitl": [
-        "TRANSLATION_AMBIGUOUS",
-        "NO_TRANSLATION",
-        "TOO_COMPLEX"
-      ]
+      "pass": ["VALID", "SATISFIABLE"],
+      "reject_steered_retry": ["INVALID", "IMPOSSIBLE"],
+      "flag_hitl": ["TRANSLATION_AMBIGUOUS", "NO_TRANSLATION", "TOO_COMPLEX"]
     },
     "confidenceThreshold": 0.9
   },

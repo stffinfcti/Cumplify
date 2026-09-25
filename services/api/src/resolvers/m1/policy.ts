@@ -3,11 +3,7 @@
  * (mechanical decomposition — no semantic changes).
  */
 
-import {
-  beginTenantTransaction,
-  publishAuditEvent,
-  marshalOne,
-} from '../shared.js';
+import { beginTenantTransaction, publishAuditEvent, marshalOne } from '../shared.js';
 import type { AppSyncEvent } from './common.js';
 
 export async function updatePolicy(event: AppSyncEvent, tenantId: string, actor: string) {
