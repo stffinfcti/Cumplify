@@ -606,15 +606,25 @@ describe('approveFormRecord sealing (REC-7/ACC-7)', () => {
   });
 
   it('unconfigured seal env (hermetic lane): approval commits, audit carries sealed:false + SEAL_NOT_CONFIGURED', async () => {
-    const saved = {
-      c: process.env.CONTENT_BUCKET,
-      e: process.env.EVIDENCE_BUCKET,
-      p: process.env.PDF_RENDER_FN,
-    };
-    process.env.CONTENT_BUCKET = '';
-    process.env.EVIDENCE_BUCKET = '';
-    process.env.PDF_RENDER_FN = '';
+    // The env consts are module-level in shared.ts — process.env toggling
+    // can't reach them, so stub the named exports for this re-import.
     vi.resetModules();
+    vi.doMock('../../src/resolvers/shared.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../../src/resolvers/shared.js')>();
+      return {
+        ...actual,
+        CONTENT_BUCKET: '',
+        EVIDENCE_BUCKET: '',
+        PDF_RENDER_FN: '',
+        beginTenantTransaction: vi.fn().mockResolvedValue({
+          transactionId: 'txn-test',
+          execute: mockExecute,
+          commit: mockCommit,
+          rollback: mockRollback,
+        }),
+        publishAuditEvent: mockPublishAudit,
+      };
+    });
     try {
       const mod = await import('../../src/resolvers/forms.js');
       wireSql({ status: 'complete', standards: ['ISO9001', 'IMS'], policyYears: 7 });
@@ -629,9 +639,7 @@ describe('approveFormRecord sealing (REC-7/ACC-7)', () => {
         reason: 'SEAL_NOT_CONFIGURED',
       });
     } finally {
-      process.env.CONTENT_BUCKET = saved.c;
-      process.env.EVIDENCE_BUCKET = saved.e;
-      process.env.PDF_RENDER_FN = saved.p;
+      vi.doUnmock('../../src/resolvers/shared.js');
       vi.resetModules();
     }
   });

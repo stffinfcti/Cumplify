@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslations } from 'next-intl';
 import { useRouter } from 'next/navigation';
 import { useGraphQL } from '@/lib/api';
+import { errorText } from '@/lib/error-text';
 import { ClauseChip, PrimaryButton, ErrorState } from '@/components/shared';
 import {
   type Standard,
@@ -56,6 +57,7 @@ function extractCitations(text: string): string[] {
 
 export function AskPanel() {
   const t = useTranslations('ask');
+  const tErr = useTranslations('errors');
   const router = useRouter();
   const { query: gqlQuery } = useGraphQL();
   const [messages, setMessages] = useState<AskMessage[]>(getMessages);
@@ -101,7 +103,7 @@ export function AskPanel() {
       const citations = extractCitations(answer);
       addAssistantMessage(answer, standard, citations);
     } catch (err) {
-      setError((err as Error).message || t('error'));
+      setError(errorText(err, tErr, 'generic'));
     } finally {
       setLoading(false);
     }

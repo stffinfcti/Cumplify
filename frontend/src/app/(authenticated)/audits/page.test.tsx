@@ -136,7 +136,8 @@ describe('Audit Studio (S4)', () => {
       expect(screen.getByRole('button', { name: 'auditStudio.viewReadiness' })).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByRole('button', { name: 'auditStudio.viewReadiness' }));
-    await waitFor(() => expect(screen.getByText('Network timeout')).toBeInTheDocument());
+    // Non-code messages route to the localized generic — no English internals
+    await waitFor(() => expect(screen.getByText('errors.generic')).toBeInTheDocument());
   });
 
   it('readiness button renders explicit empty state when scores are empty (amendment 1)', async () => {

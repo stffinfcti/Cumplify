@@ -12,7 +12,13 @@ import { Logger } from '@aws-lambda-powertools/logger';
 import { GetItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { SFNClient, SendTaskSuccessCommand, SendTaskFailureCommand } from '@aws-sdk/client-sfn';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { extractContext, getTenantDdbClient, publishAuditEvent, TABLE_NAME } from './shared.js';
+import {
+  extractContext,
+  getTenantDdbClient,
+  publishAuditEvent,
+  TABLE_NAME,
+  type AppSyncEvent,
+} from './shared.js';
 import { canApprove, normalizeRole, resolveModule } from '../permissions/role-matrix.js';
 import {
   approveAllowedByMatrix,
@@ -23,12 +29,6 @@ import { resolveHitlItem } from '../../../agents/shared/hitl.js';
 
 const logger = new Logger({ serviceName: 'resolver-hitl-approval' });
 const sfnClient = new SFNClient({});
-
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
-}
 
 interface ApprovalInput {
   hitlItemId: string;
@@ -169,7 +169,12 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
     );
   } catch (err: unknown) {
     if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
-      throw new ApprovalError(409, `HITL item already resolved or being processed: ${hitlItemId}`);
+      // Code prefix is the client-facing contract — the UI prunes stale
+      // cards on these tokens, not on the prose that follows.
+      throw new ApprovalError(
+        409,
+        `HITL_ALREADY_RESOLVED: HITL item already resolved or being processed: ${hitlItemId}`,
+      );
     }
     throw err;
   }
@@ -214,7 +219,7 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
       );
       throw new ApprovalError(
         410,
-        `SFN task expired or does not exist for HITL item: ${hitlItemId}`,
+        `HITL_TASK_EXPIRED: SFN task expired or does not exist for HITL item: ${hitlItemId}`,
       );
     }
     // Transient send failure — reset to PENDING so the card re-appears in the

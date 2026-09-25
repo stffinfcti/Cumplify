@@ -1,6 +1,6 @@
 /**
  * M1 Document Studio — draft creation paths (human, agent writeback, and the
- * DocStudio front door). Extracted from m1.ts (mechanical decomposition).
+ * DocStudio front door). Extracted from m1.ts.
  */
 
 import { InvokeCommand } from '@aws-sdk/client-lambda';
@@ -119,6 +119,13 @@ export async function createDocumentDraft(event: AppSyncEvent, tenantId: string,
 export async function agentDraftDocument(event: AppSyncEvent, tenantId: string, actor: string) {
   const input = event.arguments.input as Record<string, unknown>;
   const docType = mapEnum(DOC_TYPE_MAP, input.docType as string, 'docType');
+  // The contentRef goes straight into a row — confine it to this tenant's
+  // content-plane prefix or a draft could pin a version to another
+  // tenant's object.
+  const contentRef = input.contentRef as string;
+  if (!contentRef.startsWith(`tenants/${tenantId}/`)) {
+    throw new Error('FORBIDDEN: contentRef outside tenant prefix');
+  }
   const txn = await beginTenantTransaction(tenantId);
   try {
     const docResult = await txn.execute(

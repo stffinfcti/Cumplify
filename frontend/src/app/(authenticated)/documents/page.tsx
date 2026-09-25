@@ -91,6 +91,10 @@ const APPROVE_MUTATION = `mutation Approve($input: ApproveDocumentVersionInput!)
   approveDocumentVersion(input: $input) { id decision }
 }`;
 
+const SAVE_SECTION_EDIT = `mutation SaveDocumentSectionEdit($input: SaveDocumentSectionEditInput!) {
+  saveDocumentSectionEdit(input: $input) { id versionNo changeSummary createdAt }
+}`;
+
 const PUBLISH_MUTATION = `mutation Publish($versionId: ID!) {
   publishControlledDocument(versionId: $versionId) { id status }
 }`;
@@ -441,6 +445,19 @@ export default function DocumentsPage() {
                 documentId={selectedDoc.id}
                 versionId={latestVersion?.id ?? null}
                 onSaved={() => openDetail(selectedDoc)}
+                onConverge={async (harmonizationKey, content) => {
+                  // A converged section is durable state: persist it as a
+                  // new version immediately, same door the manual save uses.
+                  if (!latestVersion?.id) return;
+                  await mutate(SAVE_SECTION_EDIT, {
+                    input: {
+                      versionId: latestVersion.id,
+                      harmonizationKey,
+                      body: content,
+                    },
+                  });
+                  openDetail(selectedDoc);
+                }}
               />
             )}
             {/* Non-DRAFT status: ControlledDocViewer (§7-compliant, read-only) */}

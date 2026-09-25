@@ -55,7 +55,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'saveFormRecordValues':
       return saveFormRecordValues(event, tenantId);
     case 'submitFormRecord':
-      return submitFormRecord(event, tenantId, sub);
+      return submitFormRecord(event, tenantId, sub, role);
     case 'approveFormRecord':
       return requireModuleRole(role, 'M4', () => approveFormRecord(event, tenantId, sub));
     case 'reopenFormRecord':

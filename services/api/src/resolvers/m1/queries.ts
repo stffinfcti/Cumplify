@@ -1,6 +1,6 @@
 /**
  * M1 Document Studio — document read surface. Extracted from m1.ts
- * (mechanical decomposition — no semantic changes).
+ *.
  */
 
 import { beginTenantTransaction, marshalOne, marshalMany } from '../shared.js';

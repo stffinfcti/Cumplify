@@ -385,7 +385,8 @@
     "fieldOwnerId": "Responsável",
     "fieldDueDate": "Data limite",
     "fieldChangeDesc": "Descrição da mudança",
-    "fieldImpactAssessment": "Avaliação de impacto"
+    "fieldImpactAssessment": "Avaliação de impacto",
+    "likelihoodSeverityInvalid": "A probabilidade e a severidade devem ser números inteiros"
   },
   "forms": {
     "pdf": {
@@ -1076,5 +1077,23 @@
     "completeTitle": "Ciclo de vida",
     "completeAudit": "Concluir auditoria",
     "completing": "Concluindo…"
+  },
+  "errors": {
+    "unauthorized": "Você não está autorizado para esta ação",
+    "sessionExpired": "Sua sessão expirou — entre novamente",
+    "pausedForCredits": "Créditos de IA esgotados neste mês",
+    "approvalRequired": "Este documento precisa de uma revisão aprovada primeiro",
+    "invalidState": "Esta ação não é válida no estado atual",
+    "sodViolation": "Você não pode aprovar seu próprio envio",
+    "generationUnavailable": "A geração está temporariamente indisponível",
+    "orgProfileRequired": "Complete primeiro o perfil da sua organização",
+    "submitInvalidStatus": "Este registro não pode mais ser enviado",
+    "mappingIncomplete": "Campos mapeados obrigatórios estão faltando",
+    "validationIncomplete": "Preencha primeiro todos os campos obrigatórios",
+    "linkTargetNotFound": "O registro vinculado não foi encontrado",
+    "recordNotFound": "Registro não encontrado",
+    "versionNotFound": "Versão do documento não encontrada",
+    "sealFailed": "Falha ao selar o documento — tente novamente",
+    "generic": "Algo deu errado — tente novamente"
   }
 }

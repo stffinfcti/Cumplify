@@ -350,7 +350,7 @@ describe('FinalizeManual handler', () => {
           columnMetadata: [{ name: 'id' }],
         });
       }
-      if (sql.includes('MAX(version_no)')) {
+      if (sql.includes('MAX(v.version_no)')) {
         return Promise.resolve({
           records: [[{ longValue: 1 }]],
           columnMetadata: [{ name: 'next' }],
@@ -479,7 +479,7 @@ describe('FinalizeManual handler', () => {
           columnMetadata: [{ name: 'id' }],
         });
       }
-      if (sql.includes('MAX(version_no)')) {
+      if (sql.includes('MAX(v.version_no)')) {
         return Promise.resolve({
           records: [[{ longValue: 1 }]],
           columnMetadata: [{ name: 'next' }],

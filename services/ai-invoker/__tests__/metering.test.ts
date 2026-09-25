@@ -219,11 +219,14 @@ describe('incrementMeter — conditional ADD (TOCTOU)', () => {
     expect(mockDdbSend).toHaveBeenCalledTimes(1);
     const input = (mockDdbSend.mock.calls[0][0] as { input: Record<string, unknown> }).input;
     expect(input.UpdateExpression).toBe('ADD creditsUsed :credits SET lastUpdated = :ts');
+    // DDB conditions can't do arithmetic: used + credits <= cap is expressed
+    // as used <= cap - credits (computed client-side as :capMinusCredits).
     expect(input.ConditionExpression).toBe(
-      'attribute_not_exists(creditsUsed) OR creditsUsed < :cap',
+      '(attribute_not_exists(creditsUsed) AND :credits <= :cap) OR creditsUsed <= :capMinusCredits',
     );
     const values = input.ExpressionAttributeValues as Record<string, { N?: string }>;
     expect(values[':cap'].N).toBe('15000');
+    expect(values[':capMinusCredits'].N).toBe('14987.5');
     expect(values[':credits'].N).toBe('12.500000');
   });
 

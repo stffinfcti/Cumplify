@@ -1,7 +1,6 @@
 /**
  * forms — catalog + record read surface (templates, record listings,
- * single-record fetch). Extracted from forms.ts (mechanical decomposition
- * — no semantic changes).
+ * single-record fetch). Extracted from forms.ts.
  */
 
 import { beginTenantTransaction } from '../shared.js';

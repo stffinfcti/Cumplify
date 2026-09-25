@@ -17,6 +17,8 @@ import {
   marshalOne,
   marshalMany,
   jsonOut,
+  type AppSyncEvent,
+  LIST_QUERY_LIMIT,
 } from './shared.js';
 import {
   mapEnum,
@@ -30,19 +32,7 @@ import {
 const logger = new Logger({ serviceName: 'resolver-m2' });
 const lambdaClient = new LambdaClient({});
 
-// M-effort: server-side bound on list queries (mirror forms' LIST_MAX_LIMIT).
-const LIST_QUERY_LIMIT = 500;
 const CAPA_GURU_FN_ARN = process.env.CAPA_GURU_FN_ARN ?? '';
-
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: {
-    resolverContext?: Record<string, string>;
-    userArn?: string;
-    username?: string;
-  };
-}
 
 const AGENT_FIELDS = new Set(['agentTriageNC', 'agentProposeCorrectiveAction']);
 

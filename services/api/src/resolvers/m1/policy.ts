@@ -1,6 +1,6 @@
 /**
  * M1 Document Studio — policy + IMS scope writes. Extracted from m1.ts
- * (mechanical decomposition — no semantic changes).
+ *.
  */
 
 import { beginTenantTransaction, publishAuditEvent, marshalOne } from '../shared.js';

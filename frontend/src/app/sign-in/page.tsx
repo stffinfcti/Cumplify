@@ -205,7 +205,7 @@ export default function SignInPage() {
           <input
             id="mfaCode"
             type="text"
-            inputMode="numeric"
+            inputMode={step.challenge === 'custom' ? 'text' : 'numeric'}
             autoComplete="one-time-code"
             value={code}
             onChange={(e) => setCode(e.target.value)}

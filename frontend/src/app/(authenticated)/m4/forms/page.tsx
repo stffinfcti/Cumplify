@@ -91,7 +91,7 @@ export default function FormsPage() {
     const tplParam = searchParams.get('tpl');
     const recParam = searchParams.get('rec');
     if (recParam) setSelectedRecordId(recParam);
-    else if (tplParam && templates.length > 0) {
+    if (tplParam && templates.length > 0) {
       const tpl = templates.find((t) => t.id === tplParam);
       if (tpl) setSelectedTemplate(tpl);
     }

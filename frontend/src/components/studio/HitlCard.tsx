@@ -10,6 +10,7 @@ import {
   ProvenanceLink,
 } from '@/components/shared';
 import { useGraphQL } from '@/lib/api';
+import { errorText } from '@/lib/error-text';
 import { canApprove } from '@/lib/role-matrix';
 import { type HitlItem, type ApprovalResult, APPROVE_HITL_MUTATION, tryParseArgs } from './hitl';
 import { ProposalView } from './ProposalView';
@@ -36,6 +37,7 @@ export interface HitlCardProps {
 
 export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
   const tCard = useTranslations('hitlCard');
+  const tErr = useTranslations('errors');
   const { mutate } = useGraphQL();
 
   const [note, setNote] = useState('');
@@ -81,7 +83,7 @@ export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
       });
       markApproved(data.approveHitlItem);
     } catch (err) {
-      setActionError((err as Error).message || tCard('actionError'));
+      setActionError(errorText(err, tErr, 'generic') || tCard('actionError'));
       pruneIfAlreadyResolved(err);
     } finally {
       setBusy(false);
@@ -90,10 +92,11 @@ export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
 
   /** The resolver's 409/410 means this item was resolved on another surface
    * or its SFN task expired — the card is stale either way, so prune it
-   * instead of leaving a dead card up. */
+   * instead of leaving a dead card up. Matches the resolver's stable
+   * HITL_* code prefix, never the prose message. */
   function pruneIfAlreadyResolved(err: unknown) {
     const msg = (err as Error).message ?? '';
-    if (msg.includes('already resolved') || msg.includes('expired or does not exist')) {
+    if (msg.includes('HITL_ALREADY_RESOLVED') || msg.includes('HITL_TASK_EXPIRED')) {
       onRemove?.(item.hitlItemId);
     }
   }
@@ -130,7 +133,7 @@ export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
       setIsEditing(false);
       markApproved(data.approveHitlItem);
     } catch (err) {
-      setActionError((err as Error).message || tCard('actionError'));
+      setActionError(errorText(err, tErr, 'generic') || tCard('actionError'));
       pruneIfAlreadyResolved(err);
     } finally {
       setBusy(false);
@@ -150,7 +153,7 @@ export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
       });
       onRemove?.(item.hitlItemId);
     } catch (err) {
-      setActionError((err as Error).message || tCard('actionError'));
+      setActionError(errorText(err, tErr, 'generic') || tCard('actionError'));
       pruneIfAlreadyResolved(err);
     } finally {
       setBusy(false);

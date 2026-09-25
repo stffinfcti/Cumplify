@@ -160,7 +160,7 @@ describe('agentDraftDocument (m1, DocStudio) — direct write', () => {
           standard: 'ISO9001',
           docType: 'PROCEDURE',
           title: 'Agent-drafted procedure',
-          contentRef: 's3://content/ref',
+          contentRef: 'tenants/tenant-agent/drafts/procedure.json',
         },
       }),
     );
@@ -177,7 +177,7 @@ describe('agentDraftDocument (m1, DocStudio) — direct write', () => {
     expect(versionParams).toContainEqual({ name: 'documentId', value: { stringValue: 'doc-1' } });
     expect(versionParams).toContainEqual({
       name: 'contentRef',
-      value: { stringValue: 's3://content/ref' },
+      value: { stringValue: 'tenants/tenant-agent/drafts/procedure.json' },
     });
 
     expect(mockCommit).toHaveBeenCalledOnce();
@@ -196,7 +196,7 @@ describe('agentDraftDocument (m1, DocStudio) — direct write', () => {
             standard: 'ISO9001',
             docType: 'PROCEDURE',
             title: 'x',
-            contentRef: 'ref',
+            contentRef: 'tenants/t1/drafts/x.json',
           },
         }),
       ),

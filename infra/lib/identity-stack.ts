@@ -208,6 +208,18 @@ export class IdentityStack extends cdk.Stack {
           // localhost stays registered so `next dev` sign-in works; the deployed
           // origin comes from envConfig.frontendDomain once the env is live.
           callbackUrls: [
+            ...(() => {
+              // Missing frontendDomain on a non-dev env leaves Cognito with
+              // only localhost callbacks — OAuth breaks silently. Warn at
+              // synth so it is loud in pipeline output but does not block a
+              // first deploy (the CloudFront domain is only known after it).
+              if (envConfig.envName !== 'dev' && !envConfig.frontendDomain) {
+                cdk.Annotations.of(this).addWarning(
+                  `envConfig.${envConfig.envName}.frontendDomain is unset — Cognito will only accept localhost OAuth callbacks. Populate it once the distribution exists.`,
+                );
+              }
+              return [];
+            })(),
             'http://localhost:3000/callback',
             ...(envConfig.frontendDomain ? [`https://${envConfig.frontendDomain}/callback`] : []),
           ],

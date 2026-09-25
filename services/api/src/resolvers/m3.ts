@@ -16,26 +16,15 @@ import {
   requireModuleRole,
   marshalOne,
   marshalMany,
+  LIST_QUERY_LIMIT,
+  type AppSyncEvent,
 } from './shared.js';
 import { mapEnum, FINDING_TYPE_MAP } from './enum-mappings.js';
 
 const logger = new Logger({ serviceName: 'resolver-m3' });
 const lambdaClient = new LambdaClient({});
 
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: {
-    resolverContext?: Record<string, string>;
-    userArn?: string;
-    username?: string;
-  };
-}
-
 const AGENT_FIELDS = new Set(['agentGenerateChecklist', 'agentScoreReadiness']);
-
-// M-effort: server-side bound on list queries (mirror forms' LIST_MAX_LIMIT).
-const LIST_QUERY_LIMIT = 500;
 
 // M-effort: every id the resolver casts to ::uuid is validated as a UUID up
 // front — a malformed id gets a clean VALIDATION error instead of a Postgres

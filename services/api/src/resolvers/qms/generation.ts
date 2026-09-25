@@ -1,7 +1,7 @@
 /**
  * qms — generation-run family (runs, section review, manual generation,
  * IMS export, regeneration, manual-section drafts). Extracted from qms.ts
- * (mechanical decomposition — no semantic changes).
+ *.
  */
 
 import { InvokeCommand } from '@aws-sdk/client-lambda';
@@ -63,7 +63,8 @@ export async function getGenerationRun(event: AppSyncEvent, tenantId: string) {
 }
 
 export async function listGenerationRuns(event: AppSyncEvent, tenantId: string) {
-  const limit = (event.arguments.limit as number) || 20;
+  const rawLimit = (event.arguments.limit as number) || 20;
+  const limit = Math.min(Math.max(1, Math.floor(rawLimit)), 500);
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(
@@ -190,6 +191,11 @@ export async function generateImsManual(event: AppSyncEvent, tenantId: string, a
 
     const standards = input.standards?.length ? input.standards : (payload.standardsInScope ?? []);
     if (standards.length === 0) throw new Error('NO_STANDARDS_IN_SCOPE');
+    // The text[] bind below is a quoted array literal — reject any element
+    // that could break out of it.
+    if (!standards.every((s) => /^[A-Za-z0-9-]+$/.test(s))) {
+      throw new Error('INVALID_STANDARD');
+    }
 
     const runResult = await txn.execute(
       `INSERT INTO qms.generation_runs

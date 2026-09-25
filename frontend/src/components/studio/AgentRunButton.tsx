@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { PrimaryButton } from '@/components/shared';
 import { useGraphQL } from '@/lib/api';
+import { errorText } from '@/lib/error-text';
 import { useAuth } from '@/lib/auth-context';
 import { HitlCard } from './HitlCard';
 import { type HitlItem, LIST_PENDING_HITL_QUERY } from './hitl';
@@ -48,6 +49,7 @@ export function AgentRunButton({
   onResolved,
 }: AgentRunButtonProps) {
   const t = useTranslations('studio');
+  const tErr = useTranslations('errors');
   const { query, mutate } = useGraphQL();
   const { user } = useAuth();
   const role = user?.role ?? 'employee';
@@ -83,7 +85,7 @@ export function AgentRunButton({
       baseline = (await listPendingIds()).ids;
       await mutate(mutation, variables ?? {});
     } catch (err) {
-      setDispatchError((err as Error).message || t('dispatchError'));
+      setDispatchError(errorText(err, tErr, 'generic'));
       setPhase('dispatchError');
       return;
     }

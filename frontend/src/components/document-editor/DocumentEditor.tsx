@@ -10,6 +10,7 @@ import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import { useAuth } from '@/lib/auth-context';
 import { useGraphQL } from '@/lib/api';
+import { errorText } from '@/lib/error-text';
 import { SecondaryButton, PrimaryButton, StatusBadge } from '@/components/shared';
 import { GuidanceBanner } from '@/components/shared/GuidanceBanner';
 import { MermaidNode } from './MermaidNode';
@@ -81,6 +82,7 @@ export function DocumentEditor({
   onConverge,
 }: DocumentEditorProps) {
   const t = useTranslations('editor');
+  const tErr = useTranslations('errors');
   const { user } = useAuth();
   const { mutate } = useGraphQL();
 
@@ -105,12 +107,16 @@ export function DocumentEditor({
   // section's text moves (a regenerate wrote a new version, or a newer save
   // landed), re-baseline the draft and record the REAL new text as an agent
   // proposal — never synthetic content. Pending human edits are preserved.
-  const sectionsSig = sections
-    .map(
-      (s) =>
-        `${s.harmonizationKey}:${s.humanEditedBody ?? s.sentences?.map((x) => x.text).join(' ') ?? ''}`,
-    )
-    .join('|');
+  const sectionsSig = useMemo(
+    () =>
+      sections
+        .map(
+          (s) =>
+            `${s.harmonizationKey}:${s.humanEditedBody ?? s.sentences?.map((x) => x.text).join(' ') ?? ''}`,
+        )
+        .join('|'),
+    [sections],
+  );
   useEffect(() => {
     setDrafts((prev) => {
       let changed = false;
@@ -177,7 +183,7 @@ export function DocumentEditor({
         });
         onSaved?.();
       } catch (err) {
-        setSaveError((err as Error).message || t('saveFailed'));
+        setSaveError(errorText(err, tErr, 'generic'));
       } finally {
         setSaving(null);
       }

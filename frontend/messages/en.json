@@ -385,7 +385,8 @@
     "fieldOwnerId": "Owner",
     "fieldDueDate": "Due date",
     "fieldChangeDesc": "Change description",
-    "fieldImpactAssessment": "Impact assessment"
+    "fieldImpactAssessment": "Impact assessment",
+    "likelihoodSeverityInvalid": "Likelihood and severity must be whole numbers"
   },
   "forms": {
     "pdf": {
@@ -1076,5 +1077,23 @@
     "completeTitle": "Lifecycle",
     "completeAudit": "Complete audit",
     "completing": "Completing…"
+  },
+  "errors": {
+    "unauthorized": "You are not authorized for this action",
+    "sessionExpired": "Your session expired — sign in again",
+    "pausedForCredits": "AI credits exhausted for this month",
+    "approvalRequired": "This document needs an approved review first",
+    "invalidState": "This action is not valid in the current state",
+    "sodViolation": "You cannot approve your own submission",
+    "generationUnavailable": "Generation is temporarily unavailable",
+    "orgProfileRequired": "Complete your organization profile first",
+    "submitInvalidStatus": "This record can no longer be submitted",
+    "mappingIncomplete": "Required mapped fields are missing",
+    "validationIncomplete": "Fill in all required fields first",
+    "linkTargetNotFound": "The linked record was not found",
+    "recordNotFound": "Record not found",
+    "versionNotFound": "Document version not found",
+    "sealFailed": "Sealing the document failed — try again",
+    "generic": "Something went wrong — please try again"
   }
 }

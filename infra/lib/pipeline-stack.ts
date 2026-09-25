@@ -174,7 +174,8 @@ export class PipelineStack extends cdk.Stack {
       pre: [
         new pipelines.ManualApprovalStep('ApproveToProd'),
         new pipelines.ShellStep('LegalSignoffGuard', {
-          commands: ['npx tsx scripts/assert-legal-signoff.ts'],
+          // stdlib-only script — no tsx/npm install needed in the gate step.
+          commands: ['node scripts/assert-legal-signoff.mjs'],
         }),
       ],
       post: [makeDeployFrontendStep(prodStage, ENV_CONFIGS.prod.account, 'prod')],

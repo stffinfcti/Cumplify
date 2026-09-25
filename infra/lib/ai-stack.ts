@@ -475,9 +475,16 @@ export class AiStack extends cdk.Stack {
     // UpdateItem would drift vocabulary and never TTL-expire).
     const expireHitlItem = new tasks.LambdaInvoke(this, 'ExpireHitlItem', {
       lambdaFunction: expireHitlItemFn,
-      outputPath: '$.Payload',
+      // resultPath (not outputPath) keeps $.timeoutError visible downstream.
+      resultPath: '$.expireResult',
     });
-    waitForApproval.addCatch(expireHitlItem, {
+    // End the execution FAILED after expiring the item — an approval that
+    // timed out is a failed execution, not a successful one.
+    const hitlTimedOut = new sfn.Fail(this, 'HitlTimedOut', {
+      error: 'HITL_TIMEOUT',
+      cause: 'Approval item expired after 7 days without a decision.',
+    });
+    waitForApproval.addCatch(expireHitlItem.next(hitlTimedOut), {
       errors: ['States.Timeout'],
       resultPath: '$.timeoutError',
     });
@@ -1271,6 +1278,15 @@ export class AiStack extends cdk.Stack {
           resources: [appRoleSecretArn],
         }),
       );
+      // The app-role secret is encrypted with the dynamodb/secrets CMK
+      // (api-stack.ts AppRoleSecret encryptionKey) — NOT the master-secret
+      // key. Live-proven 2026-07-15: dbSecretKey grant alone → KMS denial.
+      props.dynamodbKey.grantDecrypt(fn);
+    }
+
+    // PutEvents only for the functions that emit progress events —
+    // markRunFailed writes the run row and nothing else.
+    for (const fn of [seedSectionsFn, composeSectionFn, finalizeManualFn, regenerateSectionFn]) {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           effect: iam.Effect.ALLOW,
@@ -1278,10 +1294,6 @@ export class AiStack extends cdk.Stack {
           resources: [props.busArn],
         }),
       );
-      // The app-role secret is encrypted with the dynamodb/secrets CMK
-      // (api-stack.ts AppRoleSecret encryptionKey) — NOT the master-secret
-      // key. Live-proven 2026-07-15: dbSecretKey grant alone → KMS denial.
-      props.dynamodbKey.grantDecrypt(fn);
     }
 
     // Working content lives under tenants/* only — no bucket-wide access.
@@ -1363,7 +1375,9 @@ export class AiStack extends cdk.Stack {
     // Catch-all on every stage → MarkRunFailed flips the row 'failed'.
     const markRunFailed = new tasks.LambdaInvoke(this, 'MarkRunFailed', {
       lambdaFunction: markRunFailedFn,
-      outputPath: '$.Payload',
+      // resultPath (not outputPath '$.Payload') so $.stageError survives for
+      // the RunFailed state's causePath.
+      resultPath: '$.markResult',
     });
     // MarkRunFailed is a catch target — without a terminal Fail it would
     // swallow the error and report the execution SUCCEEDED.

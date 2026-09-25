@@ -9,18 +9,12 @@ import { Logger } from '@aws-lambda-powertools/logger';
 import { QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { resolveModule } from '../permissions/role-matrix.js';
-import { extractContext, getTenantDdbClient, TABLE_NAME } from './shared.js';
+import { extractContext, getTenantDdbClient, TABLE_NAME, type AppSyncEvent } from './shared.js';
 
 const logger = new Logger({ serviceName: 'resolver-hitl-query' });
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
-
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
-}
 
 interface PaginationInput {
   limit?: number;

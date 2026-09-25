@@ -224,13 +224,20 @@ export default function RiskManagementPage() {
   // Drawer handlers propagate mutation errors — FormDrawer keeps the drawer
   // open and shows the error inline instead of nuking the whole page (FE-3).
   async function handleCreateRisk(values: Record<string, string | boolean>) {
+    // GraphQL Int fields — reject NaN/non-integer before the mutation so the
+    // drawer shows the inline error instead of serializing a broken Int.
+    const likelihood = Number(values.likelihood);
+    const severity = Number(values.severity);
+    if (!Number.isInteger(likelihood) || !Number.isInteger(severity)) {
+      throw new Error(t('likelihoodSeverityInvalid'));
+    }
     await mutate(CREATE_RISK_MUTATION, {
       input: {
         standard: values.standard,
         category: values.category,
         description: values.description,
-        likelihood: Number(values.likelihood),
-        severity: Number(values.severity),
+        likelihood,
+        severity,
         treatment: values.treatment || undefined,
       },
     });

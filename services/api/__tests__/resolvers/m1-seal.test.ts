@@ -3,7 +3,9 @@
  * Pins: per-object ObjectLockRetainUntilDate from the TENANT retention policy
  * (BC-10: bucket default is safety-net only), default-policy seed, m4.records
  * pointer row in the SAME txn as the status flip, publish-after-commit,
- * rollback on seal failure, and the documented empty-content_ref exemption.
+ * seal failure BEFORE the flip (render/CopyObject run outside the tenant
+ * txn between two short transactions), and the documented
+ * empty-content_ref exemption.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -147,8 +149,8 @@ describe('publishControlledDocument sealing (STO-5)', () => {
     mockExecute
       .mockResolvedValueOnce(metaRow) // meta SELECT
       .mockResolvedValueOnce(approvalRow) // approval gate SELECT
-      .mockResolvedValueOnce(docRow) // UPDATE approve
       .mockResolvedValueOnce(policyRow(5)) // retention policy SELECT
+      .mockResolvedValueOnce(docRow) // UPDATE approve
       .mockResolvedValueOnce(emptyRes); // m4.records INSERT
     wireRenderOk();
 
@@ -191,9 +193,11 @@ describe('publishControlledDocument sealing (STO-5)', () => {
       ':retainUntil::timestamptz, :objectRef, :retainUntil::timestamptz',
     );
 
-    // ordering: commit BEFORE audit publish (rollback-before-publish lesson)
-    expect(mockCommit).toHaveBeenCalledTimes(1);
-    expect(mockCommit.mock.invocationCallOrder[0]).toBeLessThan(
+    // ordering: BOTH commits BEFORE audit publish — commit[0] closes the
+    // short meta/policy txn, commit[1] closes the flip txn
+    // (rollback-before-publish lesson)
+    expect(mockCommit).toHaveBeenCalledTimes(2);
+    expect(mockCommit.mock.invocationCallOrder[1]).toBeLessThan(
       mockPublishAudit.mock.invocationCallOrder[0],
     );
     expect(mockPublishAudit.mock.calls[0][0].payload).toMatchObject({
@@ -208,15 +212,15 @@ describe('publishControlledDocument sealing (STO-5)', () => {
     mockExecute
       .mockResolvedValueOnce(metaRow)
       .mockResolvedValueOnce(approvalRow) // approval gate SELECT
-      .mockResolvedValueOnce(docRow)
       .mockResolvedValueOnce(emptyRes) // no policy row
       .mockResolvedValueOnce(emptyRes) // policy INSERT (seed)
+      .mockResolvedValueOnce(docRow) // UPDATE approve
       .mockResolvedValueOnce(emptyRes); // m4.records INSERT
     wireRenderOk();
 
     await handler(makeEvent());
 
-    const seed = mockExecute.mock.calls[4];
+    const seed = mockExecute.mock.calls[3];
     expect(seed[0]).toContain('INSERT INTO m4.retention_policies');
     expect(seed[0]).toContain("'controlled_document'");
     const seedParams = Object.fromEntries(
@@ -242,18 +246,18 @@ describe('publishControlledDocument sealing (STO-5)', () => {
 
     expect(mockLambdaSend).not.toHaveBeenCalled();
     expect(mockS3Send).not.toHaveBeenCalled();
-    expect(mockCommit).toHaveBeenCalledTimes(1);
+    // meta txn + flip txn
+    expect(mockCommit).toHaveBeenCalledTimes(2);
     expect(mockPublishAudit.mock.calls[0][0].payload).toMatchObject({
       sealed: false,
       reason: 'CONTENT_UNAVAILABLE',
     });
   });
 
-  it('render failure → rollback, SEAL_FAILED, publish is BLOCKED and no audit event fires', async () => {
+  it('render failure → SEAL_FAILED BEFORE the flip, publish is BLOCKED and no audit event fires', async () => {
     mockExecute
       .mockResolvedValueOnce(metaRow)
       .mockResolvedValueOnce(approvalRow) // approval gate SELECT
-      .mockResolvedValueOnce(docRow)
       .mockResolvedValueOnce(policyRow(5));
     mockLambdaSend.mockResolvedValue({
       FunctionError: 'Unhandled',
@@ -261,16 +265,17 @@ describe('publishControlledDocument sealing (STO-5)', () => {
     });
 
     await expect(handler(makeEvent())).rejects.toThrow('SEAL_FAILED');
-    expect(mockCommit).not.toHaveBeenCalled();
-    expect(mockRollback).toHaveBeenCalled();
+    // The short meta txn commits; the flip txn never starts — nothing rolled
+    // back because nothing that could see 'approved' was written.
+    expect(mockCommit).toHaveBeenCalledTimes(1);
+    expect(mockRollback).not.toHaveBeenCalled();
     expect(mockPublishAudit).not.toHaveBeenCalled();
   });
 
-  it('CopyObject failure → rollback, error propagates, no records row committed', async () => {
+  it('CopyObject failure → error propagates BEFORE the flip, no records row committed', async () => {
     mockExecute
       .mockResolvedValueOnce(metaRow)
       .mockResolvedValueOnce(approvalRow) // approval gate SELECT
-      .mockResolvedValueOnce(docRow)
       .mockResolvedValueOnce(policyRow(5));
     mockLambdaSend.mockResolvedValue({
       Payload: new TextEncoder().encode(
@@ -282,8 +287,8 @@ describe('publishControlledDocument sealing (STO-5)', () => {
     mockS3Send.mockRejectedValue(new Error('AccessDenied'));
 
     await expect(handler(makeEvent())).rejects.toThrow('AccessDenied');
-    expect(mockCommit).not.toHaveBeenCalled();
-    expect(mockRollback).toHaveBeenCalled();
+    expect(mockCommit).toHaveBeenCalledTimes(1);
+    expect(mockRollback).not.toHaveBeenCalled();
     expect(mockPublishAudit).not.toHaveBeenCalled();
   });
 

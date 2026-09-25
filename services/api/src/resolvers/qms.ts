@@ -22,8 +22,6 @@ import {
   runManualSectionDraft,
 } from './qms/generation.js';
 
-export { OrgProfileSchema } from './qms/org-profile.js';
-
 export async function handler(event: AppSyncEvent): Promise<unknown> {
   const ctx = extractContext(event);
   const { tenantId, sub, role } = ctx;
@@ -33,33 +31,28 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'getOrgProfile':
       return getOrgProfile(tenantId);
     case 'saveOrgProfile':
-      return requireM1Role(role, () => saveOrgProfile(event, tenantId, sub));
+      return requireModuleRole(role, 'M1', () => saveOrgProfile(event, tenantId, sub));
     case 'listClauseRegistry':
       return listClauseRegistry(event, tenantId);
     case 'listClauseApplicability':
       return listClauseApplicability(tenantId);
     case 'setClauseApplicability':
-      return requireM1Role(role, () => setClauseApplicability(event, tenantId, sub));
+      return requireModuleRole(role, 'M1', () => setClauseApplicability(event, tenantId, sub));
     case 'getGenerationRun':
       return getGenerationRun(event, tenantId);
     case 'listGenerationRuns':
       return listGenerationRuns(event, tenantId);
     case 'markSectionReviewed':
-      return requireM1Role(role, () => markSectionReviewed(event, tenantId, sub));
+      return requireModuleRole(role, 'M1', () => markSectionReviewed(event, tenantId, sub));
     case 'generateImsManual':
-      return requireM1Role(role, () => generateImsManual(event, tenantId, sub));
+      return requireModuleRole(role, 'M1', () => generateImsManual(event, tenantId, sub));
     case 'requestImsExport':
-      return requestImsExport(event, tenantId);
+      return requireModuleRole(role, 'M1', () => requestImsExport(event, tenantId));
     case 'regenerateSection':
-      return requireM1Role(role, () => regenerateSection(event, tenantId, sub));
+      return requireModuleRole(role, 'M1', () => regenerateSection(event, tenantId, sub));
     case 'runManualSectionDraft':
-      return requireM1Role(role, () => runManualSectionDraft(event, tenantId, sub));
+      return requireModuleRole(role, 'M1', () => runManualSectionDraft(event, tenantId, sub));
     default:
       throw new Error(`Unknown field: ${event.info.fieldName}`);
   }
-}
-
-/** Role gate: M1 authoring family (design §6) — shared requireModuleRole helper. */
-function requireM1Role<T>(role: string, fn: () => T): T {
-  return requireModuleRole(role, 'M1', fn);
 }

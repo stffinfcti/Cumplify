@@ -297,6 +297,7 @@ export default function M4RecordsPage() {
         s3ObjectRef: values.s3ObjectRef || undefined,
       },
     });
+    await fetchRegister();
   }
 
   async function handleCreateRetention(values: Record<string, string | boolean>) {

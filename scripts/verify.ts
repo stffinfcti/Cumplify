@@ -7,7 +7,7 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { basename, resolve, join, dirname } from 'node:path';
+import { basename, resolve, join, dirname, relative } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
@@ -116,20 +116,35 @@ function runStep(
 }
 
 // --- Service property-test check ---
-function hasFilesMatching(root: string, patterns: string[]): boolean {
-  // Simple check: do any .test.ts files exist in services/ or infra/ dirs?
-  for (const pattern of patterns) {
-    const baseDir = pattern.startsWith('services') ? join(root, 'services') : join(root, 'infra');
-    if (!existsSync(baseDir)) continue;
-    try {
-      const output = execSync(`find "${baseDir}" -name "*.test.ts" -type f 2>/dev/null | head -1`, {
-        encoding: 'utf-8',
-        cwd: root,
-      });
-      if (output.trim().length > 0) return true;
-    } catch {
-      continue;
+function globToRegExp(glob: string): RegExp {
+  let re = '';
+  let i = 0;
+  while (i < glob.length) {
+    if (glob.startsWith('**/', i)) {
+      re += '(?:.*/)?';
+      i += 3;
+    } else if (glob.startsWith('**', i)) {
+      re += '.*';
+      i += 2;
+    } else if (glob[i] === '*') {
+      re += '[^/]*';
+      i += 1;
+    } else if (glob[i] === '?') {
+      re += '[^/]';
+      i += 1;
+    } else {
+      re += glob[i].replace(/[.+^${}()|[\]\\]/g, '\\$&');
+      i += 1;
     }
+  }
+  return new RegExp(`^${re}$`);
+}
+
+function hasFilesMatching(root: string, patterns: string[]): boolean {
+  const matchers = patterns.map(globToRegExp);
+  for (const file of walkFiles(root)) {
+    const rel = relative(root, file);
+    if (matchers.some((m) => m.test(rel))) return true;
   }
   return false;
 }
@@ -278,11 +293,13 @@ function main() {
         skipReason: `No integration tests defined for module ${moduleName}.`,
       });
     } else {
-      // Both suffixes exist in the tree — run them together.
+      // Both suffixes exist in the tree — run them together. Route through
+      // test-int.ts so the int lane gets vitest.int.config.ts (the default
+      // config excludes *.int.test.ts) plus its provisioning report.
       const s6 = runStep(
         6,
         `integration tests (module: ${moduleName})`,
-        `npx vitest run "services/${moduleName}/**/*.integration.test.ts" "services/${moduleName}/**/*.int.test.ts" --reporter=verbose`,
+        `npx tsx scripts/test-int.ts "services/${moduleName}/**/*.integration.test.ts" "services/${moduleName}/**/*.int.test.ts" --reporter=verbose`,
       );
       if (s6 === 'FAIL') {
         computeResult();

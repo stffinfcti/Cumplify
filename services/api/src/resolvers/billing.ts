@@ -28,7 +28,7 @@ import {
   PutSecretValueCommand,
 } from '@aws-sdk/client-secrets-manager';
 import Stripe from 'stripe';
-import { extractContext } from './shared.js';
+import { extractContext, type AppSyncEvent } from './shared.js';
 
 const logger = new Logger({ serviceName: 'resolver-billing' });
 const sm = new SecretsManagerClient({});
@@ -37,12 +37,6 @@ interface StripeSecret {
   secretKey: string;
   portalConfigurationId?: string;
   customersByTenant?: Record<string, string>;
-}
-
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
 }
 
 /**

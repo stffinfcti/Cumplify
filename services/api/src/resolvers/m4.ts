@@ -18,6 +18,8 @@ import {
   getTenantDdbClient,
   TABLE_NAME,
   type ResolverContext,
+  LIST_QUERY_LIMIT,
+  type AppSyncEvent,
 } from './shared.js';
 import { normalizeRole, KNOWN_ROLES } from '../permissions/role-matrix.js';
 import {
@@ -32,18 +34,9 @@ import {
 
 const logger = new Logger({ serviceName: 'resolver-m4' });
 
-// M-effort: server-side bound on list queries (mirror forms' LIST_MAX_LIMIT).
-const LIST_QUERY_LIMIT = 500;
-
 // Audit ledger is a privileged read surface (approver subs, justifications,
 // execution ARNs): admins + auditors only — plain Employees are gated out.
 const AUDIT_TRAIL_ROLES = new Set(['InternalAuditor', 'ExternalAuditor']);
-
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
-}
 
 export async function handler(event: AppSyncEvent): Promise<unknown> {
   const ctx = extractContext(event);

@@ -176,8 +176,8 @@ describe('approveDocumentVersion — BC-11 SoD', () => {
   it('SOD_VIOLATION when approver === version created_by — writes NOTHING + publishes Security.SodViolationBlocked', async () => {
     // Call 1: version created_by = 'user-test' (same as actor from resolverContext)
     mockExecute.mockResolvedValueOnce({
-      records: [[{ stringValue: 'user-test' }]],
-      columnMetadata: [{ name: 'created_by' }],
+      records: [[{ stringValue: 'user-test' }, { stringValue: 'in_review' }]],
+      columnMetadata: [{ name: 'created_by' }, { name: 'doc_status' }],
     });
 
     await expect(
@@ -204,8 +204,8 @@ describe('approveDocumentVersion — BC-11 SoD', () => {
   it('second-user approval succeeds when approver !== created_by', async () => {
     // Call 1: version created_by = 'other-user'
     mockExecute.mockResolvedValueOnce({
-      records: [[{ stringValue: 'other-user' }]],
-      columnMetadata: [{ name: 'created_by' }],
+      records: [[{ stringValue: 'other-user' }, { stringValue: 'in_review' }]],
+      columnMetadata: [{ name: 'created_by' }, { name: 'doc_status' }],
     });
     // Call 2: INSERT approval
     mockExecute.mockResolvedValueOnce({
@@ -239,8 +239,8 @@ describe('approveDocumentVersion — BC-11 SoD', () => {
 
   it('SoD check queries version with ::uuid cast', async () => {
     mockExecute.mockResolvedValueOnce({
-      records: [[{ stringValue: 'other-user' }]],
-      columnMetadata: [{ name: 'created_by' }],
+      records: [[{ stringValue: 'other-user' }, { stringValue: 'in_review' }]],
+      columnMetadata: [{ name: 'created_by' }, { name: 'doc_status' }],
     });
     mockExecute.mockResolvedValueOnce({
       records: [[{ stringValue: 'a-1' }]],

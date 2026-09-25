@@ -1,6 +1,6 @@
 /**
  * qms — clause registry reads + applicability mutation. Extracted from
- * qms.ts (mechanical decomposition — no semantic changes).
+ * qms.ts.
  */
 
 import { beginTenantTransaction, marshalOne, marshalMany, publishAuditEvent } from '../shared.js';

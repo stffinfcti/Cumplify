@@ -1,6 +1,6 @@
 /**
  * forms — record PDF export + approved-record sealing. Extracted from
- * forms.ts (mechanical decomposition — no semantic changes).
+ * forms.ts.
  */
 
 import { beginTenantTransaction, unwrapField } from '../shared.js';
@@ -169,7 +169,7 @@ interface BuiltRecordContent {
 }
 
 /** Upload the content JSON and render it through the shared PdfRenderFn. */
-export async function renderRecordPdf(
+async function renderRecordPdf(
   tenantId: string,
   recordId: string,
   built: BuiltRecordContent,
@@ -220,7 +220,7 @@ export async function renderRecordPdf(
  * renders strings it is given. Reads run inside the caller's transaction, so
  * a seal after the approval UPDATE sees the approved row.
  */
-export async function buildRecordContent(
+async function buildRecordContent(
   txn: TenantTransaction,
   recordId: string,
   locale: string,

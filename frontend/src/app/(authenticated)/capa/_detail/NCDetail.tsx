@@ -295,8 +295,7 @@ export function NCDetail({ id, onBack }: { id: string; onBack: () => void }) {
         rootCauseSummary: values.rootCauseSummary,
       },
     });
-    await fetchNC();
-    await fetchCAs();
+    await Promise.all([fetchNC(), fetchCAs()]);
   }
 
   async function handleCreateCA(values: Record<string, string | boolean>) {
@@ -323,8 +322,7 @@ export function NCDetail({ id, onBack }: { id: string; onBack: () => void }) {
         effective: values.effective === 'true',
       },
     });
-    await fetchNC();
-    await fetchCAs();
+    await Promise.all([fetchNC(), fetchCAs()]);
   }
 
   async function handleCloseCapa(values: Record<string, string | boolean>) {
@@ -333,8 +331,7 @@ export function NCDetail({ id, onBack }: { id: string; onBack: () => void }) {
     await mutate(CLOSE_CAPA, {
       input: { id: closeCAId, closureNotes: (values.closureNotes as string) || undefined },
     });
-    await fetchNC();
-    await fetchCAs();
+    await Promise.all([fetchNC(), fetchCAs()]);
   }
 
   if (loading) return <p className={styles.stageDate}>{t('loading')}</p>;

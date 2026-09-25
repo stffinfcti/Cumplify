@@ -18,25 +18,14 @@ import {
   requireModuleRole,
   marshalOne,
   marshalMany,
+  LIST_QUERY_LIMIT,
+  type AppSyncEvent,
 } from './shared.js';
 import { mapEnum, RISK_CATEGORY_MAP } from './enum-mappings.js';
 
 const logger = new Logger({ serviceName: 'resolver-m5' });
 const lambdaClient = new LambdaClient({});
 const RISK_SENTINEL_FN_ARN = process.env.RISK_SENTINEL_FN_ARN ?? '';
-
-// M-effort: server-side bound on list queries (mirror forms' LIST_MAX_LIMIT).
-const LIST_QUERY_LIMIT = 500;
-
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: {
-    resolverContext?: Record<string, string>;
-    userArn?: string;
-    username?: string;
-  };
-}
 
 type IsoStandard = 'ISO9001' | 'ISO14001' | 'ISO45001';
 const ISO_STANDARDS = new Set<IsoStandard>(['ISO9001', 'ISO14001', 'ISO45001']);

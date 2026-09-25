@@ -1,9 +1,11 @@
 /**
  * forms — record lifecycle mutations + single-record fetch. Extracted from
- * forms.ts (mechanical decomposition — no semantic changes).
+ * forms.ts.
  */
 
 import { beginTenantTransaction, publishAuditEvent, parseAwsJson, unwrapField } from '../shared.js';
+import type { SqlParameter } from '@aws-sdk/client-rds-data';
+import { canApprove } from '../../permissions/role-matrix.js';
 import {
   logger,
   CONTENT_BUCKET,
@@ -20,7 +22,6 @@ import {
   completionFrom,
   getFormRecordById,
   buildValueParam,
-  nullOtherColumns,
   marshalFieldMeta,
   marshalFieldMetaFull,
   type AppSyncEvent,
@@ -181,7 +182,12 @@ export async function saveFormRecordValues(
 
     const fieldMeta = marshalFieldMeta(fieldsResult);
 
-    // Upsert each value with typed-column dispatch
+    // Typed-column dispatch into two batched statements: one DELETE for
+    // cleared fields, one multi-row upsert for written fields — was one
+    // round-trip per field, which serialized every autosave flush.
+    const deleteFieldIds: string[] = [];
+    const upserts: Array<{ fieldId: string; column: string; param: SqlParameter }> = [];
+
     for (const [fieldKey, value] of Object.entries(values)) {
       const meta = fieldMeta.get(fieldKey);
       if (!meta) {
@@ -191,16 +197,7 @@ export async function saveFormRecordValues(
 
       // BUG-2 fix: null value → DELETE the row (clearing a field)
       if (value === null || value === undefined) {
-        await txn.execute(
-          `
-          DELETE FROM forms.record_values
-          WHERE record_id = :recordId::uuid AND field_id = :fieldId::uuid
-        `,
-          [
-            { name: 'recordId', value: { stringValue: recordId } },
-            { name: 'fieldId', value: { stringValue: meta.fieldId } },
-          ],
-        );
+        deleteFieldIds.push(meta.fieldId);
         continue;
       }
 
@@ -222,24 +219,64 @@ export async function saveFormRecordValues(
         }
       }
 
-      const param = buildValueParam(valueColumn, value);
+      upserts.push({
+        fieldId: meta.fieldId,
+        column: valueColumn,
+        param: buildValueParam(valueColumn, value),
+      });
+    }
 
-      // Upsert: INSERT ON CONFLICT UPDATE the appropriate column, null others
-      // Type casts: uuid columns need ::uuid, date needs ::timestamptz, json needs ::jsonb, number needs ::numeric
-      const valueCast = VALUE_COLUMN_CAST[valueColumn] ?? '';
+    if (deleteFieldIds.length > 0) {
       await txn.execute(
         `
-        INSERT INTO forms.record_values (record_id, tenant_id, field_id, ${valueColumn})
-        VALUES (:recordId::uuid, :tenantId, :fieldId::uuid, :val${valueCast})
+        DELETE FROM forms.record_values
+        WHERE record_id = :recordId::uuid
+          AND field_id IN (${deleteFieldIds.map((_, i) => `:d${i}::uuid`).join(', ')})
+      `,
+        [
+          { name: 'recordId', value: { stringValue: recordId } },
+          ...deleteFieldIds.map((id, i) => ({ name: `d${i}`, value: { stringValue: id } })),
+        ],
+      );
+    }
+
+    if (upserts.length > 0) {
+      // Each row carries its value in the column matching its field_type and
+      // NULL elsewhere — DO UPDATE applies every column from EXCLUDED, which
+      // sets the typed column and clears the rest (same effect as the old
+      // per-field nullOtherColumns clause).
+      const ALL_COLUMNS = [
+        'value_text',
+        'value_number',
+        'value_date',
+        'value_bool',
+        'value_uuid',
+        'value_json',
+      ];
+      const rowSql = upserts
+        .map((u, i) => {
+          const cells = ALL_COLUMNS.map((c) =>
+            c === u.column ? `:v${i}${VALUE_COLUMN_CAST[c] ?? ''}` : 'NULL',
+          ).join(', ');
+          return `(:recordId::uuid, :tenantId, :f${i}::uuid, ${cells})`;
+        })
+        .join(',\n        ');
+      await txn.execute(
+        `
+        INSERT INTO forms.record_values
+          (record_id, tenant_id, field_id, ${ALL_COLUMNS.join(', ')})
+        VALUES
+        ${rowSql}
         ON CONFLICT (record_id, field_id)
-        DO UPDATE SET ${valueColumn} = :val${valueCast},
-          ${nullOtherColumns(valueColumn)}
+        DO UPDATE SET ${ALL_COLUMNS.map((c) => `${c} = EXCLUDED.${c}`).join(', ')}
       `,
         [
           { name: 'recordId', value: { stringValue: recordId } },
           { name: 'tenantId', value: { stringValue: tenantId } },
-          { name: 'fieldId', value: { stringValue: meta.fieldId } },
-          param,
+          ...upserts.flatMap((u, i) => [
+            { name: `f${i}`, value: { stringValue: u.fieldId } },
+            { ...u.param, name: `v${i}` },
+          ]),
         ],
       );
     }
@@ -249,10 +286,10 @@ export async function saveFormRecordValues(
       { name: 'id', value: { stringValue: recordId } },
     ]);
 
+    // Re-read inside the txn so the returned record is exactly what commits
+    const refreshed = await getFormRecordById(recordId, tenantId, txn);
     await txn.commit();
-
-    // Return refreshed record
-    return getFormRecordById(recordId, tenantId);
+    return refreshed;
   } catch (err) {
     try {
       await txn.rollback();
@@ -277,6 +314,7 @@ export async function submitFormRecord(
   event: AppSyncEvent,
   tenantId: string,
   actor: string,
+  role: string,
 ): Promise<unknown> {
   const input = event.arguments.input as { recordId: string };
   const recordId = input.recordId;
@@ -366,8 +404,16 @@ export async function submitFormRecord(
       }
     }
 
+    let refreshed: unknown;
+
     // NCR→M2 mapping path
     if (mapsTo === 'm2_ncr') {
+      // Submitting through this template writes an M2 nonconformity row —
+      // hold it to the M2 write matrix instead of the authenticated floor
+      // the plain-record path uses.
+      if (!canApprove(role, 'M2')) {
+        throw new Error('UNAUTHORIZED');
+      }
       // Resolve clause_ref UUID → clause_no TEXT from qms.clause_registry (pending 011)
       const clauseRefUuid = currentValues['clause_ref'] as string;
       const clauseResult = await txn.execute(
@@ -469,6 +515,7 @@ export async function submitFormRecord(
         ],
       );
 
+      refreshed = await getFormRecordById(recordId, tenantId, txn);
       await txn.commit();
 
       // F2: Audit event — standard + clauseRef from mapped values (no literals)
@@ -497,6 +544,7 @@ export async function submitFormRecord(
         ],
       );
 
+      refreshed = await getFormRecordById(recordId, tenantId, txn);
       await txn.commit();
 
       // Audit event — standard/clauseRef from template metadata (impossible path fails loudly)
@@ -517,7 +565,7 @@ export async function submitFormRecord(
       });
     }
 
-    return getFormRecordById(recordId, tenantId);
+    return refreshed;
   } catch (err) {
     try {
       await txn.rollback();
@@ -647,6 +695,7 @@ export async function approveFormRecord(
       );
     }
 
+    const refreshed = await getFormRecordById(recordId, tenantId, txn);
     await txn.commit();
 
     // Audit event — dynamic standard/clauseRef from template
@@ -665,7 +714,7 @@ export async function approveFormRecord(
       payload: { recordId, templateId, approvedBy: actor, ...sealed },
     });
 
-    return getFormRecordById(recordId, tenantId);
+    return refreshed;
   } catch (err) {
     if ((err as Error).message !== 'SOD_VIOLATION') {
       try {
@@ -737,6 +786,7 @@ export async function reopenFormRecord(
       [{ name: 'id', value: { stringValue: recordId } }],
     );
 
+    const refreshed = await getFormRecordById(recordId, tenantId, txn);
     await txn.commit();
 
     // Audit event — standard/clauseRef from template metadata (impossible path fails loudly)
@@ -756,7 +806,7 @@ export async function reopenFormRecord(
       payload: { recordId, justification },
     });
 
-    return getFormRecordById(recordId, tenantId);
+    return refreshed;
   } catch (err) {
     try {
       await txn.rollback();

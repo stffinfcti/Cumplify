@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import { ErrorState } from '@/components/shared';
 
 /**
@@ -7,11 +8,15 @@ import { ErrorState } from '@/components/shared';
  * inside the authenticated layout (shell + nav stay mounted).
  */
 export default function Error({
-  error: _error,
+  error,
   reset,
 }: {
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  // Boundaries must never swallow silently — the digest is the datadog join key.
+  useEffect(() => {
+    console.error('Route error boundary caught', error);
+  }, [error]);
   return <ErrorState onRetry={reset} />;
 }

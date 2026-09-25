@@ -25,6 +25,14 @@ function getFocusable(root: HTMLElement | null): HTMLElement[] {
   );
 }
 
+/**
+ * Stack of currently-open dialog roots — Escape/focus-trap must only act on
+ * the TOPMOST dialog. With an AskOverlay over a FormDrawer, two capture-phase
+ * listeners would both fire: the lower one would close or steal focus while
+ * the user interacts with the upper one.
+ */
+const openDialogStack: HTMLElement[] = [];
+
 export function useDialog(
   open: boolean,
   onClose: () => void,
@@ -48,7 +56,11 @@ export function useDialog(
     const first = getFocusable(node)[0] ?? node;
     first?.focus();
 
+    if (node) openDialogStack.push(node);
+
     function onKeyDown(e: KeyboardEvent) {
+      // Only the topmost open dialog answers keys.
+      if (node && openDialogStack[openDialogStack.length - 1] !== node) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         onCloseRef.current();
@@ -77,6 +89,8 @@ export function useDialog(
     document.addEventListener('keydown', onKeyDown, true);
     return () => {
       document.removeEventListener('keydown', onKeyDown, true);
+      const i = node ? openDialogStack.indexOf(node) : -1;
+      if (i >= 0) openDialogStack.splice(i, 1);
       returnFocusRef.current?.focus?.();
       returnFocusRef.current = null;
     };

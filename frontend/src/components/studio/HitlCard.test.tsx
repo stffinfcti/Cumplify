@@ -70,7 +70,7 @@ describe('HitlCard (shared studio card)', () => {
     expect(input).toMatchObject({ hitlItemId: 'item-1', decision: 'APPROVE' });
   });
 
-  it('SoD/matrix rejection surfaces the backend message verbatim on the card', async () => {
+  it('SoD/matrix rejection surfaces the localized error on the card', async () => {
     mockMutate.mockRejectedValueOnce(
       new Error('SoD violation: the proposer cannot approve their own item'),
     );
@@ -78,11 +78,8 @@ describe('HitlCard (shared studio card)', () => {
 
     fireEvent.click(screen.getByText('hitlCard.approve'));
 
-    await waitFor(() =>
-      expect(
-        screen.getByText('SoD violation: the proposer cannot approve their own item'),
-      ).toBeInTheDocument(),
-    );
+    // Non-code messages route to the localized generic — no English internals
+    await waitFor(() => expect(screen.getByText('errors.generic')).toBeInTheDocument());
     // Card stays actionable (a second approver could still act in another session)
     expect(screen.getByTestId('hitl-actions-item-1')).toBeInTheDocument();
   });

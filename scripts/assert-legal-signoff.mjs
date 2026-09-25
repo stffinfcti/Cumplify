@@ -20,19 +20,16 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-export interface SignoffRecord {
-  approvedBy: string;
-  approvedAt: string;
-  scope: string;
-  notes?: string;
-}
+/** @typedef {{approvedBy: string, approvedAt: string, scope: string, notes?: string}} SignoffRecord */
+/*
+ */
 
-export function validate(record: unknown): string[] {
-  const errors: string[] = [];
+export function validate(record) {
+  const errors = [];
   if (typeof record !== 'object' || record === null) {
     return ['record is not a JSON object'];
   }
-  const r = record as Partial<SignoffRecord>;
+  const r = record;
   if (typeof r.approvedBy !== 'string' || r.approvedBy.trim() === '') {
     errors.push('missing or empty "approvedBy"');
   }
@@ -45,7 +42,7 @@ export function validate(record: unknown): string[] {
   return errors;
 }
 
-function main(): void {
+function main() {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const manifestPath = path.join(here, '..', 'legal-signoff', 'prod-approval.json');
 
@@ -57,13 +54,11 @@ function main(): void {
     process.exit(1);
   }
 
-  let parsed: unknown;
+  let parsed;
   try {
     parsed = JSON.parse(readFileSync(manifestPath, 'utf8'));
   } catch (e) {
-    console.error(
-      `LegalSignoffGuard: FAIL — ${manifestPath} is not valid JSON: ${(e as Error).message}`,
-    );
+    console.error(`LegalSignoffGuard: FAIL — ${manifestPath} is not valid JSON: ${e.message}`);
     process.exit(1);
   }
 
@@ -73,7 +68,7 @@ function main(): void {
     process.exit(1);
   }
 
-  const r = parsed as SignoffRecord;
+  const r = parsed;
   console.log(
     `LegalSignoffGuard: PASS — sign-off by ${r.approvedBy} on ${r.approvedAt} (scope: ${r.scope})`,
   );

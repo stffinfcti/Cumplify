@@ -1,6 +1,6 @@
 /**
  * qms — org profile schema + read/write surface. Extracted from qms.ts
- * (mechanical decomposition — no semantic changes).
+ *.
  */
 
 import { z } from 'zod';

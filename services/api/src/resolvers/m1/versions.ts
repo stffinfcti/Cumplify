@@ -1,7 +1,7 @@
 /**
  * M1 Document Studio — version lifecycle (submit/approve/publish+seal),
  * version queries/diff, and the section-edit write. Extracted from m1.ts
- * (mechanical decomposition — no semantic changes).
+ *.
  */
 
 import { CopyObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
@@ -128,32 +128,45 @@ export async function approveDocumentVersion(event: AppSyncEvent, tenantId: stri
   try {
     // BC-11 SoD: approver sub ≠ version created_by
     const versionResult = await txn.execute(
-      `SELECT created_by FROM m1.document_versions WHERE id = :versionId::uuid`,
+      `SELECT v.created_by, d.status AS doc_status
+       FROM m1.document_versions v JOIN m1.documents d ON d.id = v.document_id
+       WHERE v.id = :versionId::uuid`,
       [{ name: 'versionId', value: { stringValue: input.versionId as string } }],
     );
-    if (versionResult.records && versionResult.records.length > 0) {
-      const createdBy = (versionResult.records[0][0] as { stringValue?: string }).stringValue;
-      if (createdBy === actor) {
-        // Rollback BEFORE publishing (lesson: attempt is logged, write is not)
-        await txn.rollback();
-        await publishAuditEvent({
-          tenantId,
-          actor,
-          module: 'M1',
-          clauseRef: 'ISO 9001 7.5.2',
-          standard: 'ISO9001',
-          detailType: 'Security.SodViolationBlocked',
-          source: 'cumplify.m1.document-studio',
-          entityId: input.versionId as string, // blocked events carry the targeted row id
-          payload: { versionId: input.versionId, attemptedBy: actor, createdBy },
-        });
-        throw new Error('SOD_VIOLATION');
-      }
+    if (!versionResult.records?.length) {
+      throw new Error('VERSION_NOT_FOUND');
+    }
+    const rec = versionResult.records[0];
+    const createdBy = (rec[0] as { stringValue?: string }).stringValue;
+    const docStatus = (rec[1] as { stringValue?: string }).stringValue;
+    // Approvals only count against a doc that was actually submitted —
+    // approving a draft or an already-approved doc would satisfy the
+    // publish gate without a real review transition.
+    if (docStatus !== 'in_review') {
+      throw new Error('INVALID_STATE');
+    }
+    if (createdBy === actor) {
+      // Rollback BEFORE publishing (lesson: attempt is logged, write is not)
+      await txn.rollback();
+      await publishAuditEvent({
+        tenantId,
+        actor,
+        module: 'M1',
+        clauseRef: 'ISO 9001 7.5.2',
+        standard: 'ISO9001',
+        detailType: 'Security.SodViolationBlocked',
+        source: 'cumplify.m1.document-studio',
+        entityId: input.versionId as string, // blocked events carry the targeted row id
+        payload: { versionId: input.versionId, attemptedBy: actor, createdBy },
+      });
+      throw new Error('SOD_VIOLATION');
     }
 
     const result = await txn.execute(
       `INSERT INTO m1.document_approvals (tenant_id, document_version_id, approver_id, decision, approved_at, created_by)
-       VALUES (:tenantId, :versionId::uuid, :actor, :decision, NOW(), :actor) RETURNING *`,
+       VALUES (:tenantId, :versionId::uuid, :actor, :decision, NOW(), :actor)
+       ON CONFLICT (document_version_id, approver_id) DO NOTHING
+       RETURNING *`,
       [
         { name: 'tenantId', value: { stringValue: tenantId } },
         { name: 'versionId', value: { stringValue: input.versionId as string } },
@@ -161,8 +174,21 @@ export async function approveDocumentVersion(event: AppSyncEvent, tenantId: stri
         { name: 'decision', value: { stringValue: decision } },
       ],
     );
+    // Migration 021 unique index makes double-approve a conflict, not a
+    // duplicate — return the existing decision so a retry is idempotent.
+    let approval = marshalOne(result);
+    if (!approval) {
+      const existing = await txn.execute(
+        `SELECT * FROM m1.document_approvals
+         WHERE document_version_id = :versionId::uuid AND approver_id = :actor`,
+        [
+          { name: 'versionId', value: { stringValue: input.versionId as string } },
+          { name: 'actor', value: { stringValue: actor } },
+        ],
+      );
+      approval = marshalOne(existing);
+    }
     await txn.commit();
-    const approval = marshalOne(result);
     await publishAuditEvent({
       tenantId,
       actor,
@@ -193,9 +219,12 @@ export async function approveDocumentVersion(event: AppSyncEvent, tenantId: stri
  * with a PER-OBJECT ObjectLockRetainUntilDate derived from the tenant's
  * m4.retention_policies row (record_type='controlled_document'; default row
  * seeded if absent). The bucket default is a safety net ONLY (BC-10).
- * The m4.records pointer row (retain_until / object_lock_until /
- * s3_object_ref) commits in the SAME transaction as the status flip — a
- * failed seal rolls back the publish (no published-but-unsealed documents).
+ * The render + CopyObject run between two short transactions so the tenant
+ * txn is never held across a seconds-long Lambda invoke: a failed seal
+ * throws before the status flip (no published-but-unsealed documents); a
+ * commit failure after a successful seal leaves an identifiable dead
+ * object keyed by versionId (tenants/<t>/sealed/<versionId>.pdf) for an
+ * operator to sweep — GOVERNANCE mode lets a republish overwrite it.
  * Exception: versions with an empty content_ref (agent-writeback docs, the
  * one documented content-plane exemption) publish WITHOUT sealing — blocking
  * them would regress the pre-existing M1 publish flow; the audit payload
@@ -207,43 +236,136 @@ export async function publishControlledDocument(
   actor: string,
 ) {
   const versionId = event.arguments.versionId as string;
-  const txn = await beginTenantTransaction(tenantId);
-  try {
-    const metaRes = await txn.execute(
-      `SELECT v.content_ref, v.version_no, d.id AS document_id, d.title, d.doc_type, d.standard
-       FROM m1.document_versions v JOIN m1.documents d ON d.id = v.document_id
-       WHERE v.id = :versionId::uuid`,
-      [{ name: 'versionId', value: { stringValue: versionId } }],
-    );
-    const meta = marshalOne(metaRes) as {
-      contentRef: string | null;
-      versionNo: number;
-      documentId: string;
-      title: string;
-      docType: string;
-      standard: string;
-    } | null;
-    if (!meta) {
+
+  // Phase 1 (short txn): meta + approval + retention policy. The PDF render
+  // and S3 CopyObject run OUTSIDE the transaction — holding the tenant txn
+  // across a seconds-long Lambda invoke serializes every writer on this
+  // tenant's RDS session and amplifies the slot ceiling.
+  let years = DEFAULT_RETENTION_YEARS;
+  let wantsSeal = false;
+  const meta = await (async () => {
+    const txn = await beginTenantTransaction(tenantId);
+    try {
+      const metaRes = await txn.execute(
+        `SELECT v.content_ref, v.version_no, d.id AS document_id, d.title, d.doc_type, d.standard
+         FROM m1.document_versions v JOIN m1.documents d ON d.id = v.document_id
+         WHERE v.id = :versionId::uuid`,
+        [{ name: 'versionId', value: { stringValue: versionId } }],
+      );
+      const m = marshalOne(metaRes) as {
+        contentRef: string | null;
+        versionNo: number;
+        documentId: string;
+        title: string;
+        docType: string;
+        standard: string;
+      } | null;
+      if (!m) throw new Error('VERSION_NOT_FOUND');
+
+      // Publishing seals to the WORM vault — it must never run without an
+      // 'approved' approval row for THIS version, or an unreviewed draft
+      // could be written to the immutable evidence store directly.
+      const approvalRes = await txn.execute(
+        `SELECT 1 FROM m1.document_approvals
+         WHERE document_version_id = :versionId::uuid AND decision = 'approved' LIMIT 1`,
+        [{ name: 'versionId', value: { stringValue: versionId } }],
+      );
+      if (!approvalRes.records?.length) throw new Error('APPROVAL_REQUIRED');
+
+      // Tenant retention policy (RLS-scoped); seed the default row if absent.
+      if (m.contentRef && EVIDENCE_BUCKET && PDF_RENDER_FN) {
+        const polRes = await txn.execute(
+          `SELECT retention_years FROM m4.retention_policies
+           WHERE record_type = 'controlled_document' LIMIT 1`,
+        );
+        const pol = marshalOne(polRes) as { retentionYears: number } | null;
+        if (pol) {
+          years = pol.retentionYears;
+        } else {
+          await txn.execute(
+            `INSERT INTO m4.retention_policies (tenant_id, record_type, retention_years, disposition_rule, created_by)
+             VALUES (:tenantId, 'controlled_document', :years, 'review_before_disposal', :actor)`,
+            [
+              { name: 'tenantId', value: { stringValue: tenantId } },
+              { name: 'years', value: { longValue: DEFAULT_RETENTION_YEARS } },
+              { name: 'actor', value: { stringValue: actor } },
+            ],
+          );
+        }
+        wantsSeal = true;
+      }
+      await txn.commit();
+      return m;
+    } catch (err) {
       try {
         await txn.rollback();
       } catch {
         /* never mask */
       }
-      throw new Error('VERSION_NOT_FOUND');
+      throw err;
     }
+  })();
 
-    // Publishing seals to the WORM vault — it must never run without an
-    // 'approved' approval row for THIS version, or an unreviewed draft could
-    // be written to the immutable evidence store directly.
-    const approvalRes = await txn.execute(
-      `SELECT 1 FROM m1.document_approvals
-       WHERE document_version_id = :versionId::uuid AND decision = 'approved' LIMIT 1`,
-      [{ name: 'versionId', value: { stringValue: versionId } }],
+  // Phase 2: render + seal outside any transaction. Failure here throws
+  // BEFORE the status flip, so the document simply stays unpublished.
+  let sealed: Record<string, unknown> = { sealed: false, reason: 'CONTENT_UNAVAILABLE' };
+  if (wantsSeal && meta.contentRef) {
+    const invoke = await lambdaClient.send(
+      new InvokeCommand({
+        FunctionName: PDF_RENDER_FN,
+        Payload: JSON.stringify({
+          tenantId,
+          documents: [
+            {
+              documentId: meta.documentId,
+              versionId,
+              contentKey: meta.contentRef,
+              title: meta.title,
+              docType: meta.docType,
+              standard: meta.standard,
+              versionNo: meta.versionNo,
+            },
+          ],
+        }),
+      }),
     );
-    if (!approvalRes.records?.length) {
-      throw new Error('APPROVAL_REQUIRED');
+    if (invoke.FunctionError) {
+      logger.error('seal render failed', { raw: new TextDecoder().decode(invoke.Payload) });
+      throw new Error('SEAL_FAILED');
     }
+    const { results } = JSON.parse(new TextDecoder().decode(invoke.Payload)) as {
+      results: Array<{ pdfKey: string; sha256: string }>;
+    };
+    const pdfKey = results[0]?.pdfKey;
+    if (!pdfKey) throw new Error('SEAL_FAILED');
 
+    const retainUntil = new Date(Date.now() + years * 365.25 * 24 * 3600 * 1000);
+    const sealedKey = `tenants/${tenantId}/sealed/${versionId}.pdf`;
+    await s3.send(
+      new CopyObjectCommand({
+        Bucket: EVIDENCE_BUCKET,
+        Key: sealedKey,
+        CopySource: encodeURIComponent(`${CONTENT_BUCKET}/${pdfKey}`),
+        ObjectLockMode: EVIDENCE_LOCK_MODE as 'GOVERNANCE' | 'COMPLIANCE',
+        ObjectLockRetainUntilDate: retainUntil,
+      }),
+    );
+    sealed = {
+      sealed: true,
+      sealedKey,
+      retentionYears: years,
+      lockMode: EVIDENCE_LOCK_MODE,
+      retainUntil: retainUntil.toISOString(),
+    };
+  }
+
+  // Phase 3 (short txn): status flip + retention pointer row. If this rolls
+  // back after a successful seal, the sealed object is an identifiable dead
+  // artifact keyed by versionId (tenants/<t>/sealed/<versionId>.pdf) — the
+  // WORM lock prevents cleanup by design; the publish retry path is to fix
+  // the failure and re-publish.
+  const txn = await beginTenantTransaction(tenantId);
+  try {
     const result = await txn.execute(
       `UPDATE m1.documents d SET status = 'approved', updated_at = NOW()
        FROM m1.document_versions v WHERE v.id = :versionId::uuid AND v.document_id = d.id
@@ -251,71 +373,9 @@ export async function publishControlledDocument(
        RETURNING d.*`,
       [{ name: 'versionId', value: { stringValue: versionId } }],
     );
+    if (!result.records?.length) throw new Error('INVALID_STATE');
 
-    let sealed: Record<string, unknown> = { sealed: false, reason: 'CONTENT_UNAVAILABLE' };
-    if (meta.contentRef && EVIDENCE_BUCKET && PDF_RENDER_FN) {
-      // Tenant retention policy (RLS-scoped); seed the default row if absent.
-      const polRes = await txn.execute(
-        `SELECT retention_years FROM m4.retention_policies
-         WHERE record_type = 'controlled_document' LIMIT 1`,
-      );
-      const pol = marshalOne(polRes) as { retentionYears: number } | null;
-      let years = pol?.retentionYears ?? DEFAULT_RETENTION_YEARS;
-      if (!pol) {
-        await txn.execute(
-          `INSERT INTO m4.retention_policies (tenant_id, record_type, retention_years, disposition_rule, created_by)
-           VALUES (:tenantId, 'controlled_document', :years, 'review_before_disposal', :actor)`,
-          [
-            { name: 'tenantId', value: { stringValue: tenantId } },
-            { name: 'years', value: { longValue: DEFAULT_RETENTION_YEARS } },
-            { name: 'actor', value: { stringValue: actor } },
-          ],
-        );
-        years = DEFAULT_RETENTION_YEARS;
-      }
-
-      // Render the final PDF (sha-cached inside PdfRenderFn).
-      const invoke = await lambdaClient.send(
-        new InvokeCommand({
-          FunctionName: PDF_RENDER_FN,
-          Payload: JSON.stringify({
-            tenantId,
-            documents: [
-              {
-                documentId: meta.documentId,
-                versionId,
-                contentKey: meta.contentRef,
-                title: meta.title,
-                docType: meta.docType,
-                standard: meta.standard,
-                versionNo: meta.versionNo,
-              },
-            ],
-          }),
-        }),
-      );
-      if (invoke.FunctionError) {
-        logger.error('seal render failed', { raw: new TextDecoder().decode(invoke.Payload) });
-        throw new Error('SEAL_FAILED');
-      }
-      const { results } = JSON.parse(new TextDecoder().decode(invoke.Payload)) as {
-        results: Array<{ pdfKey: string; sha256: string }>;
-      };
-      const pdfKey = results[0]?.pdfKey;
-      if (!pdfKey) throw new Error('SEAL_FAILED');
-
-      const retainUntil = new Date(Date.now() + years * 365.25 * 24 * 3600 * 1000);
-      const sealedKey = `tenants/${tenantId}/sealed/${versionId}.pdf`;
-      await s3.send(
-        new CopyObjectCommand({
-          Bucket: EVIDENCE_BUCKET,
-          Key: sealedKey,
-          CopySource: encodeURIComponent(`${CONTENT_BUCKET}/${pdfKey}`),
-          ObjectLockMode: EVIDENCE_LOCK_MODE as 'GOVERNANCE' | 'COMPLIANCE',
-          ObjectLockRetainUntilDate: retainUntil,
-        }),
-      );
-
+    if (sealed.sealed) {
       await txn.execute(
         `INSERT INTO m4.records
            (tenant_id, standard, record_type, source_module, retention_class,
@@ -326,18 +386,14 @@ export async function publishControlledDocument(
           { name: 'tenantId', value: { stringValue: tenantId } },
           { name: 'standard', value: { stringValue: meta.standard } },
           { name: 'retClass', value: { stringValue: `${years}y` } },
-          { name: 'retainUntil', value: { stringValue: retainUntil.toISOString() } },
-          { name: 'objectRef', value: { stringValue: `s3://${EVIDENCE_BUCKET}/${sealedKey}` } },
+          { name: 'retainUntil', value: { stringValue: sealed.retainUntil as string } },
+          {
+            name: 'objectRef',
+            value: { stringValue: `s3://${EVIDENCE_BUCKET}/${sealed.sealedKey as string}` },
+          },
           { name: 'actor', value: { stringValue: actor } },
         ],
       );
-      sealed = {
-        sealed: true,
-        sealedKey,
-        retentionYears: years,
-        lockMode: EVIDENCE_LOCK_MODE,
-        retainUntil: retainUntil.toISOString(),
-      };
     }
 
     await txn.commit();
@@ -685,39 +741,58 @@ function extractSentenceTexts(section: ContentSection): string[] {
 
 /**
  * Sentence-level diff using LCS (Longest Common Subsequence).
- * Compares on text content (not object reference).
+ * Compares on text content (not object reference). Hirschberg's algorithm —
+ * the full m×n DP matrix (O(n²) memory on large documents) is replaced by
+ * rolling rows + divide & conquer: same O(m·n) time, O(n) working space.
  */
-function sentenceLcsDiff(v1: string[], v2: string[]): { added: string[]; removed: string[] } {
-  const m = v1.length;
-  const n = v2.length;
 
-  // Build LCS table
-  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      dp[i][j] =
-        v1[i - 1] === v2[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+/** Forward LCS-length row: lcsLen(a, b[0..j]) for every j, in two rolling rows. */
+function lcsLenFwd(a: string[], b: string[]): number[] {
+  let prev = new Array<number>(b.length + 1).fill(0);
+  let cur = new Array<number>(b.length + 1).fill(0);
+  for (const x of a) {
+    cur[0] = 0;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = x === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+    }
+    [prev, cur] = [cur, prev];
+  }
+  return prev;
+}
+
+/** Aligned index pairs (i in a, j in b) forming an LCS. */
+function hirschberg(a: string[], b: string[]): Array<[number, number]> {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0 || n === 0) return [];
+  if (m === 1) {
+    const j = b.indexOf(a[0]);
+    return j >= 0 ? [[0, j]] : [];
+  }
+  const i2 = m >> 1;
+  const fwd = lcsLenFwd(a.slice(0, i2), b);
+  const bwd = lcsLenFwd(a.slice(i2).reverse(), b.slice().reverse());
+  let bestJ = 0;
+  let best = -1;
+  for (let j = 0; j <= n; j++) {
+    const v = fwd[j] + bwd[n - j];
+    if (v > best) {
+      best = v;
+      bestJ = j;
     }
   }
+  const left = hirschberg(a.slice(0, i2), b.slice(0, bestJ));
+  const right = hirschberg(a.slice(i2), b.slice(bestJ));
+  return [...left, ...right.map(([i, j]) => [i + i2, j + bestJ] as [number, number])];
+}
 
-  // Backtrack to find which sentences are NOT in the LCS
+function sentenceLcsDiff(v1: string[], v2: string[]): { added: string[]; removed: string[] } {
   const inLcs1 = new Set<number>();
   const inLcs2 = new Set<number>();
-  let i = m,
-    j = n;
-  while (i > 0 && j > 0) {
-    if (v1[i - 1] === v2[j - 1]) {
-      inLcs1.add(i - 1);
-      inLcs2.add(j - 1);
-      i--;
-      j--;
-    } else if (dp[i - 1][j] > dp[i][j - 1]) {
-      i--;
-    } else {
-      j--;
-    }
+  for (const [i, j] of hirschberg(v1, v2)) {
+    inLcs1.add(i);
+    inLcs2.add(j);
   }
-
   const removed = v1.filter((_, idx) => !inLcs1.has(idx));
   const added = v2.filter((_, idx) => !inLcs2.has(idx));
   return { added, removed };

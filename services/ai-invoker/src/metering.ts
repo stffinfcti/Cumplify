@@ -98,8 +98,8 @@ export async function loadWeights(modelId: string): Promise<ModelWeight> {
  * and this ADD used to race — two concurrent invokes could both pass the
  * pre-check and both ADD past the grant. When the caller passes the cap the
  * pre-check resolved, the SAME invariant rides the write as a
- * ConditionExpression ('used < cap before this ADD'), so a racing write is
- * rejected by DynamoDB instead of silently over-crediting.
+ * ConditionExpression ('used + credits <= cap before this ADD'), so a
+ * racing write is rejected by DynamoDB instead of silently over-crediting.
  */
 export async function incrementMeter(
   tenantId: string,
@@ -122,18 +122,27 @@ export async function incrementMeter(
           PK: { S: pk },
           SK: { S: sk },
         },
-        // attribute_not_exists covers a never-metered tenant (fresh month row);
-        // the equality edge is rejected exactly as the pre-check's >= gate was.
+        // :capMinusCredits is computed client-side — used <= cap - credits is
+        // equivalent to used + credits <= cap, so this write can never push
+        // the meter past the grant. attribute_not_exists covers a
+        // never-metered tenant (fresh month row) provided this ADD itself
+        // fits under the cap.
         ...(capped
           ? {
-              ConditionExpression: 'attribute_not_exists(creditsUsed) OR creditsUsed < :cap',
+              ConditionExpression:
+                '(attribute_not_exists(creditsUsed) AND :credits <= :cap) OR creditsUsed <= :capMinusCredits',
             }
           : {}),
         UpdateExpression: 'ADD creditsUsed :credits SET lastUpdated = :ts',
         ExpressionAttributeValues: {
           ':credits': { N: credits.toFixed(6) },
           ':ts': { S: new Date().toISOString() },
-          ...(capped ? { ':cap': { N: String(cap!.hardCap) } } : {}),
+          ...(capped
+            ? {
+                ':cap': { N: String(cap!.hardCap) },
+                ':capMinusCredits': { N: String(cap!.hardCap! - credits) },
+              }
+            : {}),
         },
       }),
     );

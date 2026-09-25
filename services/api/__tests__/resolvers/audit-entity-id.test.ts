@@ -109,7 +109,11 @@ describe('entityId = returned-row id (marshal-first sites)', () => {
 
   it('approveDocumentVersion publishes entityId = the DocumentApproval row id, not versionId', async () => {
     mockExecute
-      .mockResolvedValueOnce(rowWithId('creator-sub')) // SoD SELECT created_by (≠ actor → passes)
+      // SoD SELECT created_by + doc status (≠ actor → passes; doc in_review)
+      .mockResolvedValueOnce({
+        columnMetadata: [{ name: 'created_by' }, { name: 'doc_status' }],
+        records: [[{ stringValue: 'creator-sub' }, { stringValue: 'in_review' }]],
+      })
       .mockResolvedValueOnce(rowWithId('approval-uuid-1'));
 
     await m1Handler(

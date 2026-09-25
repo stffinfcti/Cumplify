@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { useTranslations } from 'next-intl';
 import { PrimaryButton, SecondaryButton, StatusBadge, ErrorState } from '@/components/shared';
 import { useGraphQL } from '@/lib/api';
+import { errorText } from '@/lib/error-text';
 import { useAuth } from '@/lib/auth-context';
 import { canApprove } from '@/lib/role-matrix';
 import styles from './page.module.css';
@@ -117,6 +118,7 @@ interface DocumentViewerProps {
 
 export function DocumentViewer({ documentId, onBack, onDiff }: DocumentViewerProps) {
   const t = useTranslations('qms.docViewer');
+  const tErr = useTranslations('errors');
   const tGen = useTranslations('qms.generation');
   const { query, mutate } = useGraphQL();
   const { user } = useAuth();
@@ -236,7 +238,7 @@ export function DocumentViewer({ documentId, onBack, onDiff }: DocumentViewerPro
       if (msg.includes('UNREVIEWED_SECTIONS')) setSubmitError('UNREVIEWED_SECTIONS');
       else if (msg.includes('UNRESOLVED_GAPS')) setSubmitError('UNRESOLVED_GAPS');
       else if (msg.includes('SoD') || msg.includes('SOD')) setSubmitError('SOD_VIOLATION');
-      else setSubmitError(msg || 'UNKNOWN');
+      else setSubmitError(errorText(e, tErr, 'generic'));
     }
   }
 
@@ -269,7 +271,7 @@ export function DocumentViewer({ documentId, onBack, onDiff }: DocumentViewerPro
       if (msg.includes('Unknown field') || msg.includes('EXPORT_NOT_AVAILABLE')) {
         setExportError('BLOCKED');
       } else {
-        setExportError(msg || 'UNKNOWN');
+        setExportError(errorText(e, tErr, 'generic'));
       }
     } finally {
       setExporting(false);

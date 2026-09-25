@@ -47,22 +47,20 @@ export const logger = new Logger({ serviceName: 'resolver-forms' });
 export const s3 = new S3Client({});
 export const lambdaClient = new LambdaClient({});
 
-// Task 8 (REC-7): record PDF export + approved-record sealing. Env mirrors
-// the m1 sealing block (spec-40 Task 9) — GOVERNANCE dev / COMPLIANCE prod.
-export const CONTENT_BUCKET = process.env.CONTENT_BUCKET ?? '';
-export const EVIDENCE_BUCKET = process.env.EVIDENCE_BUCKET ?? '';
-export const EVIDENCE_LOCK_MODE = process.env.EVIDENCE_LOCK_MODE ?? 'GOVERNANCE';
-export const PDF_RENDER_FN = process.env.PDF_RENDER_FN ?? '';
-export const DEFAULT_RETENTION_YEARS = 7;
 export const EXPORT_URL_TTL_SECONDS = 15 * 60;
 
 export const MESSAGES: Record<string, unknown> = { en: enMessages, es: esMessages, pt: ptMessages };
 
-export interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
-}
+// Rendering/sealing env + the canonical event type live in shared.ts —
+// re-export so existing `from './common.js'` import sites keep working.
+export {
+  CONTENT_BUCKET,
+  EVIDENCE_BUCKET,
+  EVIDENCE_LOCK_MODE,
+  PDF_RENDER_FN,
+  DEFAULT_RETENTION_YEARS,
+  type AppSyncEvent,
+} from '../shared.js';
 
 // ─── Field type → value column dispatch map ──────────────────────────────────
 export const FIELD_TYPE_COLUMN: Record<string, string> = {
@@ -233,11 +231,21 @@ export function completionFrom(
   };
 }
 
-/** Get a record by ID (after mutation, for return value). */
-export async function getFormRecordById(recordId: string, tenantId: string): Promise<unknown> {
-  const txn = await beginTenantTransaction(tenantId);
+/**
+ * Get a record by ID (after mutation, for return value).
+ * Pass the caller's open `txn` so the re-read observes the in-flight write
+ * in one transaction — a fresh read after commit can interleave with a
+ * concurrent writer and return a state that was never committed.
+ */
+export async function getFormRecordById(
+  recordId: string,
+  tenantId: string,
+  txn?: TenantTransaction,
+): Promise<unknown> {
+  const ownsTxn = !txn;
+  const t = txn ?? (await beginTenantTransaction(tenantId));
   try {
-    const result = await txn.execute(
+    const result = await t.execute(
       `
       SELECT r.id, r.template_id, r.status, r.opened_by, r.completed_by,
              r.m2_nc_id, r.created_at, r.updated_at
@@ -249,7 +257,7 @@ export async function getFormRecordById(recordId: string, tenantId: string): Pro
     if (rows.length === 0) throw new Error('RECORD_NOT_FOUND');
     const rec = rows[0];
 
-    const valResult = await txn.execute(
+    const valResult = await t.execute(
       `
       SELECT f.field_key, rv.value_text, rv.value_number, rv.value_date,
              rv.value_bool, rv.value_uuid, rv.value_json
@@ -261,16 +269,18 @@ export async function getFormRecordById(recordId: string, tenantId: string): Pro
     );
     const values = marshalValues(valResult);
     rec.values = values; // object — AWSJSON slot serializes once
-    const fieldsMeta = await fetchTemplateFieldMeta(txn, rec.templateId as string);
+    const fieldsMeta = await fetchTemplateFieldMeta(t, rec.templateId as string);
     rec.completion = completionFrom(fieldsMeta, new Set(Object.keys(values)));
 
-    await txn.commit();
+    if (ownsTxn) await t.commit();
     return rec;
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask the original error */
+    if (ownsTxn) {
+      try {
+        await t.rollback();
+      } catch {
+        /* never mask the original error */
+      }
     }
     throw err;
   }

@@ -1,6 +1,5 @@
 /**
- * qms — shared wiring extracted from qms.ts (mechanical decomposition —
- * no semantic changes).
+ * qms — shared wiring extracted from qms.ts.
  */
 
 import { Logger } from '@aws-lambda-powertools/logger';

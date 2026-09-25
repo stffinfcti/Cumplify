@@ -12,6 +12,7 @@ import {
 } from '@/components/shared';
 import { FormDrawer, type FieldDef } from '@/components/shared';
 import { useGraphQL } from '@/lib/api';
+import { errorText } from '@/lib/error-text';
 import { useAuth } from '@/lib/auth-context';
 import { canApprove } from '@/lib/role-matrix';
 import styles from './FormRecordDetail.module.css';
@@ -113,6 +114,7 @@ export function FormRecordDetail({
 }) {
   const t = useTranslations('forms');
   const tForm = useTranslations('forms.form');
+  const tErr = useTranslations('errors');
   const { query, mutate } = useGraphQL();
   const { user } = useAuth();
   const role = user?.role ?? 'employee';
@@ -176,9 +178,12 @@ export function FormRecordDetail({
     });
     setSubmitError(null);
 
-    // Queue for autosave — send null for cleared fields (DELETE path)
+    // Queue for autosave — send null for cleared fields (DELETE path).
+    // A fresh edit resets the retry counter: the counter only bounds retries
+    // of THIS autosave burst, not the lifetime of the page.
     const saveValue = value === '' || value === undefined ? null : value;
     pendingRef.current[fieldKey] = saveValue;
+    autosaveRetriesRef.current = 0;
 
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => flushSave(), DEBOUNCE_MS);
@@ -266,7 +271,7 @@ export function FormRecordDetail({
       } else if (msg === 'RECORD_IMMUTABLE') {
         setSubmitError(tForm('recordImmutable'));
       } else {
-        setSubmitError(msg);
+        setSubmitError(errorText(err, tErr, 'generic'));
       }
     } finally {
       setActionLoading(false);
@@ -284,7 +289,7 @@ export function FormRecordDetail({
       });
       setRecord(result.approveFormRecord);
     } catch (err) {
-      setSubmitError((err as Error).message);
+      setSubmitError(errorText(err, tErr, 'generic'));
     } finally {
       setActionLoading(false);
     }
