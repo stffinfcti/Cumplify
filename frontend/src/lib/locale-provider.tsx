@@ -1,6 +1,6 @@
 'use client';
 
-import { type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { NextIntlClientProvider } from 'next-intl';
 import { useAuth } from './auth-context';
 
@@ -26,10 +26,11 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   const locale = (user?.locale as SupportedLocale) || 'en';
   const messages = CATALOGS[locale] ?? CATALOGS.en;
 
-  // Sync the document lang attribute with the active locale
-  if (typeof document !== 'undefined') {
+  // Sync the document lang attribute with the active locale — an effect, not
+  // a render side-effect (double-render safe).
+  useEffect(() => {
     document.documentElement.lang = locale;
-  }
+  }, [locale]);
 
   return (
     <NextIntlClientProvider key={locale} locale={locale} messages={messages}>

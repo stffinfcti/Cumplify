@@ -97,7 +97,7 @@ export default function GuidePage() {
     }
     // Only keep entries with >1 standard mapping
     const harmonized = new Map<string, string[]>();
-    for (const [clauseNo, entries] of byClauseNo) {
+    for (const entries of byClauseNo.values()) {
       if (entries.length > 1) {
         for (const entry of entries) {
           const others = entries.filter((e) => e.id !== entry.id).map((e) => `${e.standard} ${e.clauseNo}`);

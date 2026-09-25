@@ -22,6 +22,7 @@ const STATUS_VARIANT: Record<string, StatusVariant> = {
   APPROVED: 'success',
   CLOSED: 'success',
   VERIFIED: 'success',
+  COMPLETED: 'success',
   OBSOLETE: 'success',
   REJECTED: 'danger',
   CRITICAL: 'danger',

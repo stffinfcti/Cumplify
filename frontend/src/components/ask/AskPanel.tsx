@@ -46,9 +46,11 @@ function queryForStandard(standard: Standard): string {
   return map[standard];
 }
 
-/** Extract clauseRef citations from answer text (pattern: X.Y.Z or X.Y) */
+/** Extract clauseRef citations from answer text — ISO clause numbers are
+ * always 4.x–10.x; requiring the leading segment to be 4–10 keeps version
+ * numbers and decimals out of the citation row. */
 function extractCitations(text: string): string[] {
-  const matches = text.match(/\b\d{1,2}\.\d{1,2}(?:\.\d{1,2})?\b/g);
+  const matches = text.match(/\b(?:[4-9]|10)(?:\.\d{1,2}){1,3}\b/g);
   return matches ? [...new Set(matches)] : [];
 }
 
@@ -81,15 +83,13 @@ export function AskPanel() {
     setStandard(s);
   }, []);
 
-  async function handleSend() {
-    const text = input.trim();
-    if (!text || loading) return;
+  // Last question sent — lets the error retry re-run the actual request
+  // instead of the old dead "clear the error" retry.
+  const lastQuestionRef = useRef<string | null>(null);
 
-    setInput('');
+  async function sendQuestion(text: string) {
     setError('');
-    addUserMessage(text, standard);
     setLoading(true);
-
     try {
       // ASK-2: question text ONLY, never queryVector (ASK-7)
       const queryName = queryForStandard(standard);
@@ -105,6 +105,20 @@ export function AskPanel() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleSend() {
+    const text = input.trim();
+    if (!text || loading) return;
+
+    setInput('');
+    lastQuestionRef.current = text;
+    addUserMessage(text, standard);
+    await sendQuestion(text);
+  }
+
+  function handleRetry() {
+    if (lastQuestionRef.current) void sendQuestion(lastQuestionRef.current);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -157,7 +171,7 @@ export function AskPanel() {
           ),
         )}
         {loading && <div className={styles.shimmer} aria-label={t('loading')} />}
-        {error && <ErrorState onRetry={() => setError('')} />}
+        {error && <ErrorState onRetry={handleRetry} />}
         <div ref={messagesEndRef} />
       </div>
 

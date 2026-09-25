@@ -130,7 +130,10 @@ interface RcaRecord {
 }
 
 function RcaFindings({ findings }: { findings: unknown }) {
-  let parsed: { whys?: Array<{ question: string; answer: string }>; categories?: Array<{ category: string; causes: string[] }> };
+  let parsed: {
+    whys?: Array<{ question: string; answer: string }>;
+    categories?: Array<{ category: string; causes: string[] }>;
+  };
   try {
     parsed = parseAwsJson(typeof findings === 'string' ? findings : JSON.stringify(findings));
   } catch {
@@ -281,74 +284,60 @@ export function NCDetail({ id, onBack }: { id: string; onBack: () => void }) {
 
   async function handleRootCause(values: Record<string, string | boolean>) {
     if (!nc) return;
-    try {
-      await mutate(RECORD_ROOT_CAUSE, {
-        input: {
-          ncId: nc.id,
-          method: values.method,
-          findings: values.findings,
-          rootCauseSummary: values.rootCauseSummary,
-        },
-      });
-      setActiveDrawer(null);
-      await fetchNC();
-      await fetchCAs();
-    } catch {
-      setError(true);
-    }
+    // Mutation errors propagate to FormDrawer's submit handler — a page-fatal
+    // error state would nuke the whole detail view for one failed mutation.
+    await mutate(RECORD_ROOT_CAUSE, {
+      input: {
+        ncId: nc.id,
+        method: values.method,
+        findings: values.findings,
+        rootCauseSummary: values.rootCauseSummary,
+      },
+    });
+    setActiveDrawer(null);
+    await fetchNC();
+    await fetchCAs();
   }
 
   async function handleCreateCA(values: Record<string, string | boolean>) {
     if (!nc) return;
-    try {
-      await mutate(CREATE_CA, {
-        input: {
-          ncId: nc.id,
-          actionDesc: values.actionDesc,
-          ownerId: values.ownerId,
-          dueDate: values.dueDate,
-          containmentFlag: values.containmentFlag === true,
-        },
-      });
-      setActiveDrawer(null);
-      await fetchCAs();
-    } catch {
-      setError(true);
-    }
+    await mutate(CREATE_CA, {
+      input: {
+        ncId: nc.id,
+        actionDesc: values.actionDesc,
+        ownerId: values.ownerId,
+        dueDate: values.dueDate,
+        containmentFlag: values.containmentFlag === true,
+      },
+    });
+    setActiveDrawer(null);
+    await fetchCAs();
   }
 
   async function handleVerifyEffectiveness(values: Record<string, string | boolean>) {
     if (!verifyCAId) return;
-    try {
-      // G2: uses the CA's id from the CA row, NEVER nc.id
-      await mutate(VERIFY_EFF, {
-        input: {
-          correctiveActionId: verifyCAId,
-          verificationMethod: values.verificationMethod,
-          effective: values.effective === 'true',
-        },
-      });
-      setVerifyCAId(null);
-      await fetchNC();
-      await fetchCAs();
-    } catch {
-      setError(true);
-    }
+    // G2: uses the CA's id from the CA row, NEVER nc.id
+    await mutate(VERIFY_EFF, {
+      input: {
+        correctiveActionId: verifyCAId,
+        verificationMethod: values.verificationMethod,
+        effective: values.effective === 'true',
+      },
+    });
+    setVerifyCAId(null);
+    await fetchNC();
+    await fetchCAs();
   }
 
   async function handleCloseCapa(values: Record<string, string | boolean>) {
     if (!closeCAId) return;
-    try {
-      // G2: closeCapa takes the CA's id
-      await mutate(CLOSE_CAPA, {
-        input: { id: closeCAId, closureNotes: (values.closureNotes as string) || undefined },
-      });
-      setCloseCAId(null);
-      await fetchNC();
-      await fetchCAs();
-    } catch {
-      setError(true);
-    }
+    // G2: closeCapa takes the CA's id
+    await mutate(CLOSE_CAPA, {
+      input: { id: closeCAId, closureNotes: (values.closureNotes as string) || undefined },
+    });
+    setCloseCAId(null);
+    await fetchNC();
+    await fetchCAs();
   }
 
   if (loading) return <p className={styles.stageDate}>{t('loading')}</p>;

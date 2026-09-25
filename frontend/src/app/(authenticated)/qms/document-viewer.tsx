@@ -146,9 +146,11 @@ export function DocumentViewer({ documentId, onBack, onDiff }: DocumentViewerPro
           listGenerationRuns: Array<{ manualDocumentId: string | null; sections: RunSection[] }>;
         }>(LIST_GENERATION_RUNS, { limit: 10 }),
       ]);
-      setVersions(verData.listDocumentVersions);
-      if (verData.listDocumentVersions.length > 0) {
-        setSelectedVersion(verData.listDocumentVersions[0]);
+      // Latest first — never assume the API returns sorted rows
+      const sorted = [...verData.listDocumentVersions].sort((a, b) => b.versionNo - a.versionNo);
+      setVersions(sorted);
+      if (sorted.length > 0) {
+        setSelectedVersion(sorted[0]);
       }
       // Join: find the run whose manualDocumentId === this documentId
       const matchingRun = runData.listGenerationRuns.find((r) => r.manualDocumentId === documentId);
@@ -239,14 +241,29 @@ export function DocumentViewer({ documentId, onBack, onDiff }: DocumentViewerPro
   }
 
   // ─── Export ────────────────────────────────────────────────────────────────
+  const [exporting, setExporting] = useState(false);
+
   async function handleExport() {
+    if (exporting) return;
+    setExporting(true);
     setExportError(null);
     try {
       const data = await mutate<{ requestImsExport: { url: string; expiresAt: string } }>(
         REQUEST_IMS_EXPORT,
         { documentId },
       );
-      window.open(data.requestImsExport.url, '_blank');
+      // Only ever open an https URL — a non-http(s) scheme in a server
+      // response must not become a navigation target.
+      const url = data.requestImsExport.url;
+      if (!/^https:\/\//.test(url)) {
+        setExportError('UNKNOWN');
+        return;
+      }
+      const opened = window.open(url, '_blank', 'noopener');
+      if (!opened) {
+        // Popup blocked — fall back to same-tab navigation
+        window.location.assign(url);
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : '';
       if (msg.includes('Unknown field') || msg.includes('EXPORT_NOT_AVAILABLE')) {
@@ -254,6 +271,8 @@ export function DocumentViewer({ documentId, onBack, onDiff }: DocumentViewerPro
       } else {
         setExportError(msg || 'UNKNOWN');
       }
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -283,7 +302,7 @@ export function DocumentViewer({ documentId, onBack, onDiff }: DocumentViewerPro
               {t('submitForApproval')}
             </PrimaryButton>
           )}
-          <SecondaryButton onClick={handleExport} data-testid="export-btn">
+          <SecondaryButton onClick={handleExport} disabled={exporting} data-testid="export-btn">
             {t('export')}
           </SecondaryButton>
         </div>
@@ -371,15 +390,16 @@ export function DocumentViewer({ documentId, onBack, onDiff }: DocumentViewerPro
               {/* BC-1 disclaimer block — ALWAYS visible (frontMatter.purpose) */}
               <div className={styles.disclaimer} data-testid="bc1-disclaimer">
                 <p>{content.frontMatter.purpose}</p>
-                {content.frontMatter.normativeRefs.length > 0 && (
-                  <a
-                    href={content.frontMatter.normativeRefs[0].source}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {content.frontMatter.normativeRefs[0].source}
-                  </a>
-                )}
+                {content.frontMatter.normativeRefs.length > 0 &&
+                  /^https:\/\//.test(content.frontMatter.normativeRefs[0].source) && (
+                    <a
+                      href={content.frontMatter.normativeRefs[0].source}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {content.frontMatter.normativeRefs[0].source}
+                    </a>
+                  )}
               </div>
 
               {/* Sections in order */}

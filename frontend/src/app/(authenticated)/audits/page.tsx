@@ -237,7 +237,7 @@ export default function AuditStudioPage() {
                   >
                     <span className={styles.scope}>{a.scope}</span>
                     <ClauseChip standard={a.standard} clauseRef={null} />
-                    <StatusBadge status={a.status.toUpperCase()} />
+                    <StatusBadge status={a.status} />
                     <span className={styles.date}>
                       {new Date(a.plannedDate).toLocaleDateString()}
                     </span>
@@ -317,9 +317,7 @@ export default function AuditStudioPage() {
                             {loadingReadiness ? t('loadingReadiness') : t('viewReadiness')}
                           </SecondaryButton>
                         </div>
-                        {readinessError && (
-                          <p className={styles.errorMsg}>{readinessError}</p>
-                        )}
+                        {readinessError && <p className={styles.errorMsg}>{readinessError}</p>}
                         {!readinessError && readinessFetched && readinessScores.length === 0 && (
                           <p className={styles.emptyHint}>{t('readinessEmpty')}</p>
                         )}
@@ -329,7 +327,13 @@ export default function AuditStudioPage() {
                               <div key={rs.id} className={styles.readinessItem}>
                                 <span className={styles.clauseTag}>{rs.clauseRef}</span>
                                 <StatusBadge
-                                  status={rs.score >= 100 ? 'APPROVED' : rs.score > 0 ? 'PENDING' : 'DRAFT'}
+                                  status={
+                                    rs.score >= 100
+                                      ? 'APPROVED'
+                                      : rs.score > 0
+                                        ? 'PENDING'
+                                        : 'DRAFT'
+                                  }
                                 />
                               </div>
                             ))}
@@ -349,9 +353,7 @@ export default function AuditStudioPage() {
                               {completing ? t('completing') : t('completeAudit')}
                             </SecondaryButton>
                           </div>
-                          {completeError && (
-                            <p className={styles.errorMsg}>{completeError}</p>
-                          )}
+                          {completeError && <p className={styles.errorMsg}>{completeError}</p>}
                         </div>
                       )}
                     </div>

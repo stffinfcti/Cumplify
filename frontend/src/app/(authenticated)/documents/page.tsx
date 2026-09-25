@@ -149,13 +149,15 @@ export default function DocumentsPage() {
     if (chipDraft) setDrawerOpen(true);
   }, [chipDraft]);
 
-  // URL-sync for detail
+  // URL-sync for detail: a shared ?doc=<id> link restores the detail view
+  // once the document list has loaded (the param must map to a real row).
+  const docParam = searchParams.get('doc');
   useEffect(() => {
-    const docParam = searchParams.get('doc');
-    if (docParam && !selectedDoc) {
-      // We'll load the detail when user clicks — just track the param
+    if (docParam && !selectedDoc && docs.length > 0) {
+      const match = docs.find((d) => d.id === docParam);
+      if (match) void openDetail(match);
     }
-  }, [searchParams, selectedDoc]);
+  }, [docParam, docs, selectedDoc]);
 
   const effectiveStandard = isIMS ? localFilterStandard : globalStandard;
 
@@ -231,7 +233,8 @@ export default function DocumentsPage() {
       setVersions(vData.listDocumentVersions);
 
       if (vData.listDocumentVersions.length > 0) {
-        const latest = vData.listDocumentVersions[0];
+        // "latest" = max(versionNo) — never assume the API returns sorted rows
+        const latest = [...vData.listDocumentVersions].sort((a, b) => b.versionNo - a.versionNo)[0];
         try {
           const cData = await query<{ getDocumentContent: string }>(GET_CONTENT, {
             versionId: latest.id,
@@ -440,6 +443,8 @@ export default function DocumentsPage() {
               <ControlledDocViewer
                 contentRaw={documentContent}
                 documentId={selectedDoc.id}
+                versionNo={latestVersion?.versionNo}
+                generatedAt={latestVersion?.createdAt}
               />
             )}
             {!detailLoading && !documentContent && (

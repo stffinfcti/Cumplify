@@ -165,7 +165,9 @@
     "HIGH": "Alto",
     "IN_PROGRESS": "Em progresso",
     "MEDIUM": "Médio",
-    "LOW": "Baixo"
+    "LOW": "Baixo",
+    "COMPLETED": "Concluído",
+    "PLANNED": "Planejado"
   },
   "common": {
     "loading": "Carregando...",
@@ -173,7 +175,8 @@
     "retry": "Tentar novamente",
     "submit": "Enviar",
     "cancel": "Cancelar",
-    "close": "Fechar"
+    "close": "Fechar",
+    "notAuthorized": "Você não tem acesso a esta seção"
   },
   "m1": {
     "title": "Estúdio de Documentos",
@@ -291,7 +294,8 @@
     "findingMajorNc": "NC maior",
     "findingMinorNc": "NC menor",
     "findingObservation": "Observação",
-    "findingOfi": "OFI"
+    "findingOfi": "OFI",
+    "yearInvalid": "O ano do programa deve ser um ano válido"
   },
   "m4": {
     "title": "Gestão de Registros",
@@ -323,7 +327,8 @@
     "fieldStandardUsed": "Norma utilizada",
     "fieldTraceabilityRef": "Referência de rastreabilidade",
     "fieldResult": "Resultado",
-    "fieldNextDue": "Próximo vencimento"
+    "fieldNextDue": "Próximo vencimento",
+    "retentionYearsInvalid": "Os anos de retenção devem ser um número inteiro positivo"
   },
   "m5": {
     "title": "Gestão de Riscos",
@@ -772,7 +777,8 @@
       "submitInvalidStatus": "O registro não pode ser enviado no status atual",
       "recordImmutable": "O registro está bloqueado",
       "linkTargetNotFound": "Destino vinculado não encontrado",
-      "fieldRequired": "Este campo é obrigatório"
+      "fieldRequired": "Este campo é obrigatório",
+      "autosaveFailed": "Falha no salvamento automático — suas edições foram mantidas e serão reenviadas na próxima alteração"
     }
   },
   "qms": {
@@ -811,7 +817,10 @@
       "siteCountry": "País",
       "siteHeadcount": "Pessoal",
       "addSite": "Adicionar Site",
-      "removeSite": "Remover"
+      "removeSite": "Remover",
+      "employeeCountInvalid": "O número de funcionários deve ser um inteiro positivo",
+      "yearFoundedInvalid": "O ano de fundação está fora do intervalo",
+      "saveError": "Falha ao salvar o perfil"
     },
     "registry": {
       "loading": "Carregando...",

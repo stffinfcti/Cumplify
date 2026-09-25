@@ -21,6 +21,12 @@ export default defineConfig({
     exclude: ['node_modules'],
     setupFiles: ['src/test/setup.ts'],
     reporters: ['verbose'],
+    // Coverage floor (TEST-6): measured 2026-09-25 at ~67% lines. Wired via
+    // `npm run test:cov`; `npm run test` stays coverage-free for speed.
+    coverage: {
+      provider: 'v8',
+      thresholds: { statements: 62, branches: 51, functions: 53, lines: 65 },
+    },
     // HERMETIC: fake env prevents any real AWS calls
     env: {
       NEXT_PUBLIC_GRAPHQL_URL: 'http://localhost:4000/graphql',

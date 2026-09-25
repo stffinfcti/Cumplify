@@ -208,11 +208,18 @@ export default function M4RecordsPage() {
   }
 
   async function handleCreateRetention(values: Record<string, string | boolean>) {
+    // Validate before mutate — Number('abc') is NaN, which GraphQL serializes
+    // as a broken Int. Throw so the drawer shows the inline error instead of
+    // closing (and never sends a NaN arg).
+    const retentionYears = Number(values.retentionYears);
+    if (!Number.isInteger(retentionYears) || retentionYears <= 0) {
+      throw new Error(t('retentionYearsInvalid'));
+    }
     try {
       await mutate(CREATE_RETENTION_MUTATION, {
         input: {
           recordType: values.recordType,
-          retentionYears: Number(values.retentionYears),
+          retentionYears,
           dispositionRule: values.dispositionRule,
         },
       });

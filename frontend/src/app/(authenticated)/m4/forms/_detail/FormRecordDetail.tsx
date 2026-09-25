@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useTranslations } from 'next-intl';
 import {
   PageHeader,
@@ -184,8 +184,10 @@ export function FormRecordDetail({
 
   async function flushSave() {
     const toSave = { ...pendingRef.current };
-    pendingRef.current = {};
     if (Object.keys(toSave).length === 0) return;
+    // Clear only after we have the copy — but requeue on failure below so a
+    // transient autosave error never silently drops the user's edits.
+    pendingRef.current = {};
 
     try {
       const result = await mutate<{ saveFormRecordValues: FormRecord }>(SAVE_VALUES, {
@@ -199,9 +201,23 @@ export function FormRecordDetail({
         const relationKeys = Object.keys(toSave).filter((k) => toSave[k] !== null);
         setFieldErrors(new Set(relationKeys));
         setSubmitError(tForm('linkTargetNotFound'));
+      } else {
+        // Requeue anything newer edits haven't already replaced, and tell the
+        // user the autosave failed — the silent-drop path previously left the
+        // UI showing values the server never got.
+        pendingRef.current = { ...toSave, ...pendingRef.current };
+        setSubmitError(tForm('autosaveFailed'));
       }
     }
   }
+
+  // Autosave debounce timer must not fire after unmount.
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    [],
+  );
 
   // ─── Submit ────────────────────────────────────────────────────────────────
 
@@ -279,9 +295,14 @@ export function FormRecordDetail({
     }
   }
 
-  const reopenFields: FieldDef[] = [
-    { name: 'justification', label: tForm('justification'), type: 'textarea', required: true },
-  ];
+  // Stable reference — a fresh array each render resets the drawer's
+  // [open, fields] effect and wipes whatever the user was typing.
+  const reopenFields = useMemo<FieldDef[]>(
+    () => [
+      { name: 'justification', label: tForm('justification'), type: 'textarea', required: true },
+    ],
+    [tForm],
+  );
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
@@ -383,7 +404,16 @@ function FormField({
   t: (key: string) => string;
 }) {
   const label = t(field.labelKey.replace('forms.', ''));
-  const options: string[] = field.options ? JSON.parse(field.options) : [];
+  // Server data — an unparseable options string must not crash the render.
+  const options: string[] = useMemo(() => {
+    if (!field.options) return [];
+    try {
+      const parsed = JSON.parse(field.options) as unknown;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }, [field.options]);
   const inputClass = `${styles.fieldInput} ${hasError ? styles.fieldInputError : ''} ${readOnly ? styles.fieldInputReadonly : ''}`;
 
   return (

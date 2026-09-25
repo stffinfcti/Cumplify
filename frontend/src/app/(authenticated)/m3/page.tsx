@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { Fragment, useEffect, useState, useCallback, useMemo } from 'react';
 import { useTranslations } from 'next-intl';
 import {
   PageHeader,
@@ -162,12 +162,19 @@ export default function M3AuditStudioPage() {
   );
 
   async function handleCreateProgramme(values: Record<string, string | boolean>) {
+    // Validate before mutate — Number('abc') is NaN, which GraphQL serializes
+    // as a broken Int. Throw so the drawer shows the inline error.
+    const year = Number(values.year);
+    const now = new Date().getFullYear();
+    if (!Number.isInteger(year) || year < now - 10 || year > now + 10) {
+      throw new Error(t('yearInvalid'));
+    }
     try {
       await mutate(CREATE_PROGRAMME_MUTATION, {
         input: {
           standard: values.standard,
           // CreateAuditProgrammeInput.year is Int! — text fields yield strings
-          year: Number(values.year),
+          year,
           frequencyPlan: values.frequencyPlan || undefined,
         },
       });
@@ -253,8 +260,8 @@ export default function M3AuditStudioPage() {
 
               {/* Data rows — one per clause family */}
               {CLAUSE_FAMILIES.map((family) => (
-                <>
-                  <div key={`label-${family}`} className={styles.heatmapRowLabel}>
+                <Fragment key={family}>
+                  <div className={styles.heatmapRowLabel}>
                     {t('clauseFamily', { number: family })}
                   </div>
                   {STANDARDS.map((std) => {
@@ -269,7 +276,7 @@ export default function M3AuditStudioPage() {
                       </div>
                     );
                   })}
-                </>
+                </Fragment>
               ))}
             </div>
           )}

@@ -25,11 +25,23 @@ interface ControlledDocViewerProps {
   contentRaw: string;
   /** Document ID (used for meta) */
   documentId: string;
+  /** Version number stamped in the §7 identification block (the real version
+   *  being rendered — never a hardcoded 1) */
+  versionNo?: number;
+  /** Version creation date stamped in the §7 block — the document's date,
+   *  not the view date */
+  generatedAt?: string;
   /** Optional className for outer container */
   className?: string;
 }
 
-export function ControlledDocViewer({ contentRaw, documentId, className }: ControlledDocViewerProps) {
+export function ControlledDocViewer({
+  contentRaw,
+  documentId,
+  versionNo,
+  generatedAt,
+  className,
+}: ControlledDocViewerProps) {
   const t = useTranslations('manual');
   const { user } = useAuth();
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -41,28 +53,30 @@ export function ControlledDocViewer({ contentRaw, documentId, className }: Contr
 
       // Build meta from content + context
       const meta: DocMeta = {
-        title: content.kind === 'correlation_matrix'
-          ? 'Correlation Matrix'
-          : content.kind === 'master_list'
-            ? 'Document Master List'
-            : 'IMS Manual',
+        title:
+          content.kind === 'correlation_matrix'
+            ? 'Correlation Matrix'
+            : content.kind === 'master_list'
+              ? 'Document Master List'
+              : 'IMS Manual',
         documentId,
-        versionNo: 1, // from content if available
-        docType: content.kind === 'correlation_matrix'
-          ? 'CORRELATION_MATRIX'
-          : content.kind === 'form_record'
-            ? 'FORM_RECORD'
-            : 'MANUAL',
+        versionNo: versionNo ?? 1,
+        docType:
+          content.kind === 'correlation_matrix'
+            ? 'CORRELATION_MATRIX'
+            : content.kind === 'form_record'
+              ? 'FORM_RECORD'
+              : 'MANUAL',
         standard: content.frontMatter?.scope?.standards?.join(', ') ?? 'IMS',
         tenantName: user?.email?.split('@')[1] ?? undefined,
-        generatedAt: new Date().toISOString().slice(0, 10),
+        generatedAt: generatedAt?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
       };
 
       return buildDocumentHtml(meta, content);
     } catch {
       return `<html><body><p style="color:red;padding:24px;">Failed to render document content.</p></body></html>`;
     }
-  }, [contentRaw, documentId, user?.email]);
+  }, [contentRaw, documentId, versionNo, generatedAt, user?.email]);
 
   function handlePrint() {
     iframeRef.current?.contentWindow?.print();

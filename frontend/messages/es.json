@@ -165,7 +165,9 @@
     "HIGH": "Alto",
     "IN_PROGRESS": "En progreso",
     "MEDIUM": "Medio",
-    "LOW": "Bajo"
+    "LOW": "Bajo",
+    "COMPLETED": "Completado",
+    "PLANNED": "Planificado"
   },
   "common": {
     "loading": "Cargando...",
@@ -173,7 +175,8 @@
     "retry": "Reintentar",
     "submit": "Enviar",
     "cancel": "Cancelar",
-    "close": "Cerrar"
+    "close": "Cerrar",
+    "notAuthorized": "No tienes acceso a esta sección"
   },
   "m1": {
     "title": "Estudio de Documentos",
@@ -291,7 +294,8 @@
     "findingMajorNc": "NC mayor",
     "findingMinorNc": "NC menor",
     "findingObservation": "Observación",
-    "findingOfi": "OFI"
+    "findingOfi": "OFI",
+    "yearInvalid": "El año del programa debe ser un año válido"
   },
   "m4": {
     "title": "Gestión de Registros",
@@ -323,7 +327,8 @@
     "fieldStandardUsed": "Norma utilizada",
     "fieldTraceabilityRef": "Referencia de trazabilidad",
     "fieldResult": "Resultado",
-    "fieldNextDue": "Próximo vencimiento"
+    "fieldNextDue": "Próximo vencimiento",
+    "retentionYearsInvalid": "Los años de retención deben ser un número entero positivo"
   },
   "m5": {
     "title": "Gestión de Riesgos",
@@ -772,7 +777,8 @@
       "submitInvalidStatus": "El registro no puede enviarse en el estado actual",
       "recordImmutable": "El registro está bloqueado",
       "linkTargetNotFound": "Destino vinculado no encontrado",
-      "fieldRequired": "Este campo es requerido"
+      "fieldRequired": "Este campo es requerido",
+      "autosaveFailed": "Error de autoguardado — tus cambios se conservaron y se reintentarán en la próxima edición"
     }
   },
   "qms": {
@@ -811,7 +817,10 @@
       "siteCountry": "País",
       "siteHeadcount": "Personal",
       "addSite": "Agregar Sitio",
-      "removeSite": "Eliminar"
+      "removeSite": "Eliminar",
+      "employeeCountInvalid": "El número de empleados debe ser un entero positivo",
+      "yearFoundedInvalid": "El año de fundación está fuera de rango",
+      "saveError": "Error al guardar el perfil"
     },
     "registry": {
       "loading": "Cargando...",

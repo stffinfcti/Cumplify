@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { PageHeader, Panel } from '@/components/shared';
+import { PageHeader, Panel, EmptyState } from '@/components/shared';
 import { useAuth } from '@/lib/auth-context';
 import { useGraphQL } from '@/lib/api';
 import { canSeeAdmin, normalizeRole } from '@/lib/role-matrix';
@@ -32,15 +32,14 @@ const CREATE_BILLING_PORTAL_SESSION = /* GraphQL */ `
 
 export default function BillingPage() {
   const t = useTranslations('billing');
+  const tCommon = useTranslations('common');
   const { user } = useAuth();
   const { mutate } = useGraphQL();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const role = user?.role ?? 'employee';
-  if (!canSeeAdmin(normalizeRole(role))) {
-    return null;
-  }
+  const isAdmin = canSeeAdmin(normalizeRole(role));
 
   async function handleOpenPortal() {
     setLoading(true);
@@ -62,24 +61,31 @@ export default function BillingPage() {
     <>
       <PageHeader title={t('title')} />
 
-      <div className={styles.panels}>
+      {!isAdmin ? (
+        // Explicit not-authorized state — never a blank page
         <Panel title={t('subscriptionTitle')}>
-          <p className={styles.description}>{t('subscriptionDescription')}</p>
-          <button
-            type="button"
-            className={`${btnStyles.primary} ${styles.portalLink}`}
-            onClick={handleOpenPortal}
-            disabled={loading}
-          >
-            {loading ? t('openingPortal') : t('openPortal')}
-          </button>
-          {error && <p className={styles.notConfigured}>{error}</p>}
+          <EmptyState message={tCommon('notAuthorized')} />
         </Panel>
+      ) : (
+        <div className={styles.panels}>
+          <Panel title={t('subscriptionTitle')}>
+            <p className={styles.description}>{t('subscriptionDescription')}</p>
+            <button
+              type="button"
+              className={`${btnStyles.primary} ${styles.portalLink}`}
+              onClick={handleOpenPortal}
+              disabled={loading}
+            >
+              {loading ? t('openingPortal') : t('openPortal')}
+            </button>
+            {error && <p className={styles.notConfigured}>{error}</p>}
+          </Panel>
 
-        <Panel title={t('usageTitle')}>
-          <p className={styles.description}>{t('usageDescription')}</p>
-        </Panel>
-      </div>
+          <Panel title={t('usageTitle')}>
+            <p className={styles.description}>{t('usageDescription')}</p>
+          </Panel>
+        </div>
+      )}
     </>
   );
 }

@@ -165,7 +165,9 @@
     "HIGH": "High",
     "IN_PROGRESS": "In progress",
     "MEDIUM": "Medium",
-    "LOW": "Low"
+    "LOW": "Low",
+    "COMPLETED": "Completed",
+    "PLANNED": "Planned"
   },
   "common": {
     "loading": "Loading...",
@@ -173,7 +175,8 @@
     "retry": "Retry",
     "submit": "Submit",
     "cancel": "Cancel",
-    "close": "Close"
+    "close": "Close",
+    "notAuthorized": "You do not have access to this section"
   },
   "m1": {
     "title": "Document Studio",
@@ -291,7 +294,8 @@
     "findingMajorNc": "Major NC",
     "findingMinorNc": "Minor NC",
     "findingObservation": "Observation",
-    "findingOfi": "OFI"
+    "findingOfi": "OFI",
+    "yearInvalid": "Programme year must be a valid year"
   },
   "m4": {
     "title": "Records Management",
@@ -323,7 +327,8 @@
     "fieldStandardUsed": "Standard used",
     "fieldTraceabilityRef": "Traceability reference",
     "fieldResult": "Result",
-    "fieldNextDue": "Next due"
+    "fieldNextDue": "Next due",
+    "retentionYearsInvalid": "Retention years must be a positive whole number"
   },
   "m5": {
     "title": "Risk Management",
@@ -772,7 +777,8 @@
       "submitInvalidStatus": "Record cannot be submitted in current status",
       "recordImmutable": "Record is locked",
       "linkTargetNotFound": "Linked target not found",
-      "fieldRequired": "This field is required"
+      "fieldRequired": "This field is required",
+      "autosaveFailed": "Autosave failed — your edits were kept, they will retry on the next change"
     }
   },
   "qms": {
@@ -811,7 +817,10 @@
       "siteCountry": "Country",
       "siteHeadcount": "Headcount",
       "addSite": "Add Site",
-      "removeSite": "Remove"
+      "removeSite": "Remove",
+      "employeeCountInvalid": "Employee count must be a positive whole number",
+      "yearFoundedInvalid": "Year founded is out of range",
+      "saveError": "Failed to save profile"
     },
     "registry": {
       "loading": "Loading...",

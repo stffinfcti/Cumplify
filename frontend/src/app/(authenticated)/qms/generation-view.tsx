@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import {
   Panel,
@@ -133,9 +134,17 @@ export function GenerationView({ onViewDocument, registryMap }: GenerationViewPr
         limit: 10,
       });
       setRuns(data.listGenerationRuns);
-      if (data.listGenerationRuns.length > 0) {
-        setActiveRun(data.listGenerationRuns[0]);
-      }
+      // Only adopt the newest run when nothing is selected or the selected
+      // run vanished — a progress event for a different run must not yank
+      // the user off the run they're reading.
+      setActiveRun((prev) => {
+        if (!prev) return data.listGenerationRuns[0] ?? null;
+        return (
+          data.listGenerationRuns.find((r) => r.id === prev.id) ??
+          data.listGenerationRuns[0] ??
+          null
+        );
+      });
     } catch {
       setError('load');
     } finally {
@@ -436,9 +445,9 @@ function SectionRow({
       {section.kind === 'GAP' && gapSources.length > 0 && (
         <div className={styles.gapCta} data-testid={`gap-cta-${section.harmonizationKey}`}>
           {gapSources.map(({ source, link }) => (
-            <a key={source} href={link.path} className={styles.gapLink}>
+            <Link key={source} href={link.path} className={styles.gapLink}>
               {t(link.labelKey)}
-            </a>
+            </Link>
           ))}
         </div>
       )}

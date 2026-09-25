@@ -72,7 +72,7 @@ const SAVE_SECTION_EDIT = `mutation SaveDocumentSectionEdit($input: SaveDocument
   saveDocumentSectionEdit(input: $input) { id versionNo changeSummary createdAt }
 }`;
 
-export function DocumentEditor({ sections, runId, documentId, versionId, onSaved, onConverge }: DocumentEditorProps) {
+export function DocumentEditor({ sections, runId, documentId: _documentId, versionId, onSaved, onConverge }: DocumentEditorProps) {
   const t = useTranslations('editor');
   const { user } = useAuth();
   const { mutate } = useGraphQL();

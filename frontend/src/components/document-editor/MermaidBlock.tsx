@@ -37,6 +37,10 @@ export function MermaidBlock({ source, onUpdate, readOnly = false }: MermaidBloc
       const mermaid = (await import('mermaid')).default;
       mermaid.initialize({
         startOnLoad: false,
+        // 'strict' (default is 'loose' since mermaid v10) — diagram source is
+        // user-authored content rendered as SVG; never let labels carry
+        // HTML/JS into the DOM.
+        securityLevel: 'strict',
         theme: 'dark',
         themeVariables: {
           primaryColor: 'rgb(0, 101, 248)',
@@ -101,10 +105,7 @@ export function MermaidBlock({ source, onUpdate, readOnly = false }: MermaidBloc
       }}
     >
       {svg ? (
-        <div
-          className={styles.diagram}
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
+        <div className={styles.diagram} dangerouslySetInnerHTML={{ __html: svg }} />
       ) : error ? (
         <div className={styles.error}>
           <span className={styles.errorLabel}>Mermaid error</span>
