@@ -50,11 +50,15 @@ import { handler as m5Handler } from '../../src/resolvers/m5.js';
 
 const EMPTY_RESULT = { records: undefined, columnMetadata: undefined };
 
-function makeEvent(fieldName: string, args: Record<string, unknown> = {}) {
+function makeEvent(
+  fieldName: string,
+  args: Record<string, unknown> = {},
+  ctx: Record<string, string> = {},
+) {
   return {
     info: { fieldName },
     arguments: args,
-    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-test' } },
+    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-test', ...ctx } },
   };
 }
 
@@ -212,9 +216,9 @@ describe('m4 getAuditTrail — GSI1 per-entity query + pre-migration fallback', 
       Items: [ledgerItem('evt-1', '2027-01-01T00:00:00.000Z', 'risk-42')],
     });
 
-    const result = (await m4Handler(makeEvent('getAuditTrail', { entityId: 'risk-42' }))) as Array<
-      Record<string, unknown>
-    >;
+    const result = (await m4Handler(
+      makeEvent('getAuditTrail', { entityId: 'risk-42' }, { role: 'InternalAuditor' }),
+    )) as Array<Record<string, unknown>>;
 
     expect(mockExecute).not.toHaveBeenCalled();
     expect(mockDdbSend).toHaveBeenCalledTimes(1); // GSI hit → NO fallback scan
@@ -230,7 +234,7 @@ describe('m4 getAuditTrail — GSI1 per-entity query + pre-migration fallback', 
     expect(result[0].timestamp).toBe('2027-01-01T00:00:00.000Z');
   });
 
-  it('falls back to the tenant-partition substring scan when the GSI has zero items (pre-migration events)', async () => {
+  it('falls back to the tenant-partition exact-value scan when the GSI has zero items (pre-migration events)', async () => {
     mockDdbSend
       .mockResolvedValueOnce({ Items: [] }) // GSI miss
       .mockResolvedValueOnce({
@@ -240,9 +244,9 @@ describe('m4 getAuditTrail — GSI1 per-entity query + pre-migration fallback', 
         ],
       });
 
-    const result = (await m4Handler(makeEvent('getAuditTrail', { entityId: 'risk-42' }))) as Array<
-      Record<string, unknown>
-    >;
+    const result = (await m4Handler(
+      makeEvent('getAuditTrail', { entityId: 'risk-42' }, { role: 'InternalAuditor' }),
+    )) as Array<Record<string, unknown>>;
 
     expect(mockDdbSend).toHaveBeenCalledTimes(2);
     const [fallbackCall] = mockDdbSend.mock.calls[1];
@@ -250,9 +254,31 @@ describe('m4 getAuditTrail — GSI1 per-entity query + pre-migration fallback', 
     expect(fallbackCall.input.ExpressionAttributeValues[':pk']).toEqual({
       S: 'TENANT#tenant-test#AUDITLOG',
     });
-    // Substring match still filters to the requested entity
+    // Exact-value match filters to the requested entity
     expect(result).toHaveLength(1);
     expect(result[0].eventId).toBe('evt-1');
+  });
+
+  it('rejects non-auditor/non-admin roles before any DDB call (FORBIDDEN)', async () => {
+    await expect(
+      m4Handler(makeEvent('getAuditTrail', { entityId: 'risk-42' }, { role: 'Employee' })),
+    ).rejects.toThrow('FORBIDDEN');
+    expect(mockDdbSend).not.toHaveBeenCalled();
+  });
+
+  it('does NOT substring-match a short entityId against other entities (exact match)', async () => {
+    mockDdbSend
+      .mockResolvedValueOnce({ Items: [] }) // GSI miss
+      .mockResolvedValueOnce({
+        Items: [ledgerItem('evt-1', '2027-01-01T00:00:00.000Z', 'risk-42')],
+      });
+
+    // 'risk' is a strict substring of 'risk-42' — the old substring filter
+    // returned it; exact-value matching must not.
+    const result = (await m4Handler(
+      makeEvent('getAuditTrail', { entityId: 'risk' }, { role: 'InternalAuditor' }),
+    )) as Array<Record<string, unknown>>;
+    expect(result).toHaveLength(0);
   });
 });
 

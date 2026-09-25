@@ -16,6 +16,7 @@ import {
   marshalMany,
   getTenantDdbClient,
   TABLE_NAME,
+  type ResolverContext,
 } from './shared.js';
 import { normalizeRole, KNOWN_ROLES } from '../permissions/role-matrix.js';
 import {
@@ -55,7 +56,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'listCalibrationsDue':
       return listCalibrationsDue(event, tenantId);
     case 'getAuditTrail':
-      return getAuditTrail(event, tenantId);
+      return getAuditTrail(event, tenantId, ctx);
     case 'listApprovalMatrix':
       return listApprovalMatrix(tenantId);
     case 'setApprovalMatrixEntry':
@@ -347,6 +348,10 @@ async function createRetentionPolicy(event: AppSyncEvent, tenantId: string, acto
     const result = await txn.execute(
       `INSERT INTO m4.retention_policies (tenant_id, record_type, retention_years, disposition_rule, created_by)
        VALUES (:tenantId, :recordType, :retentionYears, :dispositionRule, :actor)
+       ON CONFLICT (tenant_id, record_type)
+       DO UPDATE SET retention_years = EXCLUDED.retention_years,
+                     disposition_rule = EXCLUDED.disposition_rule,
+                     updated_at = NOW()
        RETURNING *`,
       [
         { name: 'tenantId', value: { stringValue: tenantId } },
@@ -426,7 +431,14 @@ async function listCalibrationsDue(event: AppSyncEvent, tenantId: string) {
  * hits; a ledger backfill (new attributes only, chain untouched) is the
  * upgrade path if that ever matters in practice.
  */
-async function getAuditTrail(event: AppSyncEvent, tenantId: string) {
+async function getAuditTrail(event: AppSyncEvent, tenantId: string, ctx: ResolverContext) {
+  // Audit ledger is a privileged read surface (approver subs, justifications,
+  // execution ARNs): admins + auditors only — plain Employees are gated out.
+  const auditRoles = new Set(['InternalAuditor', 'ExternalAuditor']);
+  if (ctx.poolClass !== 'tenant-admin' && !auditRoles.has(ctx.role)) {
+    throw new Error('FORBIDDEN: audit trail requires admin or auditor role');
+  }
+
   const entityId = event.arguments.entityId as string;
   const ddb = await getTenantDdbClient(tenantId);
 
@@ -473,7 +485,8 @@ async function getAuditTrail(event: AppSyncEvent, tenantId: string) {
   if (gsiMatches.length > 0) return gsiMatches;
 
   // Fallback: pre-migration events (no entityId attribute) — partition scan
-  // with substring payload match, most recent first, capped.
+  // with EXACT payload-value matching (the old substring test false-positived
+  // on short entityIds, returning the tenant's whole ledger).
   const matches: Record<string, unknown>[] = [];
   const pk = `TENANT#${tenantId}#AUDITLOG`;
   let lastKey: Record<string, unknown> | undefined;
@@ -491,7 +504,7 @@ async function getAuditTrail(event: AppSyncEvent, tenantId: string) {
     );
     for (const raw of resp.Items ?? []) {
       const item = unmarshall(raw);
-      if (JSON.stringify(item.payload ?? {}).includes(entityId)) {
+      if (payloadHasExactValue(item.payload, entityId)) {
         matches.push(shape(item));
       }
     }
@@ -500,4 +513,15 @@ async function getAuditTrail(event: AppSyncEvent, tenantId: string) {
   } while (lastKey && pages < 10);
 
   return matches;
+}
+
+/** True when any string VALUE nested in payload equals needle exactly. */
+function payloadHasExactValue(payload: unknown, needle: string): boolean {
+  if (payload === needle) return true;
+  if (!payload || typeof payload !== 'object') return false;
+  for (const v of Object.values(payload as Record<string, unknown>)) {
+    if (v === needle) return true;
+    if (v && typeof v === 'object' && payloadHasExactValue(v, needle)) return true;
+  }
+  return false;
 }

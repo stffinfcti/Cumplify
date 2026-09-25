@@ -288,11 +288,17 @@ async function submitDocumentForApproval(event: AppSyncEvent, tenantId: string, 
       }
     }
 
-    // Status transition: draft → in_review
+    // Status transition: draft → in_review. The status predicate makes the
+    // transition atomic — without it a second submit (or a submit against an
+    // already-approved doc) silently rewinds the lifecycle.
     const result = await txn.execute(
-      `UPDATE m1.documents SET status = 'in_review', updated_at = NOW() WHERE id = :id::uuid RETURNING *`,
+      `UPDATE m1.documents SET status = 'in_review', updated_at = NOW()
+       WHERE id = :id::uuid AND status = 'draft' RETURNING *`,
       [{ name: 'id', value: { stringValue: id } }],
     );
+    if (!result.records?.length) {
+      throw new Error('INVALID_STATE');
+    }
     await txn.commit();
     await publishAuditEvent({
       tenantId,
@@ -421,6 +427,18 @@ async function publishControlledDocument(event: AppSyncEvent, tenantId: string, 
         /* never mask */
       }
       throw new Error('VERSION_NOT_FOUND');
+    }
+
+    // Publishing seals to the WORM vault — it must never run without an
+    // 'approved' approval row for THIS version, or an unreviewed draft could
+    // be written to the immutable evidence store directly.
+    const approvalRes = await txn.execute(
+      `SELECT 1 FROM m1.document_approvals
+       WHERE document_version_id = :versionId::uuid AND decision = 'approved' LIMIT 1`,
+      [{ name: 'versionId', value: { stringValue: versionId } }],
+    );
+    if (!approvalRes.records?.length) {
+      throw new Error('APPROVAL_REQUIRED');
     }
 
     const result = await txn.execute(
@@ -804,6 +822,13 @@ async function saveDocumentSectionEdit(event: AppSyncEvent, tenantId: string, ac
       ),
     };
 
+    // Lock the parent document row so concurrent edits serialize — two writers
+    // reading MAX(version_no)+1 in the same window would otherwise insert
+    // duplicate version numbers AND overwrite each other's S3 content key.
+    await txn.execute(
+      `SELECT id FROM m1.documents WHERE id = :docId::uuid FOR UPDATE`,
+      [{ name: 'docId', value: { stringValue: meta.documentId } }],
+    );
     const versionResult = await txn.execute(
       `SELECT COALESCE(MAX(version_no), 0) + 1 AS next FROM m1.document_versions WHERE document_id = :docId::uuid`,
       [{ name: 'docId', value: { stringValue: meta.documentId } }],

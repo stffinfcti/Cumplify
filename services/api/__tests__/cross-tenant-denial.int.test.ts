@@ -132,6 +132,15 @@ function awsReachable(): boolean {
 }
 const LIVE = awsReachable();
 
+// LOUD-SKIP (TEST-4): a `test:int` run where every suite silently skips looks
+// green while proving nothing. Fails loudly when neither live AWS nor any
+// C7 token is provisioned, so an unprovisioned lane never reports a pass.
+it('int lane provisioned: live AWS or a C7 token is available', () => {
+  expect(
+    LIVE || process.env.C7_POOL_A_TOKEN || process.env.C7_POOL_B_TOKEN,
+  ).toBeTruthy();
+});
+
 /** RLS helper: run `sql` inside a txn with app.tenant_id set (or unset), rollback. */
 function rlsQuery(tenant: string | null, sql: string): unknown[] {
   const tx = JSON.parse(

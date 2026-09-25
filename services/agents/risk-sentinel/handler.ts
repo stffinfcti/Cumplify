@@ -72,10 +72,13 @@ export async function runAssessment(input: RunAssessmentInput): Promise<RunAsses
     hitlTools: new Set(['risk-assessment-write']),
     requestedBy,
     invokeFn,
-    dispatchTool: async (toolName, toolInput, tid) => ({
-      output: { toolName, input: toolInput, tenantId: tid },
-      requiresHitl: false,
-    }),
+    dispatchTool: async (toolName, toolInput, tid) => {
+      throw new Error(
+        `RiskSentinel tool '${toolName}' is not implemented ` +
+          `(tenantId=${tid}, input=${JSON.stringify(toolInput)}). ` +
+          'Register a real dispatcher before enabling this agent.',
+      );
+    },
   });
 
   return {

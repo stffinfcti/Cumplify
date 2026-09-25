@@ -38,6 +38,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { publish } from '../../eventing/src/publisher.js';
 import { ulid } from 'ulid';
+import type { Context } from 'aws-lambda';
 
 const logger = new Logger({ serviceName: 'execute-writeback' });
 const rds = new RDSDataClient({});
@@ -72,8 +73,14 @@ export interface WritebackInput {
 // First call after 0-ACU auto-pause throws DatabaseResumingException.
 const MAX_RESUME_RETRIES = 3;
 const RESUME_DELAY_MS = 15_000;
+// Minimum remaining execution time needed to attempt one more resume cycle
+// (one request + one delay + margin for rollback/commit).
+const MIN_REMAINING_MS = 30_000;
 
-async function withResumeRetry<T>(fn: () => Promise<T>): Promise<T> {
+async function withResumeRetry<T>(
+  fn: () => Promise<T>,
+  getRemainingTimeInMillis?: () => number,
+): Promise<T> {
   for (let attempt = 0; attempt <= MAX_RESUME_RETRIES; attempt++) {
     try {
       return await fn();
@@ -87,6 +94,16 @@ async function withResumeRetry<T>(fn: () => Promise<T>): Promise<T> {
         msg.includes('Timed out');
 
       if (isDatabaseResuming && attempt < MAX_RESUME_RETRIES) {
+        // Stop retrying when the Lambda lacks the time budget to finish — a
+        // mid-retry hard timeout leaves the txn state worse than a fast fail.
+        const remaining = getRemainingTimeInMillis?.();
+        if (remaining !== undefined && remaining < MIN_REMAINING_MS) {
+          logger.warn('Aurora resuming but insufficient remaining time — failing fast', {
+            attempt,
+            remainingMs: remaining,
+          });
+          throw err;
+        }
         logger.warn('Aurora resuming from auto-pause — retrying', { attempt });
         await new Promise((resolve) => setTimeout(resolve, RESUME_DELAY_MS));
         continue;
@@ -120,6 +137,7 @@ function mapFindingType(raw: string): string {
 
 export async function handler(
   event: WritebackInput | { Payload: WritebackInput },
+  context?: Context,
 ): Promise<{ status: string; auditEventId?: string }> {
   // Task-11 hotfix: the SFN lambda:invoke integration with `'Payload.$': '$'`
   // delivers the STATE as the event — there is no {Payload:...} wrapper on
@@ -154,8 +172,10 @@ export async function handler(
     edited: Boolean(approvalResult.editedPayload),
   });
 
-  // M-1: Begin transaction with Aurora resume-retry
-  const txnResult = await withResumeRetry(() =>
+  // M-1: Begin transaction with Aurora resume-retry (bounded by the
+  // remaining invocation budget so resume cycles cannot burn to hard timeout).
+  const txnResult = await withResumeRetry(
+    () =>
     rds.send(
       new BeginTransactionCommand({
         resourceArn: CLUSTER_ARN,
@@ -163,6 +183,7 @@ export async function handler(
         database: DB_NAME,
       }),
     ),
+    context?.getRemainingTimeInMillis?.bind(context),
   );
   const transactionId = txnResult.transactionId!;
 

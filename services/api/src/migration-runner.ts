@@ -20,6 +20,7 @@ import {
   BeginTransactionCommand,
   CommitTransactionCommand,
   RollbackTransactionCommand,
+  type SqlParameter,
 } from '@aws-sdk/client-rds-data';
 import { createHash } from 'node:crypto';
 import { Logger } from '@aws-lambda-powertools/logger';
@@ -48,6 +49,7 @@ async function executeStatement(
   config: MigrationConfig,
   sql: string,
   transactionId?: string,
+  parameters?: SqlParameter[],
 ): Promise<void> {
   await client.send(
     new ExecuteStatementCommand({
@@ -56,11 +58,12 @@ async function executeStatement(
       database: config.database,
       sql,
       ...(transactionId ? { transactionId } : {}),
+      ...(parameters ? { parameters } : {}),
     }),
   );
 }
 
-async function getAppliedMigrations(config: MigrationConfig): Promise<Set<string>> {
+async function getAppliedMigrations(config: MigrationConfig): Promise<Map<string, string>> {
   try {
     // Ensure the _migrations table exists (idempotent for clean re-runs)
     await client.send(
@@ -81,21 +84,21 @@ async function getAppliedMigrations(config: MigrationConfig): Promise<Set<string
         resourceArn: config.clusterArn,
         secretArn: config.secretArn,
         database: config.database,
-        sql: 'SELECT filename FROM public._migrations',
+        sql: 'SELECT filename, checksum FROM public._migrations',
       }),
     );
-    const filenames = new Set<string>();
+    const applied = new Map<string, string>();
     for (const record of result.records ?? []) {
       if (record[0]?.stringValue) {
-        filenames.add(record[0].stringValue);
+        applied.set(record[0].stringValue, record[1]?.stringValue ?? '');
       }
     }
-    return filenames;
+    return applied;
   } catch (err: unknown) {
     // Table might not exist on very first run (shouldn't happen now with CREATE IF NOT EXISTS)
     const message = (err as Error).message ?? '';
     if (message.includes('_migrations') && message.includes('does not exist')) {
-      return new Set();
+      return new Map();
     }
     throw err;
   }
@@ -114,7 +117,18 @@ export async function runMigrations(
   const alreadyApplied = await getAppliedMigrations(config);
 
   for (const migration of sorted) {
-    if (alreadyApplied.has(migration.filename)) {
+    const appliedChecksum = alreadyApplied.get(migration.filename);
+    if (appliedChecksum !== undefined) {
+      // Drift guard: an already-applied file whose contents changed is a silent
+      // schema divergence — fail loudly instead of skipping it.
+      const currentChecksum = computeChecksum(migration.sql);
+      if (appliedChecksum !== currentChecksum) {
+        throw new Error(
+          `MIGRATION_CHECKSUM_MISMATCH: '${migration.filename}' was already applied with ` +
+            `checksum ${appliedChecksum} but the on-disk file has ${currentChecksum}. ` +
+            'Applied migrations are immutable — ship a new numbered migration instead of editing.',
+        );
+      }
       skipped.push(migration.filename);
       logger.info('Migration already applied, skipping', { filename: migration.filename });
       continue;
@@ -145,12 +159,17 @@ export async function runMigrations(
         await executeStatement(config, stmt, transactionId);
       }
 
-      // Record it in the _migrations table
+      // Record it in the _migrations table (parameterized — the filename is
+      // ours but interpolating SQL anywhere is a habit that leaks).
       const checksum = computeChecksum(migration.sql);
       await executeStatement(
         config,
-        `INSERT INTO public._migrations (filename, checksum) VALUES ('${migration.filename}', '${checksum}')`,
+        'INSERT INTO public._migrations (filename, checksum) VALUES (:filename, :checksum)',
         transactionId,
+        [
+          { name: 'filename', value: { stringValue: migration.filename } },
+          { name: 'checksum', value: { stringValue: checksum } },
+        ],
       );
 
       await client.send(

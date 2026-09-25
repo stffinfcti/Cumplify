@@ -99,12 +99,29 @@ export function validateGroundingContext(ctx: GroundingContext): GroundingContex
 export function splitForGroundingCheck(text: string): string[] {
   if (text.length <= MAX_SECTION_CHARS) return [text];
 
-  // Primary: split on ## or ### headers
+  // Primary: split on ## or ### headers — but a single mega-section under one
+  // header still blows past MAX_SECTION_CHARS, so re-chunk any oversized
+  // piece (and hard-split paragraphs that overflow a chunk on their own).
   const headerSections = text.split(/(?=^#{2,3}\s)/m).filter((s) => s.trim());
-  if (headerSections.length > 1) return headerSections;
-
-  // Fallback: chunk at paragraph boundaries
-  return chunkAtParagraphs(text, FALLBACK_CHUNK_SIZE);
+  const pieces = headerSections.length > 1 ? headerSections : [text];
+  const out: string[] = [];
+  for (const piece of pieces) {
+    if (piece.length <= MAX_SECTION_CHARS) {
+      out.push(piece);
+      continue;
+    }
+    for (const chunk of chunkAtParagraphs(piece, FALLBACK_CHUNK_SIZE)) {
+      if (chunk.length <= MAX_SECTION_CHARS) {
+        out.push(chunk);
+      } else {
+        // Last resort: a paragraph longer than the cap — hard char split.
+        for (let i = 0; i < chunk.length; i += MAX_SECTION_CHARS) {
+          out.push(chunk.slice(i, i + MAX_SECTION_CHARS));
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /**

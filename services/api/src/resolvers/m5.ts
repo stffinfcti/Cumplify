@@ -105,7 +105,7 @@ async function createRisk(event: AppSyncEvent, tenantId: string, actor: string) 
       actor,
       module: 'M5',
       clauseRef: 'ISO 9001 6.1',
-      standard: 'ISO9001',
+      standard: (risk?.standard as 'ISO9001' | 'ISO14001' | 'ISO45001') ?? 'ISO9001',
       detailType: 'Risk.Created',
       source: 'cumplify.m5.risk',
       entityId: String(risk?.id ?? ''),

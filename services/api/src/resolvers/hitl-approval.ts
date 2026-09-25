@@ -202,12 +202,47 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
   } catch (err: unknown) {
     const errName = (err as { name?: string }).name ?? '';
     if (errName === 'TaskDoesNotExist' || errName === 'TaskTimedOut') {
-      // Rollback: item remains in RESOLVING but SFN expired — mark as timed out
+      // The token is permanently dead — resolve as TIMED_OUT (removes GSI9
+      // membership + TTLs the item) instead of leaving a ghost RESOLVING row
+      // that only the sweeper would ever reclaim.
+      await resolveHitlItem(tenantId, hitlItemId, 'TIMED_OUT', 'system', ddb).catch(
+        (resolveErr: unknown) => {
+          logger.warn('Failed to mark expired HITL item TIMED_OUT', {
+            hitlItemId,
+            resolveErr: String(resolveErr),
+          });
+        },
+      );
       throw new ApprovalError(
         410,
         `SFN task expired or does not exist for HITL item: ${hitlItemId}`,
       );
     }
+    // Transient send failure — reset to PENDING so the card re-appears in the
+    // queue for a retry instead of vanishing until the sweeper finds it.
+    await ddb
+      .send(
+        new UpdateItemCommand({
+          TableName: TABLE_NAME,
+          Key: marshall({
+            PK: `TENANT#${tenantId}#HITL`,
+            SK: `PENDING#${hitlItemId}`,
+          }),
+          ConditionExpression: '#status = :resolving',
+          UpdateExpression: 'SET #status = :pending REMOVE resolvingAt',
+          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeValues: marshall({
+            ':resolving': 'RESOLVING',
+            ':pending': 'PENDING',
+          }),
+        }),
+      )
+      .catch((resetErr: unknown) => {
+        logger.warn('Failed to reset HITL item to PENDING after SFN send error', {
+          hitlItemId,
+          resetErr: String(resetErr),
+        });
+      });
     throw err;
   }
 

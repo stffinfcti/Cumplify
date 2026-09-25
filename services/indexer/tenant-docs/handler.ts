@@ -141,6 +141,17 @@ async function processDocumentPublished(
     return;
   }
 
+  // contentRef is event-supplied — assert it stays inside the event tenant's
+  // own key prefix so a malformed/forged event can't read a foreign key.
+  if (!contentRef.startsWith(`tenants/${tenantId}/`) || contentRef.includes('..')) {
+    logger.warn('contentRef outside tenant key prefix — skipping', {
+      tenantId,
+      documentId,
+      contentRef,
+    });
+    return;
+  }
+
   const bucket = env('CONTENT_BUCKET');
   const aossEndpoint = env('AOSS_TENANT_DOCS_ENDPOINT');
   const indexName = 'cumplify-tenant-docs';

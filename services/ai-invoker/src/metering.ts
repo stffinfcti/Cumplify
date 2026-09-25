@@ -32,7 +32,22 @@ export function computeCredits(usage: TokenUsage, weights: ModelWeight): number 
       usage.cacheReadInputTokens * wCache +
       usage.outputTokens * weights.wOut) /
     1_000_000;
+  // A NaN/negative input (embed edge: provider returned no usage block)
+  // would ADD NaN to the counter — refuse to meter garbage.
+  if (!Number.isFinite(credits) || credits < 0) {
+    throw new Error(`Refusing to meter non-finite credits: ${credits} (${JSON.stringify(usage)})`);
+  }
   return credits;
+}
+
+/** Deploy-time configuration — cache per model for a short TTL instead of a
+ * QueryCommand on every converse/embed call (register-resolver precedent). */
+const WEIGHTS_CACHE_TTL_MS = 60_000;
+const weightsCache = new Map<string, { weights: ModelWeight; cachedAt: number }>();
+
+/** Test-only: clear the in-process cache. */
+export function resetWeightsCache(): void {
+  weightsCache.clear();
 }
 
 /**
@@ -40,6 +55,11 @@ export function computeCredits(usage: TokenUsage, weights: ModelWeight): number 
  * Reads MODELWEIGHT#<modelId>, SK descending limit 1.
  */
 export async function loadWeights(modelId: string): Promise<ModelWeight> {
+  const hit = weightsCache.get(modelId);
+  if (hit && Date.now() - hit.cachedAt < WEIGHTS_CACHE_TTL_MS) {
+    return hit.weights;
+  }
+
   const result = await ddb.send(
     new QueryCommand({
       TableName: TABLE_NAME,
@@ -57,7 +77,7 @@ export async function loadWeights(modelId: string): Promise<ModelWeight> {
   }
 
   const item = result.Items[0];
-  return {
+  const weights = {
     modelId,
     wIn: parseFloat(item.wIn?.N ?? '0'),
     wOut: parseFloat(item.wOut?.N ?? '0'),
@@ -65,6 +85,8 @@ export async function loadWeights(modelId: string): Promise<ModelWeight> {
     effectiveFrom: item.effectiveFrom?.S ?? '',
     sourceCommit: item.sourceCommit?.S ?? '',
   };
+  weightsCache.set(modelId, { weights, cachedAt: Date.now() });
+  return weights;
 }
 
 /**
@@ -72,6 +94,9 @@ export async function loadWeights(modelId: string): Promise<ModelWeight> {
  * Key: TENANT#<tenantId>#METER / MONTH#<yyyymm>
  */
 export async function incrementMeter(tenantId: string, credits: number): Promise<void> {
+  if (!Number.isFinite(credits) || credits < 0) {
+    throw new Error(`Refusing to increment meter by non-finite credits: ${credits}`);
+  }
   const yyyymm = new Date().toISOString().slice(0, 7).replace('-', '');
   const pk = `TENANT#${tenantId}#METER`;
   const sk = `MONTH#${yyyymm}`;

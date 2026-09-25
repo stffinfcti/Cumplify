@@ -49,21 +49,36 @@ export async function subscriptionAuth(event: AppSyncEvent): Promise<unknown> {
  * Publish mutations (None data source) — trigger subscription delivery.
  * These are @aws_iam mutations that simply pass through to trigger the
  * @aws_subscribe directive. No RDS/DDB access needed.
+ *
+ * The returned payload MUST carry tenantId — @aws_subscribe matches
+ * subscription arguments (tenantId:) against the mutation's return value,
+ * and event.arguments.input has no tenantId field (SCHEMA-5), so a bare
+ * passthrough silently delivers nothing. tenantId comes from
+ * resolverContext, never the caller's input.
  */
+function withTenantId(event: AppSyncEvent): unknown {
+  const tenantId = event.identity?.resolverContext?.tenantId;
+  if (!tenantId) {
+    logger.warn('Publish rejected: missing resolverContext.tenantId');
+    throw new Error('Unauthorized');
+  }
+  return { ...(event.arguments.input as Record<string, unknown>), tenantId };
+}
+
 export async function publishDocumentEvent(event: AppSyncEvent): Promise<unknown> {
-  return event.arguments.input;
+  return withTenantId(event);
 }
 
 export async function publishCAPAEvent(event: AppSyncEvent): Promise<unknown> {
-  return event.arguments.input;
+  return withTenantId(event);
 }
 
 export async function publishAuditEvent(event: AppSyncEvent): Promise<unknown> {
-  return event.arguments.input;
+  return withTenantId(event);
 }
 
 export async function publishRiskEvent(event: AppSyncEvent): Promise<unknown> {
-  return event.arguments.input;
+  return withTenantId(event);
 }
 
 /**

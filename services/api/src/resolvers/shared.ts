@@ -44,6 +44,23 @@ interface CachedCredentials {
 }
 
 const credentialCache = new Map<string, CachedCredentials>();
+// Bound per warm container — tenant space is unbounded and stale entries
+// were never pruned. On overflow, drop expired entries first, then oldest.
+const CREDENTIAL_CACHE_MAX = 500;
+
+function pruneCredentialCache(now: number): void {
+  for (const [key, creds] of credentialCache) {
+    if (creds.expiration - now <= 120_000) credentialCache.delete(key);
+  }
+  if (credentialCache.size <= CREDENTIAL_CACHE_MAX) return;
+  // Insertion-ordered: evict oldest until within cap.
+  const overflow = credentialCache.size - CREDENTIAL_CACHE_MAX;
+  let removed = 0;
+  for (const key of credentialCache.keys()) {
+    if (removed++ >= overflow) break;
+    credentialCache.delete(key);
+  }
+}
 
 /**
  * Assume the tenant-data role with a bare tenantId session tag.
@@ -81,6 +98,7 @@ export async function getTenantDdbClient(tenantId: string): Promise<DynamoDBClie
     expiration: assumed.Credentials!.Expiration!.getTime(),
   };
 
+  pruneCredentialCache(now);
   credentialCache.set(tenantId, creds);
 
   return new DynamoDBClient({
@@ -262,6 +280,7 @@ export function extractContext(event: {
   if (!ctx?.tenantId) {
     throw new Error('Missing resolverContext.tenantId — authorization failed');
   }
+  assertTenantIdSafe(ctx.tenantId);
   return {
     tenantId: ctx.tenantId,
     role: ctx.role ?? 'Employee',
@@ -291,7 +310,20 @@ export function extractAgentContext(
   if (!tenantId) {
     throw new Error('Missing tenantId — required on every agent* mutation input (RS-7)');
   }
+  assertTenantIdSafe(tenantId);
   return { tenantId, actor: `agent:${agentName}` };
+}
+
+/**
+ * tenantId charset/length check — defense in depth under the api-stack IAM
+ * deny on `*`,`?`,`#` in the tenantId session tag: reject wildcard/tag-meta
+ * characters at the resolver boundary so they can never reach AssumeRole.
+ */
+const TENANT_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
+function assertTenantIdSafe(tenantId: string): void {
+  if (!TENANT_ID_RE.test(tenantId)) {
+    throw new Error('Invalid tenantId format — authorization failed');
+  }
 }
 
 export { TABLE_NAME, BUS_NAME, CLUSTER_ARN, Logger };

@@ -106,6 +106,12 @@ const policyRow = (years: number) => ({
   records: [[{ longValue: years }]],
   columnMetadata: [{ name: 'retention_years' }],
 });
+// 'approved' approval row for the version — publish seals to WORM, so the
+// resolver requires this before flipping the document to 'approved'.
+const approvalRow = {
+  records: [[{ longValue: 1 }]],
+  columnMetadata: [{ name: 'ok' }],
+};
 const emptyRes = { records: [], columnMetadata: [] };
 
 function wireRenderOk() {
@@ -140,6 +146,7 @@ describe('publishControlledDocument sealing (STO-5)', () => {
   it('seals with per-object retention from the tenant policy (5y) — CopyObject + m4.records in same txn, publish after commit', async () => {
     mockExecute
       .mockResolvedValueOnce(metaRow) // meta SELECT
+      .mockResolvedValueOnce(approvalRow) // approval gate SELECT
       .mockResolvedValueOnce(docRow) // UPDATE approve
       .mockResolvedValueOnce(policyRow(5)) // retention policy SELECT
       .mockResolvedValueOnce(emptyRes); // m4.records INSERT
@@ -169,7 +176,7 @@ describe('publishControlledDocument sealing (STO-5)', () => {
     expect(copy.ObjectLockRetainUntilDate.getTime() - before).toBeLessThan(fiveYears + 60_000);
 
     // m4.records pointer row: retain_until == object_lock_until, s3://-ref, 5y class
-    const insertCall = mockExecute.mock.calls[3];
+    const insertCall = mockExecute.mock.calls[4];
     expect(insertCall[0]).toContain('INSERT INTO m4.records');
     const params = Object.fromEntries(
       insertCall[1].map((p: { name: string; value: Record<string, unknown> }) => [
@@ -200,6 +207,7 @@ describe('publishControlledDocument sealing (STO-5)', () => {
   it('seeds the default 7y policy row when the tenant has none, then seals at 7y', async () => {
     mockExecute
       .mockResolvedValueOnce(metaRow)
+      .mockResolvedValueOnce(approvalRow) // approval gate SELECT
       .mockResolvedValueOnce(docRow)
       .mockResolvedValueOnce(emptyRes) // no policy row
       .mockResolvedValueOnce(emptyRes) // policy INSERT (seed)
@@ -208,7 +216,7 @@ describe('publishControlledDocument sealing (STO-5)', () => {
 
     await handler(makeEvent());
 
-    const seed = mockExecute.mock.calls[3];
+    const seed = mockExecute.mock.calls[4];
     expect(seed[0]).toContain('INSERT INTO m4.retention_policies');
     expect(seed[0]).toContain("'controlled_document'");
     const seedParams = Object.fromEntries(
@@ -224,7 +232,10 @@ describe('publishControlledDocument sealing (STO-5)', () => {
   it('empty content_ref (agent-writeback exemption): publishes WITHOUT sealing, audit carries sealed:false', async () => {
     const noContentMeta = JSON.parse(JSON.stringify(metaRow));
     noContentMeta.records[0][0] = { isNull: true };
-    mockExecute.mockResolvedValueOnce(noContentMeta).mockResolvedValueOnce(docRow);
+    mockExecute
+      .mockResolvedValueOnce(noContentMeta)
+      .mockResolvedValueOnce(approvalRow) // approval gate SELECT
+      .mockResolvedValueOnce(docRow);
     mockLambdaSend.mockRejectedValue(new Error('must not be called'));
 
     await handler(makeEvent());
@@ -241,6 +252,7 @@ describe('publishControlledDocument sealing (STO-5)', () => {
   it('render failure → rollback, SEAL_FAILED, publish is BLOCKED and no audit event fires', async () => {
     mockExecute
       .mockResolvedValueOnce(metaRow)
+      .mockResolvedValueOnce(approvalRow) // approval gate SELECT
       .mockResolvedValueOnce(docRow)
       .mockResolvedValueOnce(policyRow(5));
     mockLambdaSend.mockResolvedValue({
@@ -257,6 +269,7 @@ describe('publishControlledDocument sealing (STO-5)', () => {
   it('CopyObject failure → rollback, error propagates, no records row committed', async () => {
     mockExecute
       .mockResolvedValueOnce(metaRow)
+      .mockResolvedValueOnce(approvalRow) // approval gate SELECT
       .mockResolvedValueOnce(docRow)
       .mockResolvedValueOnce(policyRow(5));
     mockLambdaSend.mockResolvedValue({

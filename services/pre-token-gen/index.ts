@@ -90,11 +90,43 @@ export async function resolvePoolClass(
 }
 
 /**
+ * Canonical role precedence — Cognito's groupsToOverride order is NOT
+ * priority-ordered, so a multi-group user's role was nondeterministic.
+ * Highest-authority membership wins (internal > tenant-admin > tenant-user).
+ * Must stay in sync with ROLE_PRIORITY in services/api/src/authorizer.ts.
+ */
+const ROLE_PRIORITY: readonly string[] = [
+  // PoolA (internal)
+  'PlatformAdmin',
+  'SecurityOps',
+  'SupportEngineer',
+  'FinanceOps',
+  // PoolB (tenant-admin)
+  'TopManagement',
+  'IMSLead',
+  'QualityManager',
+  'EHSManager',
+  'DocumentController',
+  // PoolC (tenant-user)
+  'InternalAuditor',
+  'ProcessOwner',
+  'Supervisor',
+  'PartnerConsultant',
+  'Contractor',
+  'Employee',
+  'ExternalAuditor',
+];
+
+/**
  * Resolve the user's role from Cognito group membership.
- * Returns the first group name, or 'Employee' fallback with a log warning.
+ * Highest-priority known group wins deterministically; unknown groups fall
+ * back to lexical order of appearance, then 'Employee' with a log warning.
  */
 export function resolveRole(groups: string[] | undefined): { role: string; fallback: boolean } {
   if (groups && groups.length > 0) {
+    for (const role of ROLE_PRIORITY) {
+      if (groups.includes(role)) return { role, fallback: false };
+    }
     return { role: groups[0], fallback: false };
   }
   // Fallback — no silent paths (F-8 tightening)

@@ -66,6 +66,33 @@ interface TokenClaims extends JWTPayload {
 }
 
 /**
+ * Canonical role precedence — must stay in sync with ROLE_PRIORITY in
+ * services/pre-token-gen/index.ts. Cognito's groups claim order is not
+ * priority-ordered, so groups[0] was nondeterministic for multi-group users.
+ */
+const ROLE_PRIORITY: readonly string[] = [
+  // PoolA (internal)
+  'PlatformAdmin',
+  'SecurityOps',
+  'SupportEngineer',
+  'FinanceOps',
+  // PoolB (tenant-admin)
+  'TopManagement',
+  'IMSLead',
+  'QualityManager',
+  'EHSManager',
+  'DocumentController',
+  // PoolC (tenant-user)
+  'InternalAuditor',
+  'ProcessOwner',
+  'Supervisor',
+  'PartnerConsultant',
+  'Contractor',
+  'Employee',
+  'ExternalAuditor',
+];
+
+/**
  * Reads tenant entitlement from CumplifyCore (PK=TENANT#<tenantId>#META, SK=PLAN).
  * Returns a static JSON string for resolverContext.entitlement.
  * P1 scope: static stamp. P2 upgrades to real-time lookup.
@@ -180,8 +207,16 @@ export async function handler(event: AppSyncAuthEvent): Promise<AuthResponse> {
     return { isAuthorized: false };
   }
 
-  // Extract role (from custom:role claim or first Cognito group)
-  const role = claims!['custom:role'] ?? claims!['cognito:groups']?.[0] ?? 'Employee';
+  // Extract role: the custom:role claim (pre-token-gen, deterministic) or,
+  // for tokens minted before the trigger, the highest-priority group —
+  // Cognito's groups order is not priority-ordered, so groups[0] was
+  // nondeterministic for multi-group users.
+  const groups = claims!['cognito:groups'];
+  const role =
+    claims!['custom:role'] ??
+    ROLE_PRIORITY.find((r) => groups?.includes(r)) ??
+    groups?.[0] ??
+    'Employee';
 
   const sub = claims!.sub ?? 'unknown';
 

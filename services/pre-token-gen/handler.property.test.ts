@@ -99,12 +99,14 @@ describe('PreTokenGen handler (property-based)', () => {
     );
   });
 
-  it('role is first group when groups are non-empty', () => {
+  it('role is one of the groups and deterministic for the same input', () => {
     fc.assert(
       fc.property(fc.array(groupArb, { minLength: 1, maxLength: 5 }), (groups) => {
-        const { role, fallback } = resolveRole(groups);
-        expect(role).toBe(groups[0]);
-        expect(fallback).toBe(false);
+        const first = resolveRole(groups);
+        const second = resolveRole(groups);
+        expect(groups).toContain(first.role);
+        expect(first.role).toBe(second.role);
+        expect(first.fallback).toBe(false);
       }),
     );
   });
