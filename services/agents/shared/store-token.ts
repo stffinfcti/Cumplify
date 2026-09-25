@@ -99,7 +99,6 @@ export async function handler(event: StoreTokenInput): Promise<{ stored: true }>
     ':proposedAction': proposedAction,
     ':createdAt': createdAt,
     ':status': 'PENDING',
-    ':pending': 'PENDING',
     ':taskToken': taskToken,
     ':tokenStoredAt': now,
     ':gsi9pk': `TENANT#${tenantId}#HITL_PENDING`,
@@ -137,7 +136,7 @@ export async function handler(event: StoreTokenInput): Promise<{ stored: true }>
         // Create-or-refresh only while unresolved — a replayed StoreToken
         // (SFN retry) must never overwrite APPROVED/REJECTED/EXPIRED back to
         // PENDING with a dead task token.
-        ConditionExpression: 'attribute_not_exists(#status) OR #status = :pending',
+        ConditionExpression: 'attribute_not_exists(#status) OR #status = :status',
       }),
   );
   } catch (err: unknown) {

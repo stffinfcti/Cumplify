@@ -99,6 +99,7 @@ const REOPEN_RECORD = `mutation ReopenFormRecord($input: ReopenFormRecordInput!)
 }`;
 
 const DEBOUNCE_MS = 1500;
+const AUTOSAVE_MAX_RETRIES = 3;
 const IMMUTABLE_STATUSES = new Set(['COMPLETE', 'APPROVED']);
 
 export function FormRecordDetail({
@@ -128,6 +129,7 @@ export function FormRecordDetail({
 
   const pendingRef = useRef<Record<string, unknown>>({});
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autosaveRetriesRef = useRef(0);
 
   const isImmutable = record ? IMMUTABLE_STATUSES.has(record.status) : false;
   const canAct = canApprove(role, 'M4');
@@ -182,9 +184,9 @@ export function FormRecordDetail({
     timerRef.current = setTimeout(() => flushSave(), DEBOUNCE_MS);
   }
 
-  async function flushSave() {
+  async function flushSave(): Promise<boolean> {
     const toSave = { ...pendingRef.current };
-    if (Object.keys(toSave).length === 0) return;
+    if (Object.keys(toSave).length === 0) return true;
     // Clear only after we have the copy — but requeue on failure below so a
     // transient autosave error never silently drops the user's edits.
     pendingRef.current = {};
@@ -194,6 +196,8 @@ export function FormRecordDetail({
         input: { recordId, values: JSON.stringify(toSave) },
       });
       setRecord(result.saveFormRecordValues);
+      autosaveRetriesRef.current = 0;
+      return true;
     } catch (err) {
       const msg = (err as Error).message;
       if (msg === 'LINK_TARGET_NOT_FOUND') {
@@ -207,7 +211,13 @@ export function FormRecordDetail({
         // UI showing values the server never got.
         pendingRef.current = { ...toSave, ...pendingRef.current };
         setSubmitError(tForm('autosaveFailed'));
+        autosaveRetriesRef.current += 1;
+        if (autosaveRetriesRef.current <= AUTOSAVE_MAX_RETRIES) {
+          if (timerRef.current) clearTimeout(timerRef.current);
+          timerRef.current = setTimeout(() => flushSave(), DEBOUNCE_MS);
+        }
       }
+      return false;
     }
   }
 
@@ -227,7 +237,9 @@ export function FormRecordDetail({
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    await flushSave();
+    // A failed flush means values exist the server never got — abort submit
+    // instead of sealing an immutable record missing the user's edits.
+    if (!(await flushSave())) return;
 
     setActionLoading(true);
     setSubmitError(null);

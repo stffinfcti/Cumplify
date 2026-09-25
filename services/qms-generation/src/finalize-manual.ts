@@ -90,7 +90,7 @@ async function insertDocument(
        ON CONFLICT (tenant_id, harmonization_key) WHERE harmonization_key IS NOT NULL
        DO UPDATE SET title = EXCLUDED.title, clause_refs = EXCLUDED.clause_refs,
                      standard = EXCLUDED.standard, updated_at = NOW(), version = m1.documents.version + 1
-       RETURNING id, version`,
+       RETURNING id`,
       [
         { name: 'tenantId', value: { stringValue: tenantId } },
         { name: 'standard', value: { stringValue: opts.standard } },
@@ -101,11 +101,23 @@ async function insertDocument(
         { name: 'owner', value: { stringValue: opts.owner } },
       ],
     );
-    const [idCol, versionCol] = result.records![0] as [
-      { stringValue?: string },
-      { longValue?: number },
-    ];
-    return { documentId: idCol.stringValue!, versionNo: versionCol.longValue! };
+    const [idCol] = result.records![0] as [{ stringValue?: string }];
+    const documentId = idCol.stringValue!;
+    // document_versions.version_no counts ALL writers (section edits in m1.ts
+    // too), while documents.version counts finalize upserts only — reusing it
+    // would collide with edited versions and overwrite their S3 content key.
+    // Lock the document row, then take MAX(version_no)+1 (m1.ts:826 pattern).
+    await txn.execute(`SELECT id FROM m1.documents WHERE id = :docId::uuid FOR UPDATE`, [
+      { name: 'docId', value: { stringValue: documentId } },
+    ]);
+    const versionResult = await txn.execute(
+      `SELECT COALESCE(MAX(version_no), 0) + 1 AS next FROM m1.document_versions WHERE document_id = :docId::uuid`,
+      [{ name: 'docId', value: { stringValue: documentId } }],
+    );
+    const versionNo = Number(
+      (versionResult.records![0][0] as { longValue?: number }).longValue,
+    );
+    return { documentId, versionNo };
   }
 
   // Non-generated documents (manual creation, no harmonizationKey)
@@ -147,9 +159,9 @@ async function writeVersion(
       ContentType: 'application/json',
     }),
   );
-  // versionNo comes from m1.documents.version (bumped by ON CONFLICT), so a
-  // re-finalize appends vN+1 instead of a duplicate version_no=1 row that
-  // would also overwrite the sealed v1.json content.
+  // versionNo is MAX(document_versions.version_no)+1 taken under the
+  // documents row lock, so a re-finalize appends vN+1 instead of colliding
+  // with section edits or overwriting sealed content.
   await txn.execute(
     `INSERT INTO m1.document_versions
        (tenant_id, document_id, version_no, content_ref, content_sha256, change_summary, author_id, created_by)

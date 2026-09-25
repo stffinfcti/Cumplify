@@ -84,7 +84,11 @@ export class FrontendStack extends cdk.Stack {
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
       "font-src 'self' data:",
-      `connect-src 'self' https://*.appsync-api.${envConfig.region}.amazonaws.com wss://*.appsync-realtime-api.${envConfig.region}.amazonaws.com https://*.amazoncognito.com https://cognito-identity.${envConfig.region}.amazonaws.com`,
+      // cognito-idp is REQUIRED: Amplify signIn + fetchAuthSession (token
+      // refresh on every GraphQL call) hit it — without it login and all
+      // sessions after first token expiry are CSP-blocked. cognito-identity
+      // (Identity Pools) is unused by this app.
+      `connect-src 'self' https://*.appsync-api.${envConfig.region}.amazonaws.com wss://*.appsync-realtime-api.${envConfig.region}.amazonaws.com https://*.amazoncognito.com https://cognito-idp.${envConfig.region}.amazonaws.com`,
       "object-src 'none'",
       "base-uri 'self'",
       "frame-ancestors 'none'",

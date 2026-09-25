@@ -37,8 +37,8 @@ import { Logger } from '@aws-lambda-powertools/logger';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { publish } from '../../eventing/src/publisher.js';
-import { ulid } from 'ulid';
 import type { Context } from 'aws-lambda';
+import { ulid } from 'ulid';
 
 const logger = new Logger({ serviceName: 'execute-writeback' });
 const rds = new RDSDataClient({});
@@ -176,14 +176,14 @@ export async function handler(
   // remaining invocation budget so resume cycles cannot burn to hard timeout).
   const txnResult = await withResumeRetry(
     () =>
-    rds.send(
+      rds.send(
       new BeginTransactionCommand({
         resourceArn: CLUSTER_ARN,
         secretArn: SECRET_ARN,
         database: DB_NAME,
       }),
     ),
-    context?.getRemainingTimeInMillis?.bind(context),
+    context?.getRemainingTimeInMillis.bind(context),
   );
   const transactionId = txnResult.transactionId!;
 

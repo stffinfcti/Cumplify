@@ -83,8 +83,17 @@ async function createBillingPortalSession(
   }
 
   const returnUrl = event.arguments.returnUrl as string | undefined;
-  const isValidReturn =
-    !!returnUrl && (/^https:\/\//.test(returnUrl) || /^https?:\/\/localhost[:/]/.test(returnUrl));
+  // URL-parse, not prefix-match: `https://localhost:9999@evil.example/x`
+  // passes a `localhost[:/]` regex while Stripe 302s to evil.example.
+  const isValidReturn = (() => {
+    if (!returnUrl) return false;
+    try {
+      const u = new URL(returnUrl);
+      return u.protocol === 'https:' || u.hostname === 'localhost';
+    } catch {
+      return false;
+    }
+  })();
   if (!isValidReturn) {
     throw new Error('INVALID_RETURN_URL');
   }

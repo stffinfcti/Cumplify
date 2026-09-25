@@ -95,7 +95,7 @@ describe('store-token handler', () => {
     // Condition allows create-or-refresh only while PENDING — a re-delivered
     // StoreToken still upserts, but a replay can never revert APPROVED/EXPIRED.
     expect(call.input.ConditionExpression).toBe(
-      'attribute_not_exists(#status) OR #status = :pending',
+      'attribute_not_exists(#status) OR #status = :status',
     );
 
     // Replay after resolution: the write is conditionally rejected and the

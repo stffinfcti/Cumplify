@@ -65,6 +65,7 @@ vi.stubEnv('BUS_NAME', 'cumplify-events');
 vi.stubEnv('AWS_REGION', 'us-east-1');
 
 const { embed, resetEmbedClient } = await import('../src/embed.js');
+const { resetWeightsCache } = await import('../src/metering.js');
 
 describe('embed', () => {
   beforeEach(() => {
@@ -72,6 +73,8 @@ describe('embed', () => {
     mockDdbSend.mockReset();
     mockEbSend.mockReset();
     resetEmbedClient();
+    // weightsCache is module-level — isolate per-call DDB queries between its
+    resetWeightsCache();
 
     // Default: credit pre-check passes (GetItem returns balance > 0)
     mockDdbSend.mockImplementation((cmd: { input?: { Key?: unknown; KeyConditionExpression?: string } }) => {
@@ -212,6 +215,7 @@ describe('embed — systemOp threading (iso-kb-seeding Task 2)', () => {
     mockDdbSend.mockReset();
     mockEbSend.mockReset();
     resetEmbedClient();
+    resetWeightsCache();
 
     // loadWeights returns valid weights
     mockDdbSend.mockImplementation((cmd: { input?: { Key?: unknown; KeyConditionExpression?: string } }) => {

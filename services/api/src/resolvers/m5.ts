@@ -30,6 +30,12 @@ interface AppSyncEvent {
   identity?: { resolverContext?: Record<string, string> };
 }
 
+type IsoStandard = 'ISO9001' | 'ISO14001' | 'ISO45001';
+const ISO_STANDARDS = new Set<IsoStandard>(['ISO9001', 'ISO14001', 'ISO45001']);
+function toIsoStandard(raw: unknown): IsoStandard {
+  return ISO_STANDARDS.has(raw as IsoStandard) ? (raw as IsoStandard) : 'ISO9001';
+}
+
 export async function handler(event: AppSyncEvent): Promise<unknown> {
   // RS-7: agent* (@aws_iam) fields never carry resolverContext — branch
   // BEFORE extractContext, which would throw for them.
@@ -105,7 +111,7 @@ async function createRisk(event: AppSyncEvent, tenantId: string, actor: string) 
       actor,
       module: 'M5',
       clauseRef: 'ISO 9001 6.1',
-      standard: (risk?.standard as 'ISO9001' | 'ISO14001' | 'ISO45001') ?? 'ISO9001',
+      standard: toIsoStandard(risk?.standard),
       detailType: 'Risk.Created',
       source: 'cumplify.m5.risk',
       entityId: String(risk?.id ?? ''),
@@ -166,7 +172,7 @@ async function agentAssessRisk(event: AppSyncEvent, tenantId: string, actor: str
       actor,
       module: 'M5',
       clauseRef: 'ISO 9001 6.1',
-      standard: (risk?.standard as 'ISO9001' | 'ISO14001' | 'ISO45001') ?? 'ISO9001',
+      standard: toIsoStandard(risk?.standard),
       detailType: 'Risk.Assessed',
       source: 'cumplify.m5.risk',
       entityId: String(risk?.id ?? ''),

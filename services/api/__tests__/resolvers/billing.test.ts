@@ -120,9 +120,11 @@ describe('createBillingPortalSession', () => {
     await handler(makeEvent({ returnUrl: RETURN_URL }));
 
     expect(mockCustomersCreate).toHaveBeenCalledWith({ metadata: { tenantId: 'tenant-AAA' } });
-    // Third call is the write-back — assert it carries the merged map.
-    const writeCall = mockSecretSend.mock.calls[2][0] as { input: { SecretString: string } };
-    const written = JSON.parse(writeCall.input.SecretString);
+    // The write-back is the call carrying SecretString — assert the merged map.
+    const writeCall = mockSecretSend.mock.calls
+      .map(([cmd]) => cmd as { input: { SecretString?: string } })
+      .find((cmd) => cmd.input.SecretString !== undefined)!;
+    const written = JSON.parse(writeCall.input.SecretString!);
     expect(written.customersByTenant).toEqual({ 'tenant-OLD': 'cus_old', 'tenant-AAA': 'cus_new' });
     expect(mockPortalCreate).toHaveBeenCalledWith(
       expect.objectContaining({ customer: 'cus_new', return_url: RETURN_URL }),

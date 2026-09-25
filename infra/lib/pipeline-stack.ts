@@ -108,7 +108,7 @@ export class PipelineStack extends cdk.Stack {
           // The gate only inspects the root lockfile, so frontend deps get
           // their own audit pass.
           'npx tsx scripts/audit-gate.ts',
-          'cd frontend && npm audit --audit-level=high && cd ..',
+          'npx tsx scripts/audit-gate.ts frontend',
           'npx cdk synth --all',
           // CDK Nag runs as an Aspect during synth; a Nag error fails synth here.
         ],

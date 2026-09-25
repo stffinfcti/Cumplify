@@ -282,10 +282,11 @@ export function NCDetail({ id, onBack }: { id: string; onBack: () => void }) {
     [t],
   );
 
+  // Drawer handlers let mutation errors propagate to FormDrawer's submit
+  // handler — a page-fatal error state would nuke the whole detail view for
+  // one failed mutation.
   async function handleRootCause(values: Record<string, string | boolean>) {
     if (!nc) return;
-    // Mutation errors propagate to FormDrawer's submit handler — a page-fatal
-    // error state would nuke the whole detail view for one failed mutation.
     await mutate(RECORD_ROOT_CAUSE, {
       input: {
         ncId: nc.id,

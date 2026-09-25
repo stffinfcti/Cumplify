@@ -346,8 +346,14 @@ describe('FinalizeManual handler', () => {
       if (sql.includes('INSERT INTO m1.documents')) {
         docCounter += 1;
         return Promise.resolve({
-          records: [[{ stringValue: `doc-${docCounter}` }, { longValue: 1 }]],
-          columnMetadata: [{ name: 'id' }, { name: 'version' }],
+          records: [[{ stringValue: `doc-${docCounter}` }]],
+          columnMetadata: [{ name: 'id' }],
+        });
+      }
+      if (sql.includes('MAX(version_no)')) {
+        return Promise.resolve({
+          records: [[{ longValue: 1 }]],
+          columnMetadata: [{ name: 'next' }],
         });
       }
       return Promise.resolve({ records: [], columnMetadata: [] });
@@ -469,8 +475,14 @@ describe('FinalizeManual handler', () => {
       }
       if (sql.includes('INSERT INTO m1.documents')) {
         return Promise.resolve({
-          records: [[{ stringValue: 'doc-idem' }, { longValue: 1 }]],
-          columnMetadata: [{ name: 'id' }, { name: 'version' }],
+          records: [[{ stringValue: 'doc-idem' }]],
+          columnMetadata: [{ name: 'id' }],
+        });
+      }
+      if (sql.includes('MAX(version_no)')) {
+        return Promise.resolve({
+          records: [[{ longValue: 1 }]],
+          columnMetadata: [{ name: 'next' }],
         });
       }
       return Promise.resolve({ records: [], columnMetadata: [] });

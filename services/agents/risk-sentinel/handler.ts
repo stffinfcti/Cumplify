@@ -17,11 +17,14 @@
  * handler reasons over MUST already be in the invoke payload's `context`.
  */
 
+import { Logger } from '@aws-lambda-powertools/logger';
+
 import { toolLoop } from '../shared/tool-loop.js';
 import { createInvokeFn } from '../shared/invoke-transport.js';
 import { RISK_SENTINEL_PROMPT } from './prompt.js';
 import { RISK_SENTINEL_TOOLS } from './tools.js';
 
+const logger = new Logger({ serviceName: 'risk-sentinel' });
 const invokeFn = createInvokeFn();
 
 export interface RiskContext {
@@ -73,11 +76,12 @@ export async function runAssessment(input: RunAssessmentInput): Promise<RunAsses
     requestedBy,
     invokeFn,
     dispatchTool: async (toolName, toolInput, tid) => {
-      throw new Error(
-        `RiskSentinel tool '${toolName}' is not implemented ` +
-          `(tenantId=${tid}, input=${JSON.stringify(toolInput)}). ` +
-          'Register a real dispatcher before enabling this agent.',
-      );
+      logger.warn('RiskSentinel dispatchTool called before registration', {
+        toolName,
+        tenantId: tid,
+        inputKeys: Object.keys(toolInput as Record<string, unknown>),
+      });
+      throw new Error(`RiskSentinel tool '${toolName}' is not implemented`);
     },
   });
 

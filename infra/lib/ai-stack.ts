@@ -332,6 +332,21 @@ export class AiStack extends cdk.Stack {
       },
     });
 
+    // ─── ExpireHitlItem Lambda (SFN timeout catch — shared resolveHitlItem)
+    const expireHitlItemFn = new NodejsFunction(this, 'ExpireHitlItemFn', {
+      entry: 'services/agents/shared/expire-hitl-item.ts',
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      bundling: { externalModules: [], target: 'node22' },
+      environment: {
+        TABLE_NAME: props.tableName,
+        POWERTOOLS_SERVICE_NAME: 'expire-hitl-item',
+      },
+    });
+
     // ─── ExecuteWriteback Lambda (T-8a/T-8b) ───────────────────────────────
     const executeWritebackLambda = new NodejsFunction(this, 'ExecuteWritebackFn', {
       entry: 'services/agents/shared/execute-writeback.ts',
@@ -451,35 +466,15 @@ export class AiStack extends cdk.Stack {
     // Timeout: a 7d unanswered approval previously failed the execution and
     // left the DDB item PENDING forever — the approval queue card stayed
     // clickable but the task token was dead, so APPROVE 404'd. Catch
-    // States.Timeout → mark the item EXPIRED directly via DynamoDB
-    // integration (no Lambda needed for one UpdateItem).
-    const markExpired = new sfn.CustomState(this, 'MarkExpired', {
-      stateJson: {
-        Type: 'Task',
-        Resource: 'arn:aws:states:::aws-sdk:dynamodb:updateItem',
-        Parameters: {
-          TableName: props.tableName,
-          Key: {
-            PK: { 'S.$': "States.Format('TENANT#{}#HITL', $.tenantId)" },
-            SK: { 'S.$': "States.Format('PENDING#{}', $.hitlItemId)" },
-          },
-          UpdateExpression:
-            'SET #status = :expired, resolvedAt = :now, approver = :system REMOVE GSI9PK, GSI9SK',
-          ExpressionAttributeNames: { '#status': 'status' },
-          ExpressionAttributeValues: {
-            ':expired': { S: 'EXPIRED' },
-            ':pending': { S: 'PENDING' },
-            ':now': { 'S.$': '$$.State.EnteredTime' },
-            ':system': { S: 'sfn-timeout' },
-          },
-          // Only flip a still-pending item — never overwrite a resolution
-          // that raced in just before the token died.
-          ConditionExpression: '#status = :pending',
-          ResultPath: sfn.JsonPath.DISCARD,
-        },
-      },
+    // States.Timeout → ExpireHitlItem flips the item through the shared
+    // resolveHitlItem path (TIMED_OUT + 30-day ttl + GSI9 removal — same
+    // vocabulary the resolver-side timeout path uses; a second hand-rolled
+    // UpdateItem would drift vocabulary and never TTL-expire).
+    const expireHitlItem = new tasks.LambdaInvoke(this, 'ExpireHitlItem', {
+      lambdaFunction: expireHitlItemFn,
+      outputPath: '$.Payload',
     });
-    waitForApproval.addCatch(markExpired, {
+    waitForApproval.addCatch(expireHitlItem, {
       errors: ['States.Timeout'],
       resultPath: '$.timeoutError',
     });
@@ -510,8 +505,9 @@ export class AiStack extends cdk.Stack {
     // No wildcard addPermission. No other principal may invoke ExecuteWriteback.
     storeTokenLambda.grantInvoke(hitlStateMachine.role);
     executeWritebackLambda.grantInvoke(hitlStateMachine.role);
-    // MarkExpired writes the HITL item directly via the dynamodb integration.
-    hitlStateMachine.role.addToPrincipalPolicy(
+    expireHitlItemFn.grantInvoke(hitlStateMachine.role);
+    // ExpireHitlItem writes the HITL item via the shared resolveHitlItem path.
+    expireHitlItemFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['dynamodb:UpdateItem'],
         resources: [props.tableArn],
@@ -523,6 +519,7 @@ export class AiStack extends cdk.Stack {
         },
       }),
     );
+    props.dynamodbKey.grantEncryptDecrypt(expireHitlItemFn);
 
     // ─── New SQS Queues + DLQs (DocStudio, LeadAuditor, ControlTower) ──────
     const docStudioDlq = this.createStdDlq('DocStudioDlq');
@@ -1370,9 +1367,16 @@ export class AiStack extends cdk.Stack {
       lambdaFunction: markRunFailedFn,
       outputPath: '$.Payload',
     });
-    seedTask.addCatch(markRunFailed, { errors: ['States.ALL'], resultPath: '$.stageError' });
-    composeMap.addCatch(markRunFailed, { errors: ['States.ALL'], resultPath: '$.stageError' });
-    finalizeTask.addCatch(markRunFailed, { errors: ['States.ALL'], resultPath: '$.stageError' });
+    // MarkRunFailed is a catch target — without a terminal Fail it would
+    // swallow the error and report the execution SUCCEEDED.
+    const runFailed = new sfn.Fail(this, 'RunFailed', {
+      error: 'StageError',
+      causePath: sfn.JsonPath.stringAt('$.stageError'),
+    });
+    const markRunFailedThenFail = markRunFailed.next(runFailed);
+    seedTask.addCatch(markRunFailedThenFail, { errors: ['States.ALL'], resultPath: '$.stageError' });
+    composeMap.addCatch(markRunFailedThenFail, { errors: ['States.ALL'], resultPath: '$.stageError' });
+    finalizeTask.addCatch(markRunFailedThenFail, { errors: ['States.ALL'], resultPath: '$.stageError' });
 
     const docGenStateMachine = new sfn.StateMachine(this, 'DocGenStateMachine', {
       stateMachineName: `cumplify-docgen-${envConfig.envName}`,

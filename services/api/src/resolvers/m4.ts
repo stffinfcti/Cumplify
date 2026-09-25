@@ -31,6 +31,10 @@ import {
 
 const logger = new Logger({ serviceName: 'resolver-m4' });
 
+// Audit ledger is a privileged read surface (approver subs, justifications,
+// execution ARNs): admins + auditors only — plain Employees are gated out.
+const AUDIT_TRAIL_ROLES = new Set(['InternalAuditor', 'ExternalAuditor']);
+
 interface AppSyncEvent {
   info: { fieldName: string };
   arguments: Record<string, unknown>;
@@ -432,10 +436,7 @@ async function listCalibrationsDue(event: AppSyncEvent, tenantId: string) {
  * upgrade path if that ever matters in practice.
  */
 async function getAuditTrail(event: AppSyncEvent, tenantId: string, ctx: ResolverContext) {
-  // Audit ledger is a privileged read surface (approver subs, justifications,
-  // execution ARNs): admins + auditors only — plain Employees are gated out.
-  const auditRoles = new Set(['InternalAuditor', 'ExternalAuditor']);
-  if (ctx.poolClass !== 'tenant-admin' && !auditRoles.has(ctx.role)) {
+  if (ctx.poolClass !== 'tenant-admin' && !AUDIT_TRAIL_ROLES.has(ctx.role)) {
     throw new Error('FORBIDDEN: audit trail requires admin or auditor role');
   }
 

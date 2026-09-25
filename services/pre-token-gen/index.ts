@@ -19,6 +19,7 @@
  */
 
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
+import { ROLE_PRIORITY } from '../api/src/permissions/role-priority.js';
 
 export interface PreTokenGenEvent {
   readonly request: {
@@ -88,34 +89,6 @@ export async function resolvePoolClass(
   const poolMap = map ?? (await loadPoolClassMap());
   return poolMap[userPoolId] ?? 'unknown';
 }
-
-/**
- * Canonical role precedence — Cognito's groupsToOverride order is NOT
- * priority-ordered, so a multi-group user's role was nondeterministic.
- * Highest-authority membership wins (internal > tenant-admin > tenant-user).
- * Must stay in sync with ROLE_PRIORITY in services/api/src/authorizer.ts.
- */
-const ROLE_PRIORITY: readonly string[] = [
-  // PoolA (internal)
-  'PlatformAdmin',
-  'SecurityOps',
-  'SupportEngineer',
-  'FinanceOps',
-  // PoolB (tenant-admin)
-  'TopManagement',
-  'IMSLead',
-  'QualityManager',
-  'EHSManager',
-  'DocumentController',
-  // PoolC (tenant-user)
-  'InternalAuditor',
-  'ProcessOwner',
-  'Supervisor',
-  'PartnerConsultant',
-  'Contractor',
-  'Employee',
-  'ExternalAuditor',
-];
 
 /**
  * Resolve the user's role from Cognito group membership.

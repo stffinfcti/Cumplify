@@ -21,9 +21,19 @@ import { useAuth } from './auth-context';
 
 // Lazy client — generateClient() at module scope runs during prerender/import
 // before Amplify is configured; create it on first subscribe instead.
-let client: ReturnType<typeof generateClient> | null = null;
+// Referencing the real `ReturnType<typeof generateClient>` (even inside a
+// cast) trips TS2321 on Amplify v6's deeply-conditional V6Client — keep a
+// minimal structural shape; only `.graphql` is used, at one casted site.
+type ApiClient = {
+  graphql: (options: {
+    query: unknown;
+    variables?: Record<string, unknown>;
+    authToken?: string;
+  }) => unknown;
+};
+let client: ApiClient | null = null;
 function getClient() {
-  client ??= generateClient();
+  client ??= generateClient() as unknown as ApiClient;
   return client;
 }
 

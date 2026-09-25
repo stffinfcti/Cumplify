@@ -80,14 +80,23 @@ export function extractFindings(auditJson: {
 
 function main(): void {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const allowlist = JSON.parse(
-    readFileSync(path.join(here, 'audit-allowlist.json'), 'utf8'),
-  ) as AllowlistEntry[];
+  // Optional package dir (e.g. `frontend`): audits that package's lockfile and
+  // reads its own audit-allowlist.json. Default = repo root.
+  const dirArg = process.argv[2];
+  const auditDir = dirArg ? path.resolve(here, '..', dirArg) : path.resolve(here, '..');
+  const allowlistPath = dirArg
+    ? path.join(auditDir, 'audit-allowlist.json')
+    : path.join(here, 'audit-allowlist.json');
+  const allowlist = JSON.parse(readFileSync(allowlistPath, 'utf8')) as AllowlistEntry[];
 
   // npm audit exits non-zero when vulnerabilities exist — capture stdout anyway.
   let raw: string;
   try {
-    raw = execSync('npm audit --json', { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+    raw = execSync('npm audit --json', {
+      cwd: auditDir,
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+    });
   } catch (e) {
     raw = (e as { stdout?: string }).stdout ?? '';
   }
@@ -95,7 +104,7 @@ function main(): void {
   const { blocked, waived, expired } = decide(findings, allowlist, new Date());
 
   for (const w of waived) {
-    console.log(`WAIVED  ${w.advisory} (${w.module}) — allowlisted, see scripts/audit-allowlist.json`);
+    console.log(`WAIVED  ${w.advisory} (${w.module}) — allowlisted, see ${allowlistPath}`);
   }
   for (const x of expired) {
     console.error(`EXPIRED allowlist entry ${x.advisory} (${x.module}) — expired ${x.expires}; revisit or renew with justification`);

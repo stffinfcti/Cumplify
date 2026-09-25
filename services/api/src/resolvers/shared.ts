@@ -320,7 +320,7 @@ export function extractAgentContext(
  * characters at the resolver boundary so they can never reach AssumeRole.
  */
 const TENANT_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
-function assertTenantIdSafe(tenantId: string): void {
+export function assertTenantIdSafe(tenantId: string): void {
   if (!TENANT_ID_RE.test(tenantId)) {
     throw new Error('Invalid tenantId format — authorization failed');
   }

@@ -820,6 +820,7 @@
       "removeSite": "Remove",
       "employeeCountInvalid": "Employee count must be a positive whole number",
       "yearFoundedInvalid": "Year founded is out of range",
+      "legalNameRequired": "Legal name is required",
       "saveError": "Failed to save profile"
     },
     "registry": {

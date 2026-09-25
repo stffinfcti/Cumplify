@@ -444,6 +444,7 @@ async function publishControlledDocument(event: AppSyncEvent, tenantId: string, 
     const result = await txn.execute(
       `UPDATE m1.documents d SET status = 'approved', updated_at = NOW()
        FROM m1.document_versions v WHERE v.id = :versionId::uuid AND v.document_id = d.id
+         AND d.status <> 'obsolete'
        RETURNING d.*`,
       [{ name: 'versionId', value: { stringValue: versionId } }],
     );

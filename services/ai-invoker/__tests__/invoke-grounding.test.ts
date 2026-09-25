@@ -61,6 +61,7 @@ vi.stubEnv('RECORDWRITE_GUARDRAIL_ID', 'rw-guardrail-id');
 vi.stubEnv('RECORDWRITE_GUARDRAIL_VERSION', '1');
 
 const { invoke } = await import('../src/index.js');
+const { resetWeightsCache } = await import('../src/metering.js');
 
 // Helper: mock a successful Converse response
 function mockConverseResponse(text: string) {
@@ -105,6 +106,8 @@ describe('invoke() grounding orchestration (Task 13)', () => {
     mockConverseSend.mockReset();
     mockDdbSend.mockReset();
     mockEbSend.mockReset();
+    // weightsCache is module-level — isolate per-call DDB queries between its
+    resetWeightsCache();
 
     // DDB: credit pre-check passes + loadWeights returns valid weights
     mockDdbSend.mockImplementation((cmd: any) => {

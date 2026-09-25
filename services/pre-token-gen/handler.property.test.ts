@@ -111,6 +111,18 @@ describe('PreTokenGen handler (property-based)', () => {
     );
   });
 
+  it('multi-group users get the highest-priority role regardless of group order', () => {
+    expect(resolveRole(['Employee', 'PlatformAdmin']).role).toBe('PlatformAdmin');
+    expect(resolveRole(['PlatformAdmin', 'Employee']).role).toBe('PlatformAdmin');
+    expect(resolveRole(['Contractor', 'TopManagement', 'Employee']).role).toBe('TopManagement');
+    expect(resolveRole(['Employee', 'ExternalAuditor']).role).toBe('Employee');
+  });
+
+  it('duplicate groups in the input do not affect role resolution', () => {
+    expect(resolveRole(['PlatformAdmin', 'PlatformAdmin']).role).toBe('PlatformAdmin');
+    expect(resolveRole(['Employee', 'Employee', 'Contractor']).role).toBe('Contractor');
+  });
+
   it('role falls back to Employee when groups are empty or undefined', () => {
     fc.assert(
       fc.property(fc.oneof(fc.constant(undefined), fc.constant([] as string[])), (groups) => {

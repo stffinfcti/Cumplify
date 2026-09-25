@@ -14,6 +14,7 @@
 
 import { Logger } from '@aws-lambda-powertools/logger';
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
+import { ROLE_PRIORITY } from './permissions/role-priority.js';
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 
 const logger = new Logger({ serviceName: 'api-authorizer' });
@@ -64,33 +65,6 @@ interface TokenClaims extends JWTPayload {
   token_use?: string;
   sub?: string;
 }
-
-/**
- * Canonical role precedence — must stay in sync with ROLE_PRIORITY in
- * services/pre-token-gen/index.ts. Cognito's groups claim order is not
- * priority-ordered, so groups[0] was nondeterministic for multi-group users.
- */
-const ROLE_PRIORITY: readonly string[] = [
-  // PoolA (internal)
-  'PlatformAdmin',
-  'SecurityOps',
-  'SupportEngineer',
-  'FinanceOps',
-  // PoolB (tenant-admin)
-  'TopManagement',
-  'IMSLead',
-  'QualityManager',
-  'EHSManager',
-  'DocumentController',
-  // PoolC (tenant-user)
-  'InternalAuditor',
-  'ProcessOwner',
-  'Supervisor',
-  'PartnerConsultant',
-  'Contractor',
-  'Employee',
-  'ExternalAuditor',
-];
 
 /**
  * Reads tenant entitlement from CumplifyCore (PK=TENANT#<tenantId>#META, SK=PLAN).

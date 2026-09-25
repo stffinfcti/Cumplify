@@ -149,6 +149,38 @@ export default function DocumentsPage() {
     if (chipDraft) setDrawerOpen(true);
   }, [chipDraft]);
 
+  // ─── Detail view ───────────────────────────────────────────────────────────
+  const openDetail = useCallback(async (doc: Document) => {
+    setSelectedDoc(doc);
+    setDetailLoading(true);
+    setDocumentContent(null);
+    router.replace(`?doc=${doc.id}`, { scroll: false });
+
+    try {
+      const vData = await query<{ listDocumentVersions: DocumentVersion[] }>(LIST_VERSIONS, {
+        documentId: doc.id,
+      });
+      setVersions(vData.listDocumentVersions);
+
+      if (vData.listDocumentVersions.length > 0) {
+        // "latest" = max(versionNo) — never assume the API returns sorted rows
+        const latest = [...vData.listDocumentVersions].sort((a, b) => b.versionNo - a.versionNo)[0];
+        try {
+          const cData = await query<{ getDocumentContent: string }>(GET_CONTENT, {
+            versionId: latest.id,
+          });
+          setDocumentContent(cData.getDocumentContent);
+        } catch {
+          // Content may not be available — graceful
+        }
+      }
+    } catch {
+      // Non-critical
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [router, query]);
+
   // URL-sync for detail: a shared ?doc=<id> link restores the detail view
   // once the document list has loaded (the param must map to a real row).
   const docParam = searchParams.get('doc');
@@ -157,7 +189,7 @@ export default function DocumentsPage() {
       const match = docs.find((d) => d.id === docParam);
       if (match) void openDetail(match);
     }
-  }, [docParam, docs, selectedDoc]);
+  }, [docParam, docs, selectedDoc, openDetail]);
 
   const effectiveStandard = isIMS ? localFilterStandard : globalStandard;
 
@@ -218,38 +250,6 @@ export default function DocumentsPage() {
     }
     return groups;
   }, [docs, hasClauseRefs, t]);
-
-  // ─── Detail view ───────────────────────────────────────────────────────────
-  async function openDetail(doc: Document) {
-    setSelectedDoc(doc);
-    setDetailLoading(true);
-    setDocumentContent(null);
-    router.replace(`?doc=${doc.id}`, { scroll: false });
-
-    try {
-      const vData = await query<{ listDocumentVersions: DocumentVersion[] }>(LIST_VERSIONS, {
-        documentId: doc.id,
-      });
-      setVersions(vData.listDocumentVersions);
-
-      if (vData.listDocumentVersions.length > 0) {
-        // "latest" = max(versionNo) — never assume the API returns sorted rows
-        const latest = [...vData.listDocumentVersions].sort((a, b) => b.versionNo - a.versionNo)[0];
-        try {
-          const cData = await query<{ getDocumentContent: string }>(GET_CONTENT, {
-            versionId: latest.id,
-          });
-          setDocumentContent(cData.getDocumentContent);
-        } catch {
-          // Content may not be available — graceful
-        }
-      }
-    } catch {
-      // Non-critical
-    } finally {
-      setDetailLoading(false);
-    }
-  }
 
   function closeDetail() {
     setSelectedDoc(null);

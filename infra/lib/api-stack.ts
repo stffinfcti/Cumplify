@@ -636,7 +636,14 @@ export class ApiStack extends cdk.Stack {
     // an env the resolver throws STRIPE_NOT_CONFIGURED (billing stays inert).
     const stripeSecret = secretsmanager.Secret.fromSecretNameV2(this, 'StripeSecret', stripeSecretName);
     stripeSecret.grantRead(billingFn);
-    stripeSecret.grantWrite(billingFn);
+    // persistCustomerMapping needs only PutSecretValue — grantWrite would also
+    // allow RotateSecret/UpdateSecret/CancelRotation on the shared Stripe key.
+    billingFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['secretsmanager:PutSecretValue'],
+        resources: [stripeSecret.secretArn],
+      }),
+    );
 
     // Lambda data sources — one per module
     const m1DS = api.addLambdaDataSource('M1DataSource', resolverFns[0]);

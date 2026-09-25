@@ -88,10 +88,12 @@ export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
     }
   }
 
-  /** The resolver's 409 means this item was resolved on another surface —
-   * the card is stale, so prune it instead of leaving a dead card up. */
+  /** The resolver's 409/410 means this item was resolved on another surface
+   * or its SFN task expired — the card is stale either way, so prune it
+   * instead of leaving a dead card up. */
   function pruneIfAlreadyResolved(err: unknown) {
-    if ((err as Error).message?.includes('already resolved')) {
+    const msg = (err as Error).message ?? '';
+    if (msg.includes('already resolved') || msg.includes('expired or does not exist')) {
       onRemove?.(item.hitlItemId);
     }
   }

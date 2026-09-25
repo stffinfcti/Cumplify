@@ -820,6 +820,7 @@
       "removeSite": "Eliminar",
       "employeeCountInvalid": "El número de empleados debe ser un entero positivo",
       "yearFoundedInvalid": "El año de fundación está fuera de rango",
+      "legalNameRequired": "La razón social es obligatoria",
       "saveError": "Error al guardar el perfil"
     },
     "registry": {

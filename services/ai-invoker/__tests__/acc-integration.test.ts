@@ -65,6 +65,7 @@ vi.stubEnv('ARADVISORY_GUARDRAIL_ID', 'ar-advisory-guardrail-id');
 vi.stubEnv('ARADVISORY_GUARDRAIL_VERSION', '1');
 
 const { invoke } = await import('../src/index.js');
+const { resetWeightsCache } = await import('../src/metering.js');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -116,6 +117,8 @@ beforeEach(() => {
   mockConverseSend.mockReset();
   mockDdbSend.mockReset();
   mockEbSend.mockReset();
+  // weightsCache is module-level — isolate per-call DDB queries between its
+  resetWeightsCache();
 
   // DDB: credit pre-check passes + loadWeights returns valid weights
   mockDdbSend.mockImplementation((cmd: any) => {

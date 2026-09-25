@@ -7,7 +7,7 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { resolve, join, dirname } from 'node:path';
+import { basename, resolve, join, dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
@@ -160,7 +160,7 @@ function checkPropertyTests(): string | null {
     const dir = join(servicesDir, entry);
     if (!statSync(dir).isDirectory()) continue;
 
-    const allFiles = [...walkFiles(dir)].map((f) => f.split('/').pop() ?? f);
+    const allFiles = [...walkFiles(dir)].map((f) => basename(f));
 
     // Check if the subtree has source .ts files
     const sourceFiles = allFiles.filter(

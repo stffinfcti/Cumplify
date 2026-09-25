@@ -143,6 +143,10 @@ export default function QmsPage() {
   const [saveError, setSaveError] = useState('');
 
   async function handleSaveProfile() {
+    if (!profile.legalName.trim()) {
+      setSaveError(tWizard('legalNameRequired'));
+      return;
+    }
     // Validate required numerics before mutate — Number(v)||0 turns 'abc'
     // into a silent 0 the server then stores as the org's real headcount.
     if (!Number.isInteger(profile.employeeCount) || profile.employeeCount <= 0) {

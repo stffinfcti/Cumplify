@@ -422,11 +422,13 @@ describe('AiStack', () => {
       const catches = wait.Catch as Array<{ ErrorEquals: string[]; Next: string }>;
       const sentBack = catches.find((c) => c.ErrorEquals.includes('SENT_BACK'));
       expect(sentBack?.Next).toBe('HandleSendBack');
-      // States.Timeout → MarkExpired: a dead task token must not leave the
-      // HITL item PENDING forever (dynamodb:updateItem direct integration).
+      // States.Timeout → ExpireHitlItem: a dead task token must not leave the
+      // HITL item PENDING forever — resolved via the shared resolveHitlItem
+      // Lambda path (TIMED_OUT + ttl + GSI9 removal).
       const timeout = catches.find((c) => c.ErrorEquals.includes('States.Timeout'));
-      expect(timeout?.Next).toBe('MarkExpired');
-      expect(asl.States.MarkExpired).toBeDefined();
+      expect(timeout?.Next).toBe('ExpireHitlItem');
+      expect(asl.States.ExpireHitlItem).toBeDefined();
+      expect(asl.States.ExpireHitlItem.Type).toBe('Task');
     });
 
     it('exports GuardrailId', () => {
@@ -879,6 +881,17 @@ describe('spec-40 DocGen generation plane (Task 5)', () => {
     ).replace(/\\"/g, '"');
     expect(def).toContain('"MaxConcurrency":4');
     expect(def).toContain('$.sections');
+    // MarkRunFailed must end in a Fail state — a bare LambdaInvoke catch
+    // target swallows the error and reports the execution SUCCEEDED.
+    const raw =
+      typeof (docgen.Properties as any).DefinitionString === 'string'
+        ? (docgen.Properties as any).DefinitionString
+        : (docgen.Properties as any).DefinitionString['Fn::Join'][1]
+            .map((p: unknown) => (typeof p === 'string' ? p : 'ARN'))
+            .join('');
+    const asl = JSON.parse(raw);
+    expect(asl.States.MarkRunFailed?.Next).toBe('RunFailed');
+    expect(asl.States.RunFailed?.Type).toBe('Fail');
   });
 
   it('ComposeSection reaches Bedrock ONLY via the invoker (one door): lambda:InvokeFunction granted, no bedrock:InvokeModel on its role', () => {
