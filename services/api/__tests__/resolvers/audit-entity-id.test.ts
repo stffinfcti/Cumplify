@@ -68,7 +68,7 @@ function makeEvent(fieldName: string, args: Record<string, unknown> = {}) {
   return {
     info: { fieldName },
     arguments: args,
-    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-test' } },
+    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-test', role: 'IMSLead' } },
   };
 }
 
@@ -131,7 +131,7 @@ describe('entityId = returned-row id (marshal-first sites)', () => {
     await m3Handler(
       makeEvent('scheduleAudit', {
         input: {
-          programmeId: 'prog-uuid-7',
+          programmeId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d',
           standard: 'ISO9001',
           scope: 's',
           leadAuditorId: 'aud-1',

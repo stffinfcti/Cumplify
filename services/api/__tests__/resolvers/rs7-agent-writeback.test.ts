@@ -83,6 +83,65 @@ describe('extractAgentContext — SCHEMA-5 narrow exception (RS-7)', () => {
   });
 });
 
+describe('extractAgentContext — IAM session-tag tenant binding (RS-7a)', () => {
+  it('accepts when the principal session name carries the matching tenant', async () => {
+    const result = await m3Handler({
+      info: { fieldName: 'agentScoreReadiness' },
+      arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
+      identity: {
+        userArn: 'arn:aws:sts::123456789012:assumed-role/writeback-role/tenant-tenant-abc',
+      },
+    });
+    expect(result).toEqual([]);
+  });
+
+  it('rejects a mismatched tenant-<id> session name', async () => {
+    await expect(
+      m3Handler({
+        info: { fieldName: 'agentScoreReadiness' },
+        arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
+        identity: {
+          userArn: 'arn:aws:sts::123456789012:assumed-role/writeback-role/tenant-other-tenant',
+        },
+      }),
+    ).rejects.toThrow('FORBIDDEN');
+  });
+
+  it('accepts a resolver-<first8>-<epoch> session whose prefix matches', async () => {
+    const result = await m3Handler({
+      info: { fieldName: 'agentScoreReadiness' },
+      arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
+      identity: {
+        userArn: 'arn:aws:sts::123456789012:assumed-role/tenant-data-role/resolver-tenant-a-1750000000',
+      },
+    });
+    expect(result).toEqual([]);
+  });
+
+  it('rejects a resolver-<first8>-<epoch> session with a different tenant prefix', async () => {
+    await expect(
+      m3Handler({
+        info: { fieldName: 'agentScoreReadiness' },
+        arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
+        identity: {
+          userArn: 'arn:aws:sts::123456789012:assumed-role/tenant-data-role/resolver-zzzzzzzz-1750000000',
+        },
+      }),
+    ).rejects.toThrow('FORBIDDEN');
+  });
+
+  it('no tenant marker on the principal → charset check alone (where-available escape)', async () => {
+    const result = await m3Handler({
+      info: { fieldName: 'agentScoreReadiness' },
+      arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
+      identity: {
+        userArn: 'arn:aws:sts::123456789012:assumed-role/writeback-role/agent-session-01',
+      },
+    });
+    expect(result).toEqual([]);
+  });
+});
+
 describe('agentDraftDocument (m1, DocStudio) — direct write', () => {
   it('creates document + version 1 in one transaction, no HITL gate', async () => {
     mockExecute
@@ -241,7 +300,7 @@ describe('agentGenerateChecklist (m3, LeadAuditor) — delegates to generateAudi
       .mockResolvedValueOnce({ records: [[{ stringValue: 'chk-1' }]], columnMetadata: [{ name: 'id' }] })
       .mockResolvedValueOnce(EMPTY_RESULT);
 
-    await m3Handler(makeAgentEvent('agentGenerateChecklist', { auditId: 'audit-1', tenantId: 'tenant-agent' }));
+    await m3Handler(makeAgentEvent('agentGenerateChecklist', { auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d', tenantId: 'tenant-agent' }));
     // Same internal function as generateAuditChecklist — SQL shape assertions
     // live in m3-m4-m5-fixes.test.ts; here we assert it ran at all under the
     // agent path with actor 'agent:LeadAuditor'.
@@ -298,7 +357,7 @@ describe('agentScoreReadiness (m3, LeadAuditor) — upsert from generation-secti
 });
 
 describe('agentAssessRisk (m5, RiskSentinel) — direct write, updates existing risk', () => {
-  it('updates likelihood/severity, refreshes the register view same-transaction', async () => {
+  it('updates likelihood/severity, refreshes the register view post-commit', async () => {
     const riskRow = [
       { stringValue: 'risk-1' },
       { stringValue: 'tenant-agent' },
@@ -349,8 +408,9 @@ describe('agentAssessRisk (m5, RiskSentinel) — direct write, updates existing 
     expect(updateSql).toContain('UPDATE m5.risks SET likelihood = :likelihood, severity = :severity');
     expect(updateParams).toContainEqual({ name: 'likelihood', value: { longValue: 4 } });
 
+    // Refresh now runs post-commit in a second transaction (MV lock isolation).
     expect(mockExecute.mock.calls[1][0]).toContain('m5_views.refresh_risk_register_view()');
-    expect(mockCommit).toHaveBeenCalledOnce();
+    expect(mockCommit).toHaveBeenCalledTimes(2);
 
     expect(mockPublishAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({

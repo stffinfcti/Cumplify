@@ -69,6 +69,15 @@ const COGNITO_GROUP_ROLES: Record<string, string> = {
   EHSManager: 'ehs-manager',
   DocumentController: 'document-controller',
   Employee: 'employee',
+  // Auditor/supervisory groups (AUDIT_TRAIL_ROLES uses these verbatim — proof
+  // the Cognito groups are PascalCase). Without the mapping an InternalAuditor
+  // 403s their own M3 surface.
+  InternalAuditor: 'internal-auditor',
+  ExternalAuditor: 'external-auditor',
+  Supervisor: 'supervisor',
+  ProcessOwner: 'process-owner',
+  Contractor: 'contractor',
+  PartnerConsultant: 'partner-consultant',
 };
 
 /** Map a raw custom:role claim (Cognito group name or slug) to a matrix key. */

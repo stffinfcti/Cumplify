@@ -34,7 +34,7 @@ describe('credit-precheck', () => {
 
   it('skips pre-check when creditExempt is true (incident/HITL exemption)', async () => {
     // Should not call DynamoDB at all
-    await expect(checkCreditBalance('tenant-1', true)).resolves.toBeUndefined();
+    await expect(checkCreditBalance('tenant-1', true)).resolves.toEqual({});
     expect(mockSend).not.toHaveBeenCalled();
   });
 
@@ -52,7 +52,9 @@ describe('credit-precheck', () => {
       },
     });
 
-    await expect(checkCreditBalance('tenant-1', false)).resolves.toBeUndefined();
+    await expect(checkCreditBalance('tenant-1', false)).resolves.toEqual({
+      hardCap: 30000,
+    });
   });
 
   it('throws PAUSED_FOR_CREDITS when grant exhausted (no auto-refill)', async () => {
@@ -88,7 +90,7 @@ describe('credit-precheck', () => {
       },
     });
 
-    await expect(checkCreditBalance('tenant-1', false)).resolves.toBeUndefined();
+    await expect(checkCreditBalance('tenant-1', false)).resolves.toEqual({});
   });
 
   it('does not block when paygoEnabled even past grant (F-6: serve overage)', async () => {
@@ -103,7 +105,7 @@ describe('credit-precheck', () => {
       },
     });
 
-    await expect(checkCreditBalance('tenant-1', false)).resolves.toBeUndefined();
+    await expect(checkCreditBalance('tenant-1', false)).resolves.toEqual({});
   });
 
   it('blocks trial (no paygo) when past grant (F-6)', async () => {
@@ -133,7 +135,9 @@ describe('credit-precheck', () => {
     });
     mockSend.mockResolvedValueOnce({ Item: undefined }); // no entitlement
 
-    await expect(checkCreditBalance('tenant-1', false)).resolves.toBeUndefined();
+    await expect(checkCreditBalance('tenant-1', false)).resolves.toEqual({
+      hardCap: 15000,
+    });
   });
 
   it('blocks on trial defaults when exhausted', async () => {
@@ -143,5 +147,21 @@ describe('credit-precheck', () => {
     mockSend.mockResolvedValueOnce({ Item: undefined }); // no entitlement
 
     await expect(checkCreditBalance('tenant-1', false)).rejects.toThrow(InvokeError);
+  });
+
+  it('resolves the launch grant as the hard cap for conditional writes (TOCTOU)', async () => {
+    mockSend.mockResolvedValueOnce({
+      Item: { creditsUsed: { N: '29900' } },
+    });
+    mockSend.mockResolvedValueOnce({
+      Item: {
+        monthlyGrant: { N: '30000' },
+        paygoEnabled: { BOOL: false },
+        planTier: { S: 'launch' },
+      },
+    });
+
+    const cap = await checkCreditBalance('tenant-1', false);
+    expect(cap.hardCap).toBe(30000);
   });
 });

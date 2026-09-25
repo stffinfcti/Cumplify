@@ -299,10 +299,18 @@ export function extractContext(event: {
  * tenantId is an explicit, required argument on these six mutations only —
  * never extend this pattern to an @aws_lambda (human-facing) mutation.
  * actor is always 'agent:<agentName>' — there is no human sub on this path.
+ *
+ * Tenant binding (RS-7a): beyond assertTenantIdSafe, when the IAM principal's
+ * assumed-role session name carries a tenant marker (see
+ * iamSessionTenantHint), the input tenantId MUST match it — a mismatch is
+ * rejected, never trusted. STS session tags are not exposed on the AppSync
+ * IAM identity, so when no marker is derivable the check is absent
+ * ("where available") and the tenant-scoped IAM role remains the binding.
  */
 export function extractAgentContext(
   args: Record<string, unknown>,
   agentName: string,
+  identity?: { userArn?: string; username?: string },
 ): { tenantId: string; actor: string } {
   const tenantId = (args.tenantId ?? (args.input as Record<string, unknown> | undefined)?.tenantId) as
     | string
@@ -311,7 +319,54 @@ export function extractAgentContext(
     throw new Error('Missing tenantId — required on every agent* mutation input (RS-7)');
   }
   assertTenantIdSafe(tenantId);
+
+  const hint = iamSessionTenantHint(identity);
+  if (hint && hint !== tenantId && !tenantId.startsWith(hint)) {
+    throw new Error(
+      `FORBIDDEN: input.tenantId does not match the calling principal's tenant session tag`,
+    );
+  }
   return { tenantId, actor: `agent:${agentName}` };
+}
+
+/**
+ * Derive the tenant marker embedded in an IAM principal's assumed-role
+ * session name, when one exists. AppSync surfaces the IAM identity as
+ * `userArn` = arn:aws:sts::<acct>:assumed-role/<roleName>/<sessionName> and
+ * `username` = <roleId>:<sessionName>. Tenant-scoped callers stamp the
+ * tenant into the session name by convention:
+ *   - `tenant-<tenantId>`          → full tenantId
+ *   - `resolver-<first8>-<epoch>`  → tenant-data resolver sessions
+ *     (getTenantDdbClient's RoleSessionName), first 8 chars of tenantId
+ * Any other session name yields no hint — the caller is not tenant-bound
+ * by name and the input charset check stands alone.
+ */
+const SESSION_TENANT_PATTERNS: RegExp[] = [
+  /^tenant-([A-Za-z0-9-]{1,64})$/,
+  /^resolver-([A-Za-z0-9-]{1,8})-\d+$/,
+];
+
+export function iamSessionTenantHint(identity?: {
+  userArn?: string;
+  username?: string;
+}): string | undefined {
+  let sessionName: string | undefined;
+  const userArn = identity?.userArn;
+  if (userArn) {
+    const m = /^arn:aws[a-z-]*:sts::\d+:assumed-role\/[^/]+\/(.+)$/.exec(userArn);
+    sessionName = m?.[1];
+  }
+  if (!sessionName && identity?.username) {
+    // Cognito IAM identity carries <roleId>:<sessionName> in username.
+    const colon = identity.username.indexOf(':');
+    if (colon > 0) sessionName = identity.username.slice(colon + 1);
+  }
+  if (!sessionName) return undefined;
+  for (const re of SESSION_TENANT_PATTERNS) {
+    const m = re.exec(sessionName);
+    if (m?.[1]) return m[1];
+  }
+  return undefined;
 }
 
 /**
@@ -324,6 +379,23 @@ export function assertTenantIdSafe(tenantId: string): void {
   if (!TENANT_ID_RE.test(tenantId)) {
     throw new Error('Invalid tenantId format — authorization failed');
   }
+}
+
+// ─── Module role gate (M-effort, Part 13 floor+matrix) ───────────────────────
+import { canApprove } from '../permissions/role-matrix.js';
+
+/**
+ * Server-side role gate for module write mutations — the same canApprove()
+ * matrix hitl-approval.ts uses to approve HITL items. Apply at resolver entry:
+ *   return requireModuleRole(ctx.role, 'M2', () => raiseNonconformity(...))
+ * Unknown/missing role → UNAUTHORIZED (deny-by-default, mirroring
+ * m4.getAuditTrail's AUDIT_TRAIL_ROLES fail-closed shape).
+ */
+export function requireModuleRole<T>(role: string, module: string, fn: () => T): T {
+  if (!canApprove(role, module)) {
+    throw new Error('UNAUTHORIZED');
+  }
+  return fn();
 }
 
 export { TABLE_NAME, BUS_NAME, CLUSTER_ARN, Logger };
@@ -501,4 +573,46 @@ export function marshalMany(result: DataApiResult): Record<string, unknown>[] {
  */
 export function jsonOut(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value;
+}
+
+// ─── AWSJSON boundary validation (M-effort, item 8) ──────────────────────────
+import { z } from 'zod';
+
+/**
+ * Recursive JSON value — the declared shape of every free-form AWSJSON slot.
+ */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(JsonValueSchema),
+    z.record(z.string(), JsonValueSchema),
+  ]),
+);
+
+/**
+ * Parse + shape-check an AWSJSON mutation input at the resolver boundary.
+ * AWSJSON arrives parsed (object) from AppSync, as a string from hermetic
+ * fixtures — accept both (same wire-shape class as saveOrgProfile, found
+ * live 2026-07-22). Errors are INVALID_PAYLOAD, mirroring OrgProfileSchema.
+ */
+export function parseAwsJson<T>(schema: z.ZodType<T>, raw: unknown, field: string): T {
+  const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  const result = schema.safeParse(payload);
+  if (!result.success) {
+    throw new Error(
+      `INVALID_PAYLOAD: ${field} failed shape check (${result.error.issues[0]?.message ?? 'invalid'})`,
+    );
+  }
+  return result.data;
 }

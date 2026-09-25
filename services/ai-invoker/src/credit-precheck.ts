@@ -23,16 +23,31 @@ export interface CreditLimit {
 }
 
 /**
+ * The hard cap this check resolved for the tenant, if any.
+ * Callers pass it to incrementMeter so the conditional meter write enforces
+ * the SAME invariant the pre-check just read — closing the check-then-act
+ * TOCTOU where two concurrent invokes could both pass the check and both
+ * ADD past the grant. Absent = unbounded writes (exempt/enterprise/paygo).
+ */
+export interface CreditCap {
+  hardCap?: number;
+}
+
+/**
  * Check if the tenant has credits available.
- * Returns normally if OK. Throws InvokeError('PAUSED_FOR_CREDITS') if exhausted.
+ * Returns the resolved credit cap (empty when the tenant is unbounded).
+ * Throws InvokeError('PAUSED_FOR_CREDITS') if exhausted.
  *
  * @param creditExempt - If true, skip pre-check (incident/HITL exemption)
  */
-export async function checkCreditBalance(tenantId: string, creditExempt: boolean): Promise<void> {
+export async function checkCreditBalance(
+  tenantId: string,
+  creditExempt: boolean,
+): Promise<CreditCap> {
   // SERVE-9: incident-reporting and HITL-approval flows NEVER block on credits
   if (creditExempt) {
     logger.info('Credit pre-check skipped (exempt)', { tenantId });
-    return;
+    return {};
   }
 
   const yyyymm = new Date().toISOString().slice(0, 7).replace('-', '');
@@ -75,7 +90,7 @@ export async function checkCreditBalance(tenantId: string, creditExempt: boolean
         `Tenant ${tenantId} credit balance exhausted (used: ${creditsUsed.toFixed(0)}, grant: ${trialGrant})`,
       );
     }
-    return;
+    return { hardCap: trialGrant };
   }
 
   const monthlyGrant = parseFloat(limitResult.Item.monthlyGrant?.N ?? '0');
@@ -85,14 +100,14 @@ export async function checkCreditBalance(tenantId: string, creditExempt: boolean
   // F-6 OWNER-RESOLVED: serve & bill overage. Logic decoupled from autoRefill.
   // Enterprise: never block (contracted).
   if (planTier === 'enterprise') {
-    return;
+    return {};
   }
 
   // PAYG enabled: serve overage, meter + bill downstream.
   // NOTE: overage now accrues past grant — the telemetry.credits.consumed event
   // is the billing signal; the billing/entitlement consumer must handle overage line-items.
   if (paygoEnabled) {
-    return;
+    return {};
   }
 
   // Trial/Launch without paygo: hard-block at grant ceiling.
@@ -102,4 +117,5 @@ export async function checkCreditBalance(tenantId: string, creditExempt: boolean
       `Tenant ${tenantId} credit balance exhausted (used: ${creditsUsed.toFixed(0)}, grant: ${monthlyGrant})`,
     );
   }
+  return { hardCap: monthlyGrant };
 }

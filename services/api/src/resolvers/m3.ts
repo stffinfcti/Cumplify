@@ -13,6 +13,7 @@ import {
   extractAgentContext,
   beginTenantTransaction,
   publishAuditEvent,
+  requireModuleRole,
   marshalOne,
   marshalMany,
 } from './shared.js';
@@ -24,16 +25,33 @@ const lambdaClient = new LambdaClient({});
 interface AppSyncEvent {
   info: { fieldName: string };
   arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
+  identity?: {
+    resolverContext?: Record<string, string>;
+    userArn?: string;
+    username?: string;
+  };
 }
 
 const AGENT_FIELDS = new Set(['agentGenerateChecklist', 'agentScoreReadiness']);
+
+// M-effort: server-side bound on list queries (mirror forms' LIST_MAX_LIMIT).
+const LIST_QUERY_LIMIT = 500;
+
+// M-effort: every id the resolver casts to ::uuid is validated as a UUID up
+// front — a malformed id gets a clean VALIDATION error instead of a Postgres
+// cast failure (or a silent no-match update).
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+function assertUuid(value: unknown, field: string): asserts value is string {
+  if (typeof value !== 'string' || !UUID_RE.test(value)) {
+    throw new Error(`VALIDATION: ${field} must be a UUID`);
+  }
+}
 
 export async function handler(event: AppSyncEvent): Promise<unknown> {
   // RS-7: agent* (@aws_iam) fields never carry resolverContext — branch
   // BEFORE extractContext, which would throw for them.
   if (AGENT_FIELDS.has(event.info.fieldName)) {
-    const { tenantId, actor } = extractAgentContext(event.arguments, 'LeadAuditor');
+    const { tenantId, actor } = extractAgentContext(event.arguments, 'LeadAuditor', event.identity);
     logger.appendKeys({ tenantId, requestField: event.info.fieldName });
     return event.info.fieldName === 'agentGenerateChecklist'
       ? generateAuditChecklist(event, tenantId, actor) // one implementation, two entry points
@@ -41,18 +59,20 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
   }
 
   const ctx = extractContext(event);
-  const { tenantId, sub } = ctx;
+  const { tenantId, sub, role } = ctx;
   logger.appendKeys({ tenantId, requestField: event.info.fieldName });
 
+  // M-effort: M3 write mutations are role-gated at entry (Part 13 matrix);
+  // queries stay at the authenticated floor.
   switch (event.info.fieldName) {
     case 'createAuditProgramme':
-      return createAuditProgramme(event, tenantId, sub);
+      return requireModuleRole(role, 'M3', () => createAuditProgramme(event, tenantId, sub));
     case 'scheduleAudit':
-      return scheduleAudit(event, tenantId, sub);
+      return requireModuleRole(role, 'M3', () => scheduleAudit(event, tenantId, sub));
     case 'recordFinding':
-      return recordFinding(event, tenantId, sub);
+      return requireModuleRole(role, 'M3', () => recordFinding(event, tenantId, sub));
     case 'completeAudit':
-      return completeAudit(event, tenantId, sub);
+      return requireModuleRole(role, 'M3', () => completeAudit(event, tenantId, sub));
     case 'getAudit':
       return getAudit(event, tenantId);
     case 'listAudits':
@@ -62,11 +82,13 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'listAuditChecklists':
       return listAuditChecklists(event, tenantId);
     case 'runAuditFindings':
-      return runAuditFindings(event, tenantId, sub);
+      return requireModuleRole(role, 'M3', () => runAuditFindings(event, tenantId, sub));
     case 'getAuditReadiness':
       return getAuditReadiness(event, tenantId);
     case 'generateAuditChecklist':
-      return generateAuditChecklist(event, tenantId, sub);
+      return requireModuleRole(role, 'M3', () =>
+        generateAuditChecklist(event, tenantId, sub),
+      );
     default:
       throw new Error(`Unknown field: ${event.info.fieldName}`);
   }
@@ -116,6 +138,7 @@ async function createAuditProgramme(event: AppSyncEvent, tenantId: string, actor
 
 async function scheduleAudit(event: AppSyncEvent, tenantId: string, actor: string) {
   const input = event.arguments.input as Record<string, unknown>;
+  assertUuid(input.programmeId, 'programmeId');
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(
@@ -159,6 +182,10 @@ async function scheduleAudit(event: AppSyncEvent, tenantId: string, actor: strin
 
 async function recordFinding(event: AppSyncEvent, tenantId: string, actor: string) {
   const input = event.arguments.input as Record<string, unknown>;
+  assertUuid(input.auditId, 'auditId');
+  if (input.checklistId !== undefined && input.checklistId !== null) {
+    assertUuid(input.checklistId, 'checklistId');
+  }
   const findingType = mapEnum(FINDING_TYPE_MAP, input.findingType as string, 'findingType');
   const txn = await beginTenantTransaction(tenantId);
   try {
@@ -214,13 +241,19 @@ async function recordFinding(event: AppSyncEvent, tenantId: string, actor: strin
 
 async function completeAudit(event: AppSyncEvent, tenantId: string, actor: string) {
   const id = event.arguments.id as string;
+  assertUuid(id, 'id');
   const txn = await beginTenantTransaction(tenantId);
   try {
+    // M-effort: status predicate rides the UPDATE — a concurrent complete can
+    // no longer double-complete (and double-emit Audit.Completed for) the row.
     const result = await txn.execute(
       `UPDATE m3.audits SET status = 'completed', actual_date = NOW(), updated_at = NOW()
-       WHERE id = :id::uuid RETURNING *`,
+       WHERE id = :id::uuid AND status <> 'completed' RETURNING *`,
       [{ name: 'id', value: { stringValue: id } }],
     );
+    if (!result.records || result.records.length === 0) {
+      throw new Error('AUDIT_NOT_FOUND_OR_ALREADY_COMPLETED');
+    }
     await txn.commit();
     await publishAuditEvent({
       tenantId,
@@ -241,6 +274,7 @@ async function completeAudit(event: AppSyncEvent, tenantId: string, actor: strin
 }
 
 async function getAudit(event: AppSyncEvent, tenantId: string) {
+  assertUuid(event.arguments.id, 'id');
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(`SELECT * FROM m3.audits WHERE id = :id::uuid`, [
@@ -367,6 +401,7 @@ async function agentScoreReadiness(event: AppSyncEvent, tenantId: string, actor:
  */
 async function generateAuditChecklist(event: AppSyncEvent, tenantId: string, actor: string) {
   const auditId = event.arguments.auditId as string;
+  assertUuid(auditId, 'auditId');
   const txn = await beginTenantTransaction(tenantId);
   try {
     // 1. Validate audit exists and get its standard
@@ -498,7 +533,7 @@ async function listAudits(tenantId: string) {
   try {
     const result = await txn.execute(
       `SELECT id, programme_id, standard, scope, lead_auditor_id, planned_date, actual_date, status
-       FROM m3.audits ORDER BY planned_date DESC`,
+       FROM m3.audits ORDER BY planned_date DESC LIMIT ${LIST_QUERY_LIMIT}`,
     );
     await txn.commit();
     return marshalMany(result);
@@ -514,12 +549,12 @@ async function listAudits(tenantId: string) {
 
 async function listAuditFindings(event: AppSyncEvent, tenantId: string) {
   const auditId = (event.arguments.auditId as string) ?? '';
-  if (!auditId.trim()) throw new Error('VALIDATION: auditId is required');
+  assertUuid(auditId, 'auditId');
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(
       `SELECT id, audit_id, checklist_id, finding_type, clause_ref, description, evidence_ref
-       FROM m3.audit_findings WHERE audit_id = :auditId::uuid ORDER BY created_at DESC`,
+       FROM m3.audit_findings WHERE audit_id = :auditId::uuid ORDER BY created_at DESC LIMIT ${LIST_QUERY_LIMIT}`,
       [{ name: 'auditId', value: { stringValue: auditId } }],
     );
     await txn.commit();
@@ -540,12 +575,12 @@ async function listAuditFindings(event: AppSyncEvent, tenantId: string) {
 
 async function listAuditChecklists(event: AppSyncEvent, tenantId: string) {
   const auditId = (event.arguments.auditId as string) ?? '';
-  if (!auditId.trim()) throw new Error('VALIDATION: auditId is required');
+  assertUuid(auditId, 'auditId');
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(
       `SELECT id, audit_id, clause_ref, question, expected_evidence
-       FROM m3.audit_checklists WHERE audit_id = :auditId::uuid ORDER BY clause_ref`,
+       FROM m3.audit_checklists WHERE audit_id = :auditId::uuid ORDER BY clause_ref LIMIT ${LIST_QUERY_LIMIT}`,
       [{ name: 'auditId', value: { stringValue: auditId } }],
     );
     await txn.commit();
@@ -571,7 +606,7 @@ async function listAuditChecklists(event: AppSyncEvent, tenantId: string) {
 async function runAuditFindings(event: AppSyncEvent, tenantId: string, actor: string) {
   const leadAuditorFnArn = process.env.LEAD_AUDITOR_FN_ARN ?? '';
   const auditId = (event.arguments.auditId as string) ?? '';
-  if (!auditId.trim()) throw new Error('VALIDATION: auditId is required');
+  assertUuid(auditId, 'auditId');
   if (!leadAuditorFnArn) throw new Error('LEAD_AUDITOR_NOT_AVAILABLE');
 
   const txn = await beginTenantTransaction(tenantId);

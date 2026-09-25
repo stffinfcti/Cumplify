@@ -183,12 +183,25 @@ describe('Lambda Authorizer', () => {
     expect(result.isAuthorized).toBe(false);
   });
 
-  it('should return default entitlement if DDB read fails', async () => {
+  it('should DENY if the entitlement read fails (fail-closed)', async () => {
     mockedJwtVerify.mockResolvedValueOnce({
       payload: validPoolBClaims,
       protectedHeader: { alg: 'RS256' },
     } as never);
     mockDdbSend.mockRejectedValueOnce(new Error('DDB timeout'));
+
+    const result = await handler(baseEvent);
+
+    expect(result.isAuthorized).toBe(false);
+    expect(result.resolverContext).toBeUndefined();
+  });
+
+  it('should return the default Launch entitlement when the PLAN item is missing', async () => {
+    mockedJwtVerify.mockResolvedValueOnce({
+      payload: validPoolBClaims,
+      protectedHeader: { alg: 'RS256' },
+    } as never);
+    mockDdbSend.mockResolvedValueOnce({ Item: undefined });
 
     const result = await handler(baseEvent);
 
