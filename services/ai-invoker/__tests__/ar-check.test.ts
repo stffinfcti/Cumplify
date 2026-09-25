@@ -14,7 +14,9 @@ vi.mock('@aws-sdk/client-bedrock-runtime', () => ({
   },
   ApplyGuardrailCommand: class {
     input: unknown;
-    constructor(input: unknown) { this.input = input; }
+    constructor(input: unknown) {
+      this.input = input;
+    }
   },
 }));
 
@@ -46,9 +48,13 @@ const {
 // the real ApplyGuardrail payload, not an invented {result} object.
 function mkFinding(result: string, claim?: string, ruleId?: string) {
   const key = {
-    VALID: 'valid', SATISFIABLE: 'satisfiable', INVALID: 'invalid',
-    IMPOSSIBLE: 'impossible', TRANSLATION_AMBIGUOUS: 'translationAmbiguous',
-    NO_TRANSLATION: 'noTranslations', TOO_COMPLEX: 'tooComplex',
+    VALID: 'valid',
+    SATISFIABLE: 'satisfiable',
+    INVALID: 'invalid',
+    IMPOSSIBLE: 'impossible',
+    TRANSLATION_AMBIGUOUS: 'translationAmbiguous',
+    NO_TRANSLATION: 'noTranslations',
+    TOO_COMPLEX: 'tooComplex',
   }[result]!;
   if (result === 'INVALID' || result === 'IMPOSSIBLE') {
     return {
@@ -64,11 +70,13 @@ function mkFinding(result: string, claim?: string, ruleId?: string) {
 function mockArResponse(result: string, claim?: string, ruleId?: string) {
   return {
     action: result === 'VALID' || result === 'SATISFIABLE' ? 'NONE' : 'GUARDRAIL_INTERVENED',
-    assessments: [{
-      automatedReasoningPolicy: {
-        findings: result === 'VALID' ? [] : [mkFinding(result, claim, ruleId)],
+    assessments: [
+      {
+        automatedReasoningPolicy: {
+          findings: result === 'VALID' ? [] : [mkFinding(result, claim, ruleId)],
+        },
       },
-    }],
+    ],
   };
 }
 
@@ -390,7 +398,9 @@ describe('FIX-T29-2: companion noTranslations findings (live shapes, probes 2026
   it('[satisfiable, noTranslations] → SATISFIABLE (pass) — live valid-clause probe shape', () => {
     const finding = extractArFinding({
       action: 'NONE',
-      assessments: [{ automatedReasoningPolicy: { findings: [{ satisfiable: {} }, { noTranslations: {} }] } }],
+      assessments: [
+        { automatedReasoningPolicy: { findings: [{ satisfiable: {} }, { noTranslations: {} }] } },
+      ],
     } as any);
     expect(finding.result).toBe('SATISFIABLE');
     expect(mapFindingToDecision(finding.result)).toBe('pass');
@@ -399,7 +409,13 @@ describe('FIX-T29-2: companion noTranslations findings (live shapes, probes 2026
   it('[translationAmbiguous, noTranslations] → TRANSLATION_AMBIGUOUS (hitl) — live fabricated-clause probe shape', () => {
     const finding = extractArFinding({
       action: 'NONE',
-      assessments: [{ automatedReasoningPolicy: { findings: [{ translationAmbiguous: { options: [] } }, { noTranslations: {} }] } }],
+      assessments: [
+        {
+          automatedReasoningPolicy: {
+            findings: [{ translationAmbiguous: { options: [] } }, { noTranslations: {} }],
+          },
+        },
+      ],
     } as any);
     expect(finding.result).toBe('TRANSLATION_AMBIGUOUS');
     expect(mapFindingToDecision(finding.result)).toBe('flag_hitl');
@@ -408,10 +424,21 @@ describe('FIX-T29-2: companion noTranslations findings (live shapes, probes 2026
   it('[invalid, noTranslations] → INVALID (reject)', () => {
     const finding = extractArFinding({
       action: 'GUARDRAIL_INTERVENED',
-      assessments: [{ automatedReasoningPolicy: { findings: [
-        { invalid: { translation: { claims: [{ naturalLanguage: 'clause 99.9 exists' }] }, contradictingRules: [{ identifier: 'CANONRULE001' }] } },
-        { noTranslations: {} },
-      ] } }],
+      assessments: [
+        {
+          automatedReasoningPolicy: {
+            findings: [
+              {
+                invalid: {
+                  translation: { claims: [{ naturalLanguage: 'clause 99.9 exists' }] },
+                  contradictingRules: [{ identifier: 'CANONRULE001' }],
+                },
+              },
+              { noTranslations: {} },
+            ],
+          },
+        },
+      ],
     } as any);
     expect(finding.result).toBe('INVALID');
     expect(finding.invalidClaim).toBe('clause 99.9 exists');

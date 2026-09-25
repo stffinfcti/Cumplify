@@ -3,6 +3,8 @@
 import { useState, useEffect, type ReactNode, type FormEvent } from 'react';
 import { useTranslations } from 'next-intl';
 import { PrimaryButton, SecondaryButton } from './Buttons';
+import { useDialog } from '@/lib/use-dialog';
+import { errorText } from '@/lib/error-text';
 import styles from './FormDrawer.module.css';
 
 /**
@@ -31,6 +33,10 @@ interface FormDrawerProps {
   title: string;
   fields: FieldDef[];
   onSubmit: SubmitFn;
+  /** FE-3: the drawer owns the close-on-success contract — a submit that
+   * resolves closes the drawer; a thrown error stays open with the message
+   * inline. Set keepOpen for multi-add flows that should remain open. */
+  keepOpen?: boolean;
   /** Optional additional content rendered below fields */
   children?: ReactNode;
 }
@@ -62,13 +68,25 @@ function toISOValues(
   return result;
 }
 
-export function FormDrawer({ open, onClose, title, fields, onSubmit, children }: FormDrawerProps) {
+export function FormDrawer({
+  open,
+  onClose,
+  title,
+  fields,
+  onSubmit,
+  keepOpen,
+  children,
+}: FormDrawerProps) {
   const t = useTranslations('common');
+  const tErr = useTranslations('errors');
   const [values, setValues] = useState<Record<string, string | boolean>>(() =>
     computeDefaults(fields),
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+
+  // FE-10: Escape close, focus trap, initial + return focus, aria-modal
+  const { dialogRef, dialogProps } = useDialog(open, onClose);
 
   // G5: Reset values every time drawer opens (fields may have new defaultValues from chip params)
   useEffect(() => {
@@ -93,9 +111,11 @@ export function FormDrawer({ open, onClose, title, fields, onSubmit, children }:
       // G5: Convert date fields to ISO before submission
       const converted = toISOValues(values, fields);
       await onSubmit(converted);
-      onClose();
+      if (!keepOpen) onClose();
     } catch (err) {
-      setError((err as Error).message || t('error'));
+      // errorText maps resolver SNAKE_CASE codes to catalog strings —
+      // err.message prose is English internals, never user-facing.
+      setError(errorText(err, tErr, 'generic'));
     } finally {
       setSubmitting(false);
     }
@@ -104,7 +124,7 @@ export function FormDrawer({ open, onClose, title, fields, onSubmit, children }:
   return (
     <div className={styles.overlay}>
       <div className={styles.backdrop} onClick={onClose} />
-      <aside className={styles.drawer} aria-label={title}>
+      <aside className={styles.drawer} aria-label={title} ref={dialogRef} {...dialogProps}>
         <div className={styles.header}>
           <h2 className={styles.title}>{title}</h2>
           <button

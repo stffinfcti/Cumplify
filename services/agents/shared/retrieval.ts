@@ -95,6 +95,10 @@ export async function retrieve(
   request: RetrievalRequest,
   /** Injectable HTTP client for testing */
   httpClient?: AossHttpClient,
+  /** Absolute deadline (ms epoch) — the 45s ceiling carries through the
+   * hybrid→kNN fallback instead of restarting, so a fallback can never
+   * double the Lambda's time inside retrieve. */
+  deadlineMs?: number,
 ): Promise<RetrievalResult> {
   // REQ-RET-1: MANDATORY tenantId filter — fail immediately if missing
   if (!request.tenantId) {
@@ -110,6 +114,7 @@ export async function retrieve(
 
   const topK = request.topK ?? 5;
   const startTime = Date.now();
+  const deadline = deadlineMs ?? startTime + BACKOFF_CEILING_MS;
   let attempts = 0;
   let coldStart = false;
   let lastError: Error | null = null;
@@ -119,16 +124,16 @@ export async function retrieve(
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     attempts = attempt + 1;
 
-    // Check ceiling BEFORE attempting (except first try)
+    // Check the deadline BEFORE attempting (except first try)
     if (attempt > 0) {
-      const elapsed = Date.now() - startTime;
-      if (elapsed >= BACKOFF_CEILING_MS) {
-        break; // Exceeded 45s ceiling
+      const remainingBudget = deadline - Date.now();
+      if (remainingBudget <= 0) {
+        break; // Deadline exhausted (carried across fallbacks)
       }
 
       const delayMs = Math.min(
         BACKOFF_BASE_MS * Math.pow(BACKOFF_FACTOR, attempt - 1),
-        BACKOFF_CEILING_MS - elapsed,
+        remainingBudget,
       );
       const jitter = Math.random() * delayMs * 0.2;
       await new Promise((resolve) => setTimeout(resolve, delayMs + jitter));
@@ -143,9 +148,9 @@ export async function retrieve(
         request.scoreThreshold,
         request.hybrid,
       );
-      // R5-n3: derive socket timeout from remaining budget (not a fixed 50s)
-      const elapsed = Date.now() - startTime;
-      const remainingMs = Math.max(BACKOFF_CEILING_MS - elapsed + 5000, 10_000); // floor 10s
+      // R5-n3: derive socket timeout from the remaining deadline (not a
+      // fixed 50s) — a fallback invocation gets what is actually left.
+      const remainingMs = Math.max(deadline - Date.now() + 5000, 10_000); // floor 10s
       const response = await client.search(
         request.collectionEndpoint,
         request.indexName,
@@ -172,7 +177,7 @@ export async function retrieve(
           standard: request.hybrid.standard,
         });
         const fallbackRequest = { ...request, hybrid: undefined };
-        return retrieve(fallbackRequest, httpClient);
+        return retrieve(fallbackRequest, httpClient, deadline);
       }
 
       return { chunks, latencyMs, coldStart, attempts };
@@ -216,9 +221,7 @@ function buildKnnQuery(
   hybrid?: HybridRetrievalOptions,
 ): Record<string, unknown> {
   // Build filter clauses — always includes tenantId (REQ-RET-1)
-  const filterClauses: Record<string, unknown>[] = [
-    { term: { 'metadata.tenantId': tenantId } },
-  ];
+  const filterClauses: Record<string, unknown>[] = [{ term: { 'metadata.tenantId': tenantId } }];
 
   // Add clauseRef term filter when hybrid parsing detected a clause reference
   if (hybrid?.clauseRef) {
@@ -231,10 +234,7 @@ function buildKnnQuery(
   }
 
   // Compose filter: single term or bool.must array
-  const filter =
-    filterClauses.length === 1
-      ? filterClauses[0]
-      : { bool: { must: filterClauses } };
+  const filter = filterClauses.length === 1 ? filterClauses[0] : { bool: { must: filterClauses } };
 
   const query: Record<string, unknown> = {
     size: topK,

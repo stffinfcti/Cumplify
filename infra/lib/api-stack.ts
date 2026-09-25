@@ -149,7 +149,9 @@ export class ApiStack extends cdk.Stack {
           authorizationType: appsync.AuthorizationType.LAMBDA,
           lambdaAuthorizerConfig: {
             handler: authorizerFn,
-            resultsCacheTtl: cdk.Duration.seconds(300), // OQ-3: 300s dev
+            // 60s: caps role/entitlement revocation lag at ~1 min. The dev
+            // 300s carry (OQ-3) let a disabled user keep calling for 5 min.
+            resultsCacheTtl: cdk.Duration.seconds(60),
           },
         },
         additionalAuthorizationModes: [{ authorizationType: appsync.AuthorizationType.IAM }],
@@ -437,6 +439,20 @@ export class ApiStack extends cdk.Stack {
           },
         },
       }),
+      // '*' and '?' are IAM wildcard chars: a session tag containing them turns
+      // the verbatim-substituted LeadingKeys pattern `TENANT#<tag>#*` into a
+      // match-every-tenant selector. `${*}`/`${?}` are the IAM literal-char
+      // escapes — the array is OR'd.
+      new iam.PolicyStatement({
+        effect: iam.Effect.DENY,
+        actions: ['sts:TagSession'],
+        principals: [new iam.AnyPrincipal()],
+        conditions: {
+          StringLike: {
+            'aws:RequestTag/tenantId': ['*${*}*', '*${?}*'],
+          },
+        },
+      }),
     );
 
     // Inline policy: DDB actions with LeadingKeys condition
@@ -446,7 +462,10 @@ export class ApiStack extends cdk.Stack {
           'dynamodb:GetItem',
           'dynamodb:PutItem',
           'dynamodb:Query',
-          'dynamodb:TransactWriteItems',
+          // TransactWriteItems deliberately absent: LeadingKeys is not
+          // evaluated for transactions (with ForAllValues an absent key
+          // passes true), so a transaction grant would be an unscoped
+          // cross-tenant write door.
         ],
         resources: [
           props.tableArn,
@@ -609,12 +628,28 @@ export class ApiStack extends cdk.Stack {
         POWERTOOLS_SERVICE_NAME: 'resolver-billing',
       },
     });
-    // Least-privilege: read ONLY the Stripe secret. It uses the default
-    // AWS-managed KMS key (no CMK), so no extra kms grant is needed. The secret
-    // is provisioned out-of-band per env (cumplify/<env>/stripe); if absent in
+    // Scoped to ONLY the Stripe secret — read + write (the resolver writes back
+    // new tenant→customer mappings so repeat portal calls reuse the Stripe
+    // customer instead of duplicating it). The secret uses the default
+    // AWS-managed KMS key (no CMK), so no extra kms grant is needed. It is
+    // provisioned out-of-band per env (cumplify/<env>/stripe); if absent in
     // an env the resolver throws STRIPE_NOT_CONFIGURED (billing stays inert).
-    secretsmanager.Secret.fromSecretNameV2(this, 'StripeSecret', stripeSecretName).grantRead(
-      billingFn,
+    const stripeSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'StripeSecret',
+      stripeSecretName,
+    );
+    stripeSecret.grantRead(billingFn);
+    // persistCustomerMapping needs only PutSecretValue — grantWrite would also
+    // allow RotateSecret/UpdateSecret/CancelRotation on the shared Stripe key.
+    // The imported secretArn is the partial ARN (no -?????? suffix) — real
+    // secret ARNs always carry it, so a bare secretArn statement matches
+    // nothing and PutSecretValue gets AccessDenied at runtime.
+    billingFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['secretsmanager:PutSecretValue'],
+        resources: [`${stripeSecret.secretArn}-??????`],
+      }),
     );
 
     // Lambda data sources — one per module
@@ -818,10 +853,13 @@ export class ApiStack extends cdk.Stack {
     });
 
     // Billing — new field, needs the schema node dependency below (9d9c90a1 lesson).
-    const createBillingPortalSessionResolver = billingDS.createResolver('CreateBillingPortalSession', {
-      typeName: 'Mutation',
-      fieldName: 'createBillingPortalSession',
-    });
+    const createBillingPortalSessionResolver = billingDS.createResolver(
+      'CreateBillingPortalSession',
+      {
+        typeName: 'Mutation',
+        fieldName: 'createBillingPortalSession',
+      },
+    );
 
     // ─── Mutation resolvers (agent-path, @aws_iam) ───────────────────────────
     m1DS.createResolver('AgentDraftDocument', {
@@ -989,10 +1027,25 @@ export class ApiStack extends cdk.Stack {
     // the loop over [hitlApprovalFn, hitlQueryFn, profileFn] above.
 
     // SFN task-callback permissions for the approval Lambda (design §2.3).
-    // SendTaskSuccess/SendTaskFailure authorize via the task token itself;
-    // resource-level scoping exists only for activities (not used here), so
-    // Resource must be '*' — verified against the service authorization
-    // reference at Task 14 review.
+    //
+    // Resource '*' is MANDATORY here, not deferred debt: per the AWS Service
+    // Authorization Reference, states:SendTaskSuccess/SendTaskFailure (and
+    // SendTaskHeartbeat) have NO resource types — the IAM policy editor flags
+    // any stateMachine:/execution: ARN in these statements as "does not provide
+    // permissions", and AWS's own samples (aws-samples human-in-the-loop) use
+    // '*' for the same reason. Scoping to the concrete machines the resolver
+    // calls back (the HITL machine — the only waitForTaskToken consumer;
+    // DocGenStateMachine has no task-token state) would silently break every
+    // approval. If AWS ever adds resource support for SendTask*, the intended
+    // scope is stateMachine:cumplify-hitl-<env> + execution:cumplify-hitl-<env>:*
+    // (the execution-name suffix stays '*' — execution names are dynamic:
+    // `hitl-<agent>-<ulid>`).
+    //
+    // Effective authorization rides on the task token (an unguessable
+    // capability): the Lambda obtains it exclusively from the tenant-scoped
+    // DDB HITL item behind the conditional UpdateItem RESOLVING guard (BC-8,
+    // AM-1). Actions are already minimal — SendTaskSuccess/Failure only, no
+    // SendTaskHeartbeat (the 7-day approval window needs no heartbeat).
     hitlApprovalFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['states:SendTaskSuccess', 'states:SendTaskFailure'],
@@ -1005,7 +1058,7 @@ export class ApiStack extends cdk.Stack {
         {
           id: 'AwsSolutions-IAM5',
           reason:
-            'states:SendTaskSuccess/SendTaskFailure support resource-level permissions only for activities; callback-pattern authorization is scoped by the task token, which the Lambda obtains exclusively from the tenant-scoped HITL item (BC-8).',
+            'states:SendTaskSuccess/SendTaskFailure support NO resource-level permissions (AWS Service Authorization Reference) — Resource:* is required; callback authorization is scoped by the task token, which the Lambda obtains exclusively from the tenant-scoped HITL item (BC-8).',
           appliesTo: ['Resource::*'],
         },
       ],
@@ -1277,6 +1330,8 @@ export class ApiStack extends cdk.Stack {
         REGION: cdk.Stack.of(this).region,
         DOCGEN_SFN_ARN: docGenSfnArn,
         REGEN_FN: regenFnName,
+        // publishes run_complete on the inline StartExecution-fail path
+        APPSYNC_URL: api.graphqlUrl,
         POWERTOOLS_SERVICE_NAME: 'resolver-qms',
       },
     });
@@ -1333,6 +1388,14 @@ export class ApiStack extends cdk.Stack {
       }),
     );
     props.dynamodbKey.grantDecrypt(qmsFn);
+    // generateImsManual's inline fail path publishes run_complete through the
+    // same @aws_iam field the generation plane uses (field-scoped grant).
+    qmsFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['appsync:GraphQL'],
+        resources: [`${api.arn}/types/Mutation/fields/publishGenerationEvent`],
+      }),
+    );
     // Task 9: requestImsExport dispatches to ExportFn (SQL in QmsFn, S3/zip there)
     qmsFn.addEnvironment('EXPORT_FN', exportFn.functionName);
     exportFn.grantInvoke(qmsFn);
@@ -1466,7 +1529,9 @@ export class ApiStack extends cdk.Stack {
     }
 
     // ─── CfnOutputs ─────────────────────────────────────────────────────────
-    this.graphqlApiUrlOutput = new cdk.CfnOutput(this, 'GraphqlApiUrl', { value: this.graphqlApiUrl });
+    this.graphqlApiUrlOutput = new cdk.CfnOutput(this, 'GraphqlApiUrl', {
+      value: this.graphqlApiUrl,
+    });
     new cdk.CfnOutput(this, 'GraphqlApiId', { value: this.graphqlApiId });
     new cdk.CfnOutput(this, 'AuthorizerArn', { value: this.authorizerArn });
     new cdk.CfnOutput(this, 'TenantDataRoleArn', { value: this.tenantDataRoleArn });

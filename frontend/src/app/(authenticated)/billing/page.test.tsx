@@ -53,6 +53,7 @@ vi.mock('@/components/shared', () => ({
       {children}
     </section>
   ),
+  EmptyState: ({ message }: { message: string }) => <div data-testid="empty-state">{message}</div>,
 }));
 
 // window.location.assign is called on success — spy on it (jsdom navigation).
@@ -119,11 +120,12 @@ describe('BillingPage', () => {
     );
   });
 
-  it('renders nothing for non-admin roles (CON-6 presentation-only gate)', async () => {
+  it('shows an explicit not-authorized state for non-admin roles, never the portal (CON-6 presentation-only gate)', async () => {
     mockRole = 'Employee';
     const { default: BillingPage } = await import('./page');
-    const { container } = render(<BillingPage />);
+    render(<BillingPage />);
 
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByTestId('empty-state')).toHaveTextContent('common.notAuthorized');
+    expect(screen.queryByRole('button', { name: 'Open billing portal' })).not.toBeInTheDocument();
   });
 });

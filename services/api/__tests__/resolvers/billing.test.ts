@@ -3,8 +3,11 @@
  * Hermetic: Secrets Manager + Stripe SDK fully mocked; no network, no AWS.
  * Pins:
  * - tenantId from resolverContext (SCHEMA-5); mapped customer reused, no create
- * - unmapped tenant → stripe.customers.create stamped with tenantId
- * - returnUrl validated BEFORE any secret read (INVALID_RETURN_URL)
+ * - unmapped tenant → stripe.customers.create stamped with tenantId, and the
+ *   mapping is written back to the secret (no duplicate customer next call)
+ * - tenant-admin gate: non-PoolB callers rejected before any secret read
+ * - returnUrl https-only (http://localhost allowed for dev); validated BEFORE
+ *   any secret read (INVALID_RETURN_URL)
  * - missing secretKey → STRIPE_NOT_CONFIGURED (billing stays inert)
  * - portal session gets return_url + the stored configuration id
  */
@@ -22,6 +25,9 @@ vi.mock('@aws-sdk/client-secrets-manager', () => ({
     send = mockSecretSend;
   },
   GetSecretValueCommand: class {
+    constructor(public input: unknown) {}
+  },
+  PutSecretValueCommand: class {
     constructor(public input: unknown) {}
   },
 }));
@@ -53,7 +59,17 @@ function makeEvent(args: Record<string, unknown> = {}, ctx: Record<string, strin
     info: { fieldName: 'createBillingPortalSession' },
     arguments: args,
     identity:
-      ctx === null ? {} : { resolverContext: { tenantId: 'tenant-AAA', sub: 'u', role: 'IMSLead', ...ctx } },
+      ctx === null
+        ? {}
+        : {
+            resolverContext: {
+              tenantId: 'tenant-AAA',
+              sub: 'u',
+              role: 'IMSLead',
+              poolClass: 'tenant-admin',
+              ...ctx,
+            },
+          },
   };
 }
 
@@ -89,15 +105,31 @@ describe('createBillingPortalSession', () => {
     });
   });
 
-  it('creates a Stripe customer stamped with tenantId when the tenant is unmapped', async () => {
-    mockSecretSend.mockResolvedValueOnce(
-      secretResp({ secretKey: 'sk_test_x', portalConfigurationId: 'bpc_x', customersByTenant: {} }),
-    );
+  it('creates a Stripe customer stamped with tenantId when the tenant is unmapped, and persists the mapping', async () => {
+    mockSecretSend
+      .mockResolvedValueOnce(
+        secretResp({
+          secretKey: 'sk_test_x',
+          portalConfigurationId: 'bpc_x',
+          customersByTenant: {},
+        }),
+      )
+      // persistCustomerMapping re-reads the secret before writing
+      .mockResolvedValueOnce(
+        secretResp({ secretKey: 'sk_test_x', customersByTenant: { 'tenant-OLD': 'cus_old' } }),
+      )
+      .mockResolvedValueOnce({}); // PutSecretValue ack
     mockCustomersCreate.mockResolvedValueOnce({ id: 'cus_new' });
 
     await handler(makeEvent({ returnUrl: RETURN_URL }));
 
     expect(mockCustomersCreate).toHaveBeenCalledWith({ metadata: { tenantId: 'tenant-AAA' } });
+    // The write-back is the call carrying SecretString — assert the merged map.
+    const writeCall = mockSecretSend.mock.calls
+      .map(([cmd]) => cmd as { input: { SecretString?: string } })
+      .find((cmd) => cmd.input.SecretString !== undefined)!;
+    const written = JSON.parse(writeCall.input.SecretString!);
+    expect(written.customersByTenant).toEqual({ 'tenant-OLD': 'cus_old', 'tenant-AAA': 'cus_new' });
     expect(mockPortalCreate).toHaveBeenCalledWith(
       expect.objectContaining({ customer: 'cus_new', return_url: RETURN_URL }),
     );
@@ -116,13 +148,34 @@ describe('createBillingPortalSession', () => {
     });
   });
 
-  it('rejects a missing/non-http returnUrl BEFORE reading the secret (INVALID_RETURN_URL)', async () => {
+  it('rejects a missing/non-https returnUrl BEFORE reading the secret (INVALID_RETURN_URL)', async () => {
     await expect(handler(makeEvent({}))).rejects.toThrow('INVALID_RETURN_URL');
     await expect(handler(makeEvent({ returnUrl: 'javascript:alert(1)' }))).rejects.toThrow(
       'INVALID_RETURN_URL',
     );
+    await expect(handler(makeEvent({ returnUrl: 'http://evil.example.com/x' }))).rejects.toThrow(
+      'INVALID_RETURN_URL',
+    );
     expect(mockSecretSend).not.toHaveBeenCalled();
     expect(mockPortalCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-tenant-admin callers BEFORE any secret read (FORBIDDEN)', async () => {
+    await expect(
+      handler(makeEvent({ returnUrl: RETURN_URL }, { poolClass: 'tenant-user' })),
+    ).rejects.toThrow('FORBIDDEN');
+    expect(mockSecretSend).not.toHaveBeenCalled();
+    expect(mockPortalCreate).not.toHaveBeenCalled();
+  });
+
+  it('still creates the portal session when write-back fails (persist is best-effort)', async () => {
+    mockSecretSend
+      .mockResolvedValueOnce(secretResp({ secretKey: 'sk_test_x', customersByTenant: {} }))
+      .mockRejectedValueOnce(new Error('AccessDenied'));
+    mockCustomersCreate.mockResolvedValueOnce({ id: 'cus_new' });
+
+    const result = (await handler(makeEvent({ returnUrl: RETURN_URL }))) as { url: string };
+    expect(result.url).toBe('https://billing.stripe.com/p/session/test_live');
   });
 
   it('throws STRIPE_NOT_CONFIGURED when the secret has no secretKey', async () => {

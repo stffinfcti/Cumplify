@@ -209,7 +209,9 @@ export async function checkArPolicy(params: ArCheckParams): Promise<ArCheckResul
  * Injected as a user message to guide the model toward a correct response.
  */
 export function buildArRetryInstruction(finding: ArFinding): string {
-  const parts = ['Your previous response contained a factual error detected by automated reasoning.'];
+  const parts = [
+    'Your previous response contained a factual error detected by automated reasoning.',
+  ];
   if (finding.invalidClaim) {
     parts.push(`Invalid claim: "${finding.invalidClaim}"`);
   }
@@ -219,7 +221,9 @@ export function buildArRetryInstruction(finding: ArFinding): string {
   if (finding.suggestedCorrection) {
     parts.push(`Suggested correction: ${finding.suggestedCorrection}`);
   }
-  parts.push('Please regenerate your response correcting this error. If you cannot verify the claim, omit it entirely.');
+  parts.push(
+    'Please regenerate your response correcting this error. If you cannot verify the claim, omit it entirely.',
+  );
   return parts.join('\n');
 }
 
@@ -247,9 +251,13 @@ export function extractArFinding(response: ApplyGuardrailCommandOutput): ArFindi
   };
   // Worst-first: a response with [satisfiable, invalid] must REJECT.
   const SEVERITY: ArFindingResult[] = [
-    'INVALID', 'IMPOSSIBLE',
-    'TRANSLATION_AMBIGUOUS', 'TOO_COMPLEX',
-    'SATISFIABLE', 'VALID', 'NO_TRANSLATION',
+    'INVALID',
+    'IMPOSSIBLE',
+    'TRANSLATION_AMBIGUOUS',
+    'TOO_COMPLEX',
+    'SATISFIABLE',
+    'VALID',
+    'NO_TRANSLATION',
   ];
 
   let worst: ArFinding | undefined;
@@ -278,7 +286,8 @@ export function extractArFinding(response: ApplyGuardrailCommandOutput): ArFindi
           .map((r: { identifier?: string }) => r.identifier)
           .filter(Boolean);
         if (rules.length) finding.reason = `contradicts policy rule(s): ${rules.join(', ')}`;
-        else if (member?.logicWarning?.type) finding.reason = `logic warning: ${member.logicWarning.type}`;
+        else if (member?.logicWarning?.type)
+          finding.reason = `logic warning: ${member.logicWarning.type}`;
       }
 
       if (!worst || SEVERITY.indexOf(result) < SEVERITY.indexOf(worst.result)) {
@@ -288,8 +297,10 @@ export function extractArFinding(response: ApplyGuardrailCommandOutput): ArFindi
       // a ROUTINE COMPANION finding covering non-logical text segments — it
       // appears alongside satisfiable AND alongside translationAmbiguous.
       // It only carries the aggregate verdict when it stands ALONE.
-      if (result !== 'NO_TRANSLATION' &&
-          (!substantive || SEVERITY.indexOf(result) < SEVERITY.indexOf(substantive.result))) {
+      if (
+        result !== 'NO_TRANSLATION' &&
+        (!substantive || SEVERITY.indexOf(result) < SEVERITY.indexOf(substantive.result))
+      ) {
         substantive = finding;
       }
     }
@@ -327,7 +338,8 @@ export async function emitArRejected(params: {
   retriedOnce: boolean;
   finalOutcome: 'corrected' | 'hitl-deferred';
 }): Promise<void> {
-  const { tenantId, agent, module, standard, arPolicy, finding, retriedOnce, finalOutcome } = params;
+  const { tenantId, agent, module, standard, arPolicy, finding, retriedOnce, finalOutcome } =
+    params;
 
   await publish({
     busName: process.env.BUS_NAME ?? 'cumplify-events',

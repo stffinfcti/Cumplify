@@ -21,10 +21,7 @@ const logger = new Logger({ serviceName: 'iso-kb-seeder-bulk' });
  * Embed all chunks via the one-door with systemOp: true.
  * Returns embeddings in the same order as input chunks.
  */
-export async function embedAllChunks(
-  chunks: Chunk[],
-  embedFn: EmbedFn,
-): Promise<number[][]> {
+export async function embedAllChunks(chunks: Chunk[], embedFn: EmbedFn): Promise<number[][]> {
   const embeddings: number[][] = [];
 
   for (let i = 0; i < chunks.length; i++) {
@@ -113,7 +110,13 @@ export async function deleteIndexIfExists(endpoint: string, indexName: string): 
  * Write-path retry: 403/404/429/5xx retryable.
  */
 export async function createIndex(endpoint: string, indexName: string): Promise<void> {
-  const resp = await aossWriteOp('createIndex', 'PUT', endpoint, `/${indexName}`, JSON.stringify({}));
+  const resp = await aossWriteOp(
+    'createIndex',
+    'PUT',
+    endpoint,
+    `/${indexName}`,
+    JSON.stringify({}),
+  );
   if (resp.status !== 200) {
     throw new Error(`Failed to create index: HTTP ${resp.status} — ${resp.body}`);
   }

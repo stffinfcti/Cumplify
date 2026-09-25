@@ -23,9 +23,30 @@ vi.mock('@aws-sdk/client-eventbridge', () => {
   };
 });
 
+// Mock DynamoDB (incrementMeter UpdateItem)
+const mockDdbSend = vi.fn();
+vi.mock('@aws-sdk/client-dynamodb', () => ({
+  DynamoDBClient: class {
+    send = mockDdbSend;
+  },
+  UpdateItemCommand: class {
+    input: unknown;
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  },
+  QueryCommand: class {
+    input: unknown;
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  },
+}));
+
 vi.stubEnv('TABLE_NAME', 'CumplifyCore');
 
-const { computeCredits, emitCreditsTelemetry } = await import('../src/metering.js');
+const { computeCredits, emitCreditsTelemetry, incrementMeter } = await import('../src/metering.js');
+import { InvokeError } from '../src/types.js';
 import type { ModelWeight, TokenUsage } from '../src/types.js';
 
 describe('computeCredits', () => {
@@ -183,5 +204,58 @@ describe('emitCreditsTelemetry (telemetry.credits.consumed contract)', () => {
   it('swallows EventBridge failures (telemetry is non-blocking)', async () => {
     mockEbSend.mockRejectedValueOnce(new Error('bus unavailable'));
     await expect(emitCreditsTelemetry(opts)).resolves.toBeUndefined();
+  });
+});
+
+describe('incrementMeter — conditional ADD (TOCTOU)', () => {
+  beforeEach(() => {
+    mockDdbSend.mockReset();
+    mockDdbSend.mockResolvedValue({});
+  });
+
+  it('carries the resolved hard cap as a ConditionExpression on the write', async () => {
+    await incrementMeter('tenant-1', 12.5, { hardCap: 15000 });
+
+    expect(mockDdbSend).toHaveBeenCalledTimes(1);
+    const input = (mockDdbSend.mock.calls[0][0] as { input: Record<string, unknown> }).input;
+    expect(input.UpdateExpression).toBe('ADD creditsUsed :credits SET lastUpdated = :ts');
+    // DDB conditions can't do arithmetic: used + credits <= cap is expressed
+    // as used <= cap - credits (computed client-side as :capMinusCredits).
+    expect(input.ConditionExpression).toBe(
+      '(attribute_not_exists(creditsUsed) AND :credits <= :cap) OR creditsUsed <= :capMinusCredits',
+    );
+    const values = input.ExpressionAttributeValues as Record<string, { N?: string }>;
+    expect(values[':cap'].N).toBe('15000');
+    expect(values[':capMinusCredits'].N).toBe('14987.5');
+    expect(values[':credits'].N).toBe('12.500000');
+  });
+
+  it('writes unconditionally when the tenant has no hard cap (exempt/enterprise/paygo)', async () => {
+    await incrementMeter('tenant-1', 3.25, {});
+
+    const input = (mockDdbSend.mock.calls[0][0] as { input: Record<string, unknown> }).input;
+    expect(input.ConditionExpression).toBeUndefined();
+    const values = input.ExpressionAttributeValues as Record<string, unknown>;
+    expect(values[':cap']).toBeUndefined();
+  });
+
+  it('a rejected conditional write surfaces PAUSED_FOR_CREDITS (concurrent race lost)', async () => {
+    const err = new Error('condition failed');
+    (err as { name?: string }).name = 'ConditionalCheckFailedException';
+    mockDdbSend.mockRejectedValueOnce(err);
+
+    try {
+      await incrementMeter('tenant-1', 500, { hardCap: 15000 });
+      expect.fail('Should have thrown');
+    } catch (thrown) {
+      expect(thrown).toBeInstanceOf(InvokeError);
+      expect((thrown as InvokeError).code).toBe('PAUSED_FOR_CREDITS');
+    }
+  });
+
+  it('propagates non-condition write errors unchanged', async () => {
+    mockDdbSend.mockRejectedValueOnce(new Error('throttled'));
+
+    await expect(incrementMeter('tenant-1', 1, { hardCap: 15000 })).rejects.toThrow('throttled');
   });
 });

@@ -14,6 +14,7 @@ import {
 } from '@/components/shared';
 import { StudioShell, AgentRunButton } from '@/components/studio';
 import { useGraphQL } from '@/lib/api';
+import { errorText } from '@/lib/error-text';
 import styles from './page.module.css';
 
 /**
@@ -88,6 +89,7 @@ interface ReadinessScore {
 
 export default function AuditStudioPage() {
   const t = useTranslations('auditStudio');
+  const tErr = useTranslations('errors');
   const router = useRouter();
   const { query, mutate } = useGraphQL();
 
@@ -160,7 +162,7 @@ export default function AuditStudioPage() {
       await mutate(GENERATE_CHECKLIST, { auditId });
       await fetchDetail(auditId);
     } catch (e) {
-      setGenError((e as Error).message || t('error'));
+      setGenError(errorText(e, tErr, 'generic'));
     } finally {
       setGenerating(false);
     }
@@ -173,7 +175,7 @@ export default function AuditStudioPage() {
       await mutate(COMPLETE_AUDIT, { id: audit.id });
       await fetchAudits();
     } catch (e) {
-      setCompleteError((e as Error).message || t('error'));
+      setCompleteError(errorText(e, tErr, 'generic'));
     } finally {
       setCompleting(false);
     }
@@ -189,7 +191,7 @@ export default function AuditStudioPage() {
       setReadinessScores(data.getAuditReadiness);
     } catch (e) {
       setReadinessScores([]);
-      setReadinessError((e as Error).message || t('error'));
+      setReadinessError(errorText(e, tErr, 'generic'));
     } finally {
       setReadinessFetched(true);
       setLoadingReadiness(false);
@@ -237,7 +239,7 @@ export default function AuditStudioPage() {
                   >
                     <span className={styles.scope}>{a.scope}</span>
                     <ClauseChip standard={a.standard} clauseRef={null} />
-                    <StatusBadge status={a.status.toUpperCase()} />
+                    <StatusBadge status={a.status} />
                     <span className={styles.date}>
                       {new Date(a.plannedDate).toLocaleDateString()}
                     </span>
@@ -317,9 +319,7 @@ export default function AuditStudioPage() {
                             {loadingReadiness ? t('loadingReadiness') : t('viewReadiness')}
                           </SecondaryButton>
                         </div>
-                        {readinessError && (
-                          <p className={styles.errorMsg}>{readinessError}</p>
-                        )}
+                        {readinessError && <p className={styles.errorMsg}>{readinessError}</p>}
                         {!readinessError && readinessFetched && readinessScores.length === 0 && (
                           <p className={styles.emptyHint}>{t('readinessEmpty')}</p>
                         )}
@@ -329,7 +329,13 @@ export default function AuditStudioPage() {
                               <div key={rs.id} className={styles.readinessItem}>
                                 <span className={styles.clauseTag}>{rs.clauseRef}</span>
                                 <StatusBadge
-                                  status={rs.score >= 100 ? 'APPROVED' : rs.score > 0 ? 'PENDING' : 'DRAFT'}
+                                  status={
+                                    rs.score >= 100
+                                      ? 'APPROVED'
+                                      : rs.score > 0
+                                        ? 'PENDING'
+                                        : 'DRAFT'
+                                  }
                                 />
                               </div>
                             ))}
@@ -349,9 +355,7 @@ export default function AuditStudioPage() {
                               {completing ? t('completing') : t('completeAudit')}
                             </SecondaryButton>
                           </div>
-                          {completeError && (
-                            <p className={styles.errorMsg}>{completeError}</p>
-                          )}
+                          {completeError && <p className={styles.errorMsg}>{completeError}</p>}
                         </div>
                       )}
                     </div>

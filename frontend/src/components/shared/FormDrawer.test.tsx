@@ -137,4 +137,64 @@ describe('FormDrawer', () => {
     // In jsdom, required is not enforced, so we test that the required attr is present
     expect(titleInput).toHaveAttribute('required');
   });
+
+  it('FE-3: a resolved submit closes the drawer', async () => {
+    render(
+      <FormDrawer open={true} onClose={onClose} title="Test" fields={fields} onSubmit={onSubmit} />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-08-15' } });
+    fireEvent.click(screen.getByTestId('submit-btn'));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it('FE-3: keepOpen skips the auto-close on a resolved submit', async () => {
+    render(
+      <FormDrawer
+        open={true}
+        onClose={onClose}
+        title="Test"
+        fields={fields}
+        onSubmit={onSubmit}
+        keepOpen={true}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-08-15' } });
+    fireEvent.click(screen.getByTestId('submit-btn'));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('FE-3: a thrown submit error stays open and shows it inline (no close)', async () => {
+    onSubmit.mockRejectedValue(new Error('Mutation failed'));
+    render(
+      <FormDrawer open={true} onClose={onClose} title="Test" fields={fields} onSubmit={onSubmit} />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-08-15' } });
+    fireEvent.click(screen.getByTestId('submit-btn'));
+
+    // err.message prose is never rendered — unmapped errors resolve to the
+    // errors.generic catalog string.
+    await waitFor(() => expect(screen.getByText('generic')).toBeInTheDocument());
+    expect(screen.queryByText('Mutation failed')).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('FE-3: a resolver error code maps to its catalog string, not the prose', async () => {
+    onSubmit.mockRejectedValue(new Error('RECORD_NOT_FOUND: English internals here'));
+    render(
+      <FormDrawer open={true} onClose={onClose} title="Test" fields={fields} onSubmit={onSubmit} />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-08-15' } });
+    fireEvent.click(screen.getByTestId('submit-btn'));
+
+    await waitFor(() => expect(screen.getByText('recordNotFound')).toBeInTheDocument());
+    expect(screen.queryByText(/English internals/)).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });

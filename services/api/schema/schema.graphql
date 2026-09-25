@@ -551,22 +551,29 @@ input AgentAssessRiskInput {
 }
 
 # Subscription trigger inputs (None data source)
+# SCHEMA-5 exception (same owner-ruled RS-7 carve-out as the agent* inputs):
+# the four subscription-trigger mutations are @aws_iam-only — resolverContext
+# never exists on IAM-signed calls, so tenantId travels in the input.
 input DocumentEventInput {
+  tenantId: ID!
   documentId: ID!
   status: DocumentStatus!
 }
 
 input CAPAEventInput {
+  tenantId: ID!
   capaId: ID!
   status: CAPAStatus!
 }
 
 input AuditEventTriggerInput {
+  tenantId: ID!
   auditId: ID!
   findingType: FindingType
 }
 
 input RiskEventInput {
+  tenantId: ID!
   riskId: ID!
   riskRating: Int!
 }

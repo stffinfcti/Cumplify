@@ -60,6 +60,13 @@ export interface EnvConfig {
    * by the recipient before delivery starts.
    */
   readonly alertEmail: string;
+  /**
+   * Public frontend origin (no scheme) used for Cognito OAuth callbackUrls /
+   * logoutUrls — e.g. the deployed CloudFront domain or a custom domain.
+   * Populate after first deploy per env; localhost is always also allowed
+   * so `next dev` sign-in keeps working.
+   */
+  readonly frontendDomain?: string;
 }
 
 export const ENV_CONFIGS: Record<string, EnvConfig> = {
@@ -87,6 +94,8 @@ export const ENV_CONFIGS: Record<string, EnvConfig> = {
     evidenceRetentionDays: 1,
     evidenceRetentionMode: 'GOVERNANCE',
     alertEmail: 'julio@mbdesignremodel.com',
+    // Deployed dev distribution (cdk-outputs.json).
+    frontendDomain: 'd1tw2kanxo5wnt.cloudfront.net',
   },
   staging: {
     envName: 'staging',

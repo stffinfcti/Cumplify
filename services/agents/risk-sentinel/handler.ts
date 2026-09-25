@@ -17,11 +17,15 @@
  * handler reasons over MUST already be in the invoke payload's `context`.
  */
 
+import { Logger } from '@aws-lambda-powertools/logger';
+
 import { toolLoop } from '../shared/tool-loop.js';
 import { createInvokeFn } from '../shared/invoke-transport.js';
+import { assertTenantIdSafe } from '../../api/src/resolvers/shared.js';
 import { RISK_SENTINEL_PROMPT } from './prompt.js';
 import { RISK_SENTINEL_TOOLS } from './tools.js';
 
+const logger = new Logger({ serviceName: 'risk-sentinel' });
 const invokeFn = createInvokeFn();
 
 export interface RiskContext {
@@ -50,6 +54,7 @@ export interface RunAssessmentResult {
 
 export async function runAssessment(input: RunAssessmentInput): Promise<RunAssessmentResult> {
   const { tenantId, riskId, requestedBy, context } = input;
+  assertTenantIdSafe(tenantId);
 
   const userMessage = [
     `Assess this existing risk. Propose an updated likelihood/severity rating via risk-assessment-write, or the SAME rating with an explicit "context insufficient" rationale if you cannot responsibly assess it.`,
@@ -72,10 +77,14 @@ export async function runAssessment(input: RunAssessmentInput): Promise<RunAsses
     hitlTools: new Set(['risk-assessment-write']),
     requestedBy,
     invokeFn,
-    dispatchTool: async (toolName, toolInput, tid) => ({
-      output: { toolName, input: toolInput, tenantId: tid },
-      requiresHitl: false,
-    }),
+    dispatchTool: async (toolName, toolInput, tid) => {
+      logger.warn('RiskSentinel dispatchTool called before registration', {
+        toolName,
+        tenantId: tid,
+        inputKeys: Object.keys(toolInput as Record<string, unknown>),
+      });
+      throw new Error(`RiskSentinel tool '${toolName}' is not implemented`);
+    },
   });
 
   return {

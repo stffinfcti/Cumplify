@@ -46,7 +46,9 @@ describe('createEmbedFn', () => {
     // Verify Lambda invocation
     expect(mockSend).toHaveBeenCalledTimes(1);
     const cmd = mockSend.mock.calls[0][0] as { input: { FunctionName: string; Payload: Buffer } };
-    expect(cmd.input.FunctionName).toBe('arn:aws:lambda:us-east-1:697114252993:function:ai-invoker-dev');
+    expect(cmd.input.FunctionName).toBe(
+      'arn:aws:lambda:us-east-1:697114252993:function:ai-invoker-dev',
+    );
 
     // Verify payload includes op:'embed'
     const payload = JSON.parse(Buffer.from(cmd.input.Payload).toString());
@@ -89,7 +91,15 @@ describe('createInvokeFn (back-compat — no op field)', () => {
   });
 
   it('sends InvokeRequest WITHOUT op field', async () => {
-    const invokeResult = { text: 'answer', toolUseBlocks: [], stopReason: 'end_turn', usage: {}, credits: 0.5, modelId: 'x', seat: 'workhorse' };
+    const invokeResult = {
+      text: 'answer',
+      toolUseBlocks: [],
+      stopReason: 'end_turn',
+      usage: {},
+      credits: 0.5,
+      modelId: 'x',
+      seat: 'workhorse',
+    };
     mockSend.mockResolvedValueOnce({
       Payload: Buffer.from(JSON.stringify(invokeResult)),
     });

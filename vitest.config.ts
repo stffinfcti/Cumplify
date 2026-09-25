@@ -25,10 +25,21 @@ export default defineConfig({
   plugins: [mdAsTextPlugin()],
   test: {
     globals: true,
-    include: ['services/**/*.test.ts', 'services/**/*.property.test.ts', 'infra/**/*.unit.test.ts', 'scripts/**/*.unit.test.ts'],
+    include: [
+      'services/**/*.test.ts',
+      'services/**/*.property.test.ts',
+      'infra/**/*.unit.test.ts',
+      'scripts/**/*.unit.test.ts',
+    ],
     exclude: ['node_modules', 'dist', 'cdk.out', 'infra/readback/**', '**/*.int.test.ts'],
     reporters: ['verbose'],
     testTimeout: 60_000,
+    // Coverage floor (TEST-6): measured 2026-09-25 at ~85% lines. Wired via
+    // `npm run test:cov`; `npm run test` stays coverage-free for speed.
+    coverage: {
+      provider: 'v8',
+      thresholds: { statements: 83, branches: 68, functions: 84, lines: 84 },
+    },
     // HERMETIC UNIT LANE (2026-07-11): unit tests must NEVER reach live AWS.
     // Fake credentials make any unmocked SDK client fail LOUDLY on every
     // machine (a publisher escapee passed for weeks on dev machines with

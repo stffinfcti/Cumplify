@@ -48,7 +48,7 @@ function makeEvent(fieldName: string, args: Record<string, unknown> = {}) {
   return {
     info: { fieldName },
     arguments: args,
-    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-test' } },
+    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-test', role: 'IMSLead' } },
   };
 }
 
@@ -83,10 +83,7 @@ describe('m1 listDocuments — RS-1 clauseRefs (real Data-API arrayValue fixture
   it('marshals m1.documents.clause_refs TEXT[] into Document.clauseRefs', async () => {
     mockExecute.mockResolvedValueOnce({
       records: [
-        [
-          { stringValue: 'doc-1' },
-          { arrayValue: { stringValues: ['9.1', '9.2', '10.2'] } },
-        ],
+        [{ stringValue: 'doc-1' }, { arrayValue: { stringValues: ['9.1', '9.2', '10.2'] } }],
       ],
       columnMetadata: [{ name: 'id' }, { name: 'clause_refs' }],
     });

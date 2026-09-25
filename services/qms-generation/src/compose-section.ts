@@ -17,9 +17,11 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { Logger } from '@aws-lambda-powertools/logger';
 import {
+  assertTenantIdSafe,
   beginTenantTransaction,
   marshalMany,
   publishAuditEvent,
+  rollbackQuietly,
 } from '../../api/src/resolvers/shared.js';
 import { DOC_COMPOSER_OUTPUT_SCHEMA } from '../../ai-invoker/src/doc-composer-schema.js';
 import type { InvokeRequest, InvokeResponse, ContentBlock } from '../../ai-invoker/src/types.js';
@@ -104,6 +106,7 @@ function composerMessages(
 
 export async function handler(event: ComposeInput): Promise<{ sectionId: string; status: string }> {
   const { runId, tenantId, sectionId, sectionKey } = event;
+  assertTenantIdSafe(tenantId);
   logger.appendKeys({ runId, tenantId, sectionId, sectionKey });
 
   const txn = await beginTenantTransaction(tenantId);
@@ -349,11 +352,7 @@ export async function handler(event: ComposeInput): Promise<{ sectionId: string;
 
     await txn.commit();
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 

@@ -19,6 +19,7 @@
 import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { Logger } from '@aws-lambda-powertools/logger';
+import { assertTenantIdSafe } from '../../api/src/resolvers/shared.js';
 
 const logger = new Logger({ serviceName: 'store-token' });
 const ddb = new DynamoDBClient({});
@@ -65,8 +66,16 @@ export interface StoreTokenInput {
  */
 export async function handler(event: StoreTokenInput): Promise<{ stored: true }> {
   const { taskToken, sfnExecutionArn } = event;
-  const { tenantId, hitlItemId, agentName, proposedAction, createdAt, guardrailEvidence, requestedBy } =
-    event.input;
+  const {
+    tenantId,
+    hitlItemId,
+    agentName,
+    proposedAction,
+    createdAt,
+    guardrailEvidence,
+    requestedBy,
+  } = event.input;
+  assertTenantIdSafe(tenantId);
 
   logger.info('Creating/updating HITL item with task token', {
     tenantId,
@@ -120,20 +129,35 @@ export async function handler(event: StoreTokenInput): Promise<{ stored: true }>
     attrValues[':requestedBy'] = requestedBy;
   }
 
-  await ddb.send(
-    new UpdateItemCommand({
-      TableName: TABLE_NAME,
-      Key: marshall({
-        PK: `TENANT#${tenantId}#HITL`,
-        SK: `PENDING#${hitlItemId}`,
+  try {
+    await ddb.send(
+      new UpdateItemCommand({
+        TableName: TABLE_NAME,
+        Key: marshall({
+          PK: `TENANT#${tenantId}#HITL`,
+          SK: `PENDING#${hitlItemId}`,
+        }),
+        UpdateExpression: updateParts.join(', '),
+        ExpressionAttributeNames: {
+          '#status': 'status',
+        },
+        ExpressionAttributeValues: marshall(attrValues),
+        // Create-or-refresh only while unresolved — a replayed StoreToken
+        // (SFN retry) must never overwrite APPROVED/REJECTED/EXPIRED back to
+        // PENDING with a dead task token.
+        ConditionExpression: 'attribute_not_exists(#status) OR #status = :status',
       }),
-      UpdateExpression: updateParts.join(', '),
-      ExpressionAttributeNames: {
-        '#status': 'status',
-      },
-      ExpressionAttributeValues: marshall(attrValues),
-    }),
-  );
+    );
+  } catch (err: unknown) {
+    if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
+      logger.warn('HITL item already resolved — skipping token write', {
+        tenantId,
+        hitlItemId,
+      });
+      return { stored: true };
+    }
+    throw err;
+  }
 
   logger.info('HITL item created with task token', { tenantId, hitlItemId });
   return { stored: true };

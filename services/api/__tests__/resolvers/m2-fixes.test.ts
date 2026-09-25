@@ -56,7 +56,7 @@ function makeEvent(fieldName: string, args: Record<string, unknown> = {}) {
   return {
     info: { fieldName },
     arguments: args,
-    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-test' } },
+    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-test', role: 'IMSLead' } },
   };
 }
 
@@ -158,12 +158,41 @@ describe('m2 createCorrectiveAction — stale-schema fix regression', () => {
 
 describe('m2 closeCapa — stale-schema fix regression', () => {
   it('sets only real columns (no closed_at/closed_by) and reads input.id', async () => {
+    // Call 1: existence/status read; call 2: UPDATE ... RETURNING must yield
+    // the closed row — an empty result means the predicate rejected the write.
+    mockExecute
+      .mockResolvedValueOnce({
+        records: [[{ stringValue: 'open' }]],
+        columnMetadata: [{ name: 'status' }],
+      })
+      .mockResolvedValueOnce({
+        records: [[{ stringValue: 'ca-1' }]],
+        columnMetadata: [{ name: 'id' }],
+      });
     await m2Handler(makeEvent('closeCapa', { input: { id: 'ca-1', closureNotes: 'done' } }));
-    const [sql, params] = mockExecute.mock.calls[0];
+    const [sql, params] = mockExecute.mock.calls[1];
     expect(sql).toContain(`SET status = 'closed'`);
+    expect(sql).toContain(`AND status <> 'closed'`); // check-then-act predicate rides the UPDATE
     expect(sql).not.toContain('closed_at');
     expect(sql).not.toContain('closed_by');
     expect(params).toEqual([{ name: 'id', value: { stringValue: 'ca-1' } }]);
+  });
+
+  it('rejects a double-close — status predicate empties RETURNING', async () => {
+    mockExecute.mockResolvedValueOnce({
+      records: [[{ stringValue: 'closed' }]],
+      columnMetadata: [{ name: 'status' }],
+    });
+    // Second execute (the UPDATE) falls back to empty RETURNING.
+    await expect(m2Handler(makeEvent('closeCapa', { input: { id: 'ca-1' } }))).rejects.toThrow(
+      'CAPA_ALREADY_CLOSED',
+    );
+  });
+
+  it('unknown CAPA — empty status read throws CAPA_NOT_FOUND', async () => {
+    await expect(m2Handler(makeEvent('closeCapa', { input: { id: 'ca-1' } }))).rejects.toThrow(
+      'CAPA_NOT_FOUND',
+    );
   });
 });
 
@@ -234,8 +263,8 @@ describe('m3 recordFinding — checklist_id ::uuid cast fix regression', () => {
     await m3Handler(
       makeEvent('recordFinding', {
         input: {
-          auditId: 'a-1',
-          checklistId: 'cl-1',
+          auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d',
+          checklistId: 'd6a4f9b5-1e7c-4a8d-0f9b-4c5d6e7f8a9b',
           findingType: 'MINOR_NC',
           clauseRef: '8.5.1',
           description: 'd',

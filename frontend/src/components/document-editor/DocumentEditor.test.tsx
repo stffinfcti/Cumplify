@@ -22,7 +22,10 @@ let capturedContent = '';
 const chainCommands: string[] = [];
 
 vi.mock('@tiptap/react', () => ({
-  useEditor: (opts: { content?: string; onUpdate?: (args: { editor: { getHTML: () => string } }) => void }) => {
+  useEditor: (opts: {
+    content?: string;
+    onUpdate?: (args: { editor: { getHTML: () => string } }) => void;
+  }) => {
     capturedOnUpdate = opts.onUpdate ?? null;
     capturedContent = opts.content ?? '';
     return {
@@ -94,36 +97,34 @@ beforeEach(() => {
 
 describe('DocumentEditor — section-kind routing', () => {
   it('renders a Tiptap editor for prose sections', () => {
-    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" />);
     expect(screen.getByTestId('tiptap-editor-content')).toBeInTheDocument();
   });
 
   it('renders non-editable content for gap sections (missingSources, no Tiptap instance)', () => {
-    render(<DocumentEditor sections={[GAP_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[GAP_SECTION]} runId="run-1" />);
     expect(screen.queryByTestId('tiptap-editor-content')).not.toBeInTheDocument();
     expect(screen.getByText(/register.risk_assessments/)).toBeInTheDocument();
   });
 
   it('renders na_justified sections with the justification text', () => {
-    render(<DocumentEditor sections={[NA_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[NA_SECTION]} runId="run-1" />);
     expect(screen.getByText('Design not in scope')).toBeInTheDocument();
   });
 
   it('renders failed sections with the failed marker', () => {
-    render(<DocumentEditor sections={[FAILED_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[FAILED_SECTION]} runId="run-1" />);
     expect(screen.getByTestId('badge-REJECTED')).toBeInTheDocument();
   });
 });
 
 describe('DocumentEditor — human edit attribution', () => {
   it('a human edit shows the RS-9 sync-pending banner (honest, never faked as saved)', () => {
-    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" />);
     expect(screen.queryByTestId('guidance-banner')).not.toBeInTheDocument();
 
     act(() => {
-
       capturedOnUpdate!({ editor: { getHTML: () => '<p>Edited content.</p>' } });
-
     });
 
     expect(screen.getByTestId('guidance-banner')).toBeInTheDocument();
@@ -131,9 +132,17 @@ describe('DocumentEditor — human edit attribution', () => {
 });
 
 describe('DocumentEditor — iterate with agent (regenerateSection)', () => {
-  it('calls regenerateSection with runId + harmonizationKey and adds an agent proposal', async () => {
+  it('calls regenerateSection + onSaved (worker writes the new version; no synthetic proposal)', async () => {
     mockMutate.mockResolvedValue({ regenerateSection: { harmonizationKey: '4.1', kind: 'PROSE' } });
-    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" documentId="doc-1" />);
+    const onSaved = vi.fn();
+    render(
+      <DocumentEditor
+        sections={[PROSE_SECTION]}
+        runId="run-1"
+
+        onSaved={onSaved}
+      />,
+    );
 
     fireEvent.click(screen.getByText('editor.iterateWithAgent'));
 
@@ -141,14 +150,35 @@ describe('DocumentEditor — iterate with agent (regenerateSection)', () => {
     const [statement, variables] = mockMutate.mock.calls[0];
     expect(statement).toContain('regenerateSection');
     expect(variables).toEqual({ input: { runId: 'run-1', harmonizationKey: '4.1' } });
-    // Agent proposal lands as a tracked change → sync-pending banner appears
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    // No proposal yet — the real text only arrives when the parent's refetch
+    // delivers new section content (never a synthetic placeholder)
+    expect(screen.queryByText('editor.accept')).not.toBeInTheDocument();
+  });
+
+  it('re-baselines when the server content moves: real text becomes the agent proposal', async () => {
+    mockMutate.mockResolvedValue({ regenerateSection: { harmonizationKey: '4.1', kind: 'PROSE' } });
+    const { rerender } = render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" />);
+
+    fireEvent.click(screen.getByText('editor.iterateWithAgent'));
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+
+    // Parent refetch returns the regenerated text — lands as a tracked
+    // proposal attributed to the agent → sync-pending banner appears
+    rerender(
+      <DocumentEditor
+        sections={[{ ...PROSE_SECTION, sentences: [{ text: 'Regenerated content.' }] }]}
+        runId="run-1"
+      />,
+    );
     await waitFor(() => expect(screen.getByTestId('guidance-banner')).toBeInTheDocument());
+    expect(screen.getByText(/Regenerated content\./)).toBeInTheDocument();
   });
 });
 
 describe('DocumentEditor — Mermaid insertion (P2S3 gap closure)', () => {
   it('the insert-diagram button calls editor.chain().insertMermaidBlock()', () => {
-    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" />);
 
     fireEvent.click(screen.getByText('editor.insertDiagram'));
 
@@ -157,13 +187,13 @@ describe('DocumentEditor — Mermaid insertion (P2S3 gap closure)', () => {
 });
 
 describe('DocumentEditor — accept/reject + onConverge', () => {
-  it('accepting the only pending change fires onConverge with the converged content', () => {
+  it('accepting the only pending change fires onConverge with the converged content', async () => {
     const onConverge = vi.fn();
     render(
       <DocumentEditor
         sections={[PROSE_SECTION]}
         runId="run-1"
-        documentId="doc-1"
+
         onConverge={onConverge}
       />,
     );
@@ -173,16 +203,19 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
 
     fireEvent.click(screen.getByText('editor.accept'));
 
-    expect(onConverge).toHaveBeenCalledWith('4.1', expect.any(String));
+    // Effect-driven: converged content = accepted human edit (a 'replace'
+    // carries the full editor HTML)
+    await waitFor(() => expect(onConverge).toHaveBeenCalledWith('4.1', '<p>Edited content.</p>'));
+    expect(onConverge).toHaveBeenCalledTimes(1);
   });
 
-  it('rejecting the only pending change also fires onConverge (nothing left pending)', () => {
+  it('rejecting the only pending change also fires onConverge (base content stands)', async () => {
     const onConverge = vi.fn();
     render(
       <DocumentEditor
         sections={[PROSE_SECTION]}
         runId="run-1"
-        documentId="doc-1"
+
         onConverge={onConverge}
       />,
     );
@@ -192,21 +225,22 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
 
     fireEvent.click(screen.getByText('editor.reject'));
 
-    expect(onConverge).toHaveBeenCalledWith('4.1', expect.any(String));
+    await waitFor(() => expect(onConverge).toHaveBeenCalledWith('4.1', 'Original content.'));
   });
 
   it('does NOT fire onConverge while a second change is still pending', async () => {
     // A typing burst COALESCES into one change (2026-07-22 fix) — the real
-    // two-pending scenario is human edit + agent proposal.
+    // two-pending scenario is human edit + agent proposal (which arrives via
+    // the server refetch, never inline from the regenerate call).
     mockMutate.mockResolvedValue({
       regenerateSection: { harmonizationKey: '4.1', kind: 'PROSE' },
     });
     const onConverge = vi.fn();
-    render(
+    const { rerender } = render(
       <DocumentEditor
         sections={[PROSE_SECTION]}
         runId="run-1"
-        documentId="doc-1"
+
         onConverge={onConverge}
       />,
     );
@@ -214,15 +248,25 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
       capturedOnUpdate!({ editor: { getHTML: () => '<p>Edit 1.</p>' } });
     });
     fireEvent.click(screen.getByText('editor.iterateWithAgent'));
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+    rerender(
+      <DocumentEditor
+        sections={[{ ...PROSE_SECTION, sentences: [{ text: 'Regenerated.' }] }]}
+        runId="run-1"
+
+        onConverge={onConverge}
+      />,
+    );
     await waitFor(() => expect(screen.getAllByText('editor.accept').length).toBe(2));
 
     fireEvent.click(screen.getAllByText('editor.accept')[0]);
 
+    await act(async () => {});
     expect(onConverge).not.toHaveBeenCalled();
   });
 
   it('a typing burst coalesces into ONE tracked change (found live 2026-07-22: four identical entries per sentence)', () => {
-    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" />);
     act(() => {
       capturedOnUpdate!({ editor: { getHTML: () => '<p>Edit a.</p>' } });
     });
@@ -239,14 +283,19 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
 describe('DocumentEditor — RS-9 save wire (owner 2026-07-22: drafts must be editable)', () => {
   it('an edit enables Save version; save calls saveDocumentSectionEdit with versionId + body + trackedChanges', async () => {
     mockMutate.mockResolvedValue({
-      saveDocumentSectionEdit: { id: 'v2', versionNo: 2, changeSummary: 'Section edit: 4.1', createdAt: 'now' },
+      saveDocumentSectionEdit: {
+        id: 'v2',
+        versionNo: 2,
+        changeSummary: 'Section edit: 4.1',
+        createdAt: 'now',
+      },
     });
     const onSaved = vi.fn();
     render(
       <DocumentEditor
         sections={[PROSE_SECTION]}
         runId="doc-1"
-        documentId="doc-1"
+
         versionId="v1"
         onSaved={onSaved}
       />,
@@ -282,7 +331,7 @@ describe('DocumentEditor — RS-9 save wire (owner 2026-07-22: drafts must be ed
       <DocumentEditor
         sections={[{ ...PROSE_SECTION, humanEditedBody: '<p>Previously saved.</p>' }]}
         runId="doc-1"
-        documentId="doc-1"
+
         versionId="v1"
       />,
     );

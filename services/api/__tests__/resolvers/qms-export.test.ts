@@ -54,7 +54,7 @@ function makeEvent(documentId?: string) {
   return {
     info: { fieldName: 'requestImsExport' },
     arguments: documentId ? { documentId } : {},
-    identity: { resolverContext: { tenantId: T, sub: 'user-1', role: 'employee' } },
+    identity: { resolverContext: { tenantId: T, sub: 'user-1', role: 'quality-manager' } },
   };
 }
 

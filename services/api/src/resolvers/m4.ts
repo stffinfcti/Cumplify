@@ -12,10 +12,15 @@ import {
   extractContext,
   beginTenantTransaction,
   publishAuditEvent,
+  requireModuleRole,
   marshalOne,
   marshalMany,
   getTenantDdbClient,
   TABLE_NAME,
+  type ResolverContext,
+  LIST_QUERY_LIMIT,
+  type AppSyncEvent,
+  rollbackQuietly,
 } from './shared.js';
 import { normalizeRole, KNOWN_ROLES } from '../permissions/role-matrix.js';
 import {
@@ -30,32 +35,33 @@ import {
 
 const logger = new Logger({ serviceName: 'resolver-m4' });
 
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
-}
+// Audit ledger is a privileged read surface (approver subs, justifications,
+// execution ARNs): admins + auditors only — plain Employees are gated out.
+// Slug form (normalizeRole output), not Cognito-group PascalCase.
+const AUDIT_TRAIL_ROLES = new Set(['internal-auditor', 'external-auditor']);
 
 export async function handler(event: AppSyncEvent): Promise<unknown> {
   const ctx = extractContext(event);
-  const { tenantId, sub } = ctx;
+  const { tenantId, sub, role } = ctx;
   logger.appendKeys({ tenantId, requestField: event.info.fieldName });
 
+  // M-effort: M4 write mutations are role-gated at entry (Part 13 matrix);
+  // queries stay at the authenticated floor.
   switch (event.info.fieldName) {
     case 'registerRecord':
-      return registerRecord(event, tenantId, sub);
+      return requireModuleRole(role, 'M4', () => registerRecord(event, tenantId, sub));
     case 'registerMeasuringResource':
-      return registerMeasuringResource(event, tenantId, sub);
+      return requireModuleRole(role, 'M4', () => registerMeasuringResource(event, tenantId, sub));
     case 'recordCalibration':
-      return recordCalibration(event, tenantId, sub);
+      return requireModuleRole(role, 'M4', () => recordCalibration(event, tenantId, sub));
     case 'createRetentionPolicy':
-      return createRetentionPolicy(event, tenantId, sub);
+      return requireModuleRole(role, 'M4', () => createRetentionPolicy(event, tenantId, sub));
     case 'getRecord':
       return getRecord(event, tenantId);
     case 'listCalibrationsDue':
       return listCalibrationsDue(event, tenantId);
     case 'getAuditTrail':
-      return getAuditTrail(event, tenantId);
+      return getAuditTrail(event, tenantId, ctx);
     case 'listApprovalMatrix':
       return listApprovalMatrix(tenantId);
     case 'setApprovalMatrixEntry':
@@ -80,7 +86,9 @@ interface MatrixEntryOut {
 function entryFromItem(item: Record<string, unknown>): MatrixEntryOut {
   const rawSteps = item.steps;
   const steps =
-    typeof rawSteps === 'string' ? (JSON.parse(rawSteps) as ApprovalStep[]) : ([] as ApprovalStep[]);
+    typeof rawSteps === 'string'
+      ? (JSON.parse(rawSteps) as ApprovalStep[])
+      : ([] as ApprovalStep[]);
   const standard = (item.standard as string) === 'ANY' ? null : ((item.standard as string) ?? null);
   return {
     id: item.SK as string,
@@ -161,7 +169,7 @@ async function setApprovalMatrixEntry(
       Key: marshall({ PK: governancePk(tenantId), SK: sk }),
     }),
   );
-  const version = existing.Item ? (((unmarshall(existing.Item).version as number) ?? 0) + 1) : 1;
+  const version = existing.Item ? ((unmarshall(existing.Item).version as number) ?? 0) + 1 : 1;
   const now = new Date().toISOString();
 
   await ddb.send(
@@ -248,7 +256,7 @@ async function registerRecord(event: AppSyncEvent, tenantId: string, actor: stri
     logger.info('Record registered', { tenantId });
     return record;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -284,7 +292,7 @@ async function registerMeasuringResource(event: AppSyncEvent, tenantId: string, 
     logger.info('Measuring resource registered', { tenantId });
     return resource;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -335,7 +343,7 @@ async function recordCalibration(event: AppSyncEvent, tenantId: string, actor: s
     logger.info('Calibration recorded', { tenantId });
     return calibration;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -347,6 +355,10 @@ async function createRetentionPolicy(event: AppSyncEvent, tenantId: string, acto
     const result = await txn.execute(
       `INSERT INTO m4.retention_policies (tenant_id, record_type, retention_years, disposition_rule, created_by)
        VALUES (:tenantId, :recordType, :retentionYears, :dispositionRule, :actor)
+       ON CONFLICT (tenant_id, record_type)
+       DO UPDATE SET retention_years = EXCLUDED.retention_years,
+                     disposition_rule = EXCLUDED.disposition_rule,
+                     updated_at = NOW()
        RETURNING *`,
       [
         { name: 'tenantId', value: { stringValue: tenantId } },
@@ -375,7 +387,7 @@ async function createRetentionPolicy(event: AppSyncEvent, tenantId: string, acto
     });
     return policy;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -389,7 +401,7 @@ async function getRecord(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -401,13 +413,13 @@ async function listCalibrationsDue(event: AppSyncEvent, tenantId: string) {
     const result = await txn.execute(
       `SELECT * FROM m4.calibration_records
        WHERE next_due <= (NOW() + make_interval(days => :windowDays::int))
-       ORDER BY next_due ASC`,
+       ORDER BY next_due ASC LIMIT ${LIST_QUERY_LIMIT}`,
       [{ name: 'windowDays', value: { longValue: windowDays } }],
     );
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -426,7 +438,11 @@ async function listCalibrationsDue(event: AppSyncEvent, tenantId: string) {
  * hits; a ledger backfill (new attributes only, chain untouched) is the
  * upgrade path if that ever matters in practice.
  */
-async function getAuditTrail(event: AppSyncEvent, tenantId: string) {
+async function getAuditTrail(event: AppSyncEvent, tenantId: string, ctx: ResolverContext) {
+  if (ctx.poolClass !== 'tenant-admin' && !AUDIT_TRAIL_ROLES.has(normalizeRole(ctx.role))) {
+    throw new Error('FORBIDDEN: audit trail requires admin or auditor role');
+  }
+
   const entityId = event.arguments.entityId as string;
   const ddb = await getTenantDdbClient(tenantId);
 
@@ -473,7 +489,11 @@ async function getAuditTrail(event: AppSyncEvent, tenantId: string) {
   if (gsiMatches.length > 0) return gsiMatches;
 
   // Fallback: pre-migration events (no entityId attribute) — partition scan
-  // with substring payload match, most recent first, capped.
+  // with EXACT payload-value matching (the old substring test false-positived
+  // on short entityIds, returning the tenant's whole ledger). Bounded at
+  // MAX_FALLBACK_SCAN_PAGES of the most-recent tail — an unbounded scan
+  // costs a full ledger read per query; pre-migration entities older than
+  // that tail resolve as "no events" until the entityId ledger backfill runs.
   const matches: Record<string, unknown>[] = [];
   const pk = `TENANT#${tenantId}#AUDITLOG`;
   let lastKey: Record<string, unknown> | undefined;
@@ -491,13 +511,39 @@ async function getAuditTrail(event: AppSyncEvent, tenantId: string) {
     );
     for (const raw of resp.Items ?? []) {
       const item = unmarshall(raw);
-      if (JSON.stringify(item.payload ?? {}).includes(entityId)) {
+      if (payloadHasExactValue(item.payload, entityId)) {
         matches.push(shape(item));
       }
     }
     lastKey = resp.LastEvaluatedKey as Record<string, unknown> | undefined;
     pages += 1;
-  } while (lastKey && pages < 10);
+  } while (lastKey && pages < MAX_FALLBACK_SCAN_PAGES);
 
   return matches;
+}
+
+// The partition-scan fallback reads at most this many pages of the audit
+// partition (newest first) before giving up — see the fallback comment above.
+const MAX_FALLBACK_SCAN_PAGES = 10;
+
+/** True when any string VALUE nested in payload equals needle exactly.
+ * Serialized-JSON strings are parsed and searched too — pre-migration
+ * payloads stored entity ids inside JSON.stringify'd blobs, invisible to a
+ * structure-only walk. Depth-capped against pathological nesting. */
+function payloadHasExactValue(payload: unknown, needle: string, depth = 0): boolean {
+  if (payload === needle) return true;
+  if (depth > 8 || !payload || typeof payload !== 'object') return false;
+  for (const v of Object.values(payload as Record<string, unknown>)) {
+    if (v === needle) return true;
+    if (typeof v === 'string' && (v.startsWith('{') || v.startsWith('['))) {
+      try {
+        if (payloadHasExactValue(JSON.parse(v), needle, depth + 1)) return true;
+      } catch {
+        /* not JSON — plain string */
+      }
+      continue;
+    }
+    if (v && typeof v === 'object' && payloadHasExactValue(v, needle, depth + 1)) return true;
+  }
+  return false;
 }

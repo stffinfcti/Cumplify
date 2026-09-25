@@ -48,6 +48,12 @@
   border-color: var(--color-accent);
 }
 
+.hint {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-lg);
+}
+
 .error {
   font-size: 13px;
   color: var(--color-danger);

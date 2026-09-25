@@ -9,12 +9,17 @@ import { describe, it, expect } from 'vitest';
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { EventingStack } from './eventing-stack.js';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import { ENV_CONFIGS } from './env-config.js';
 
 function getTemplate(): Template {
   const app = new cdk.App();
+  const helperStack = new cdk.Stack(app, 'HelperStack', {
+    env: { account: ENV_CONFIGS.dev.account, region: ENV_CONFIGS.dev.region },
+  });
   const stack = new EventingStack(app, 'TestEventingStack', {
     envConfig: ENV_CONFIGS.dev,
+    opsAlertTopic: new sns.Topic(helperStack, 'OpsAlertTopic'),
     env: { account: ENV_CONFIGS.dev.account, region: ENV_CONFIGS.dev.region },
   });
   return Template.fromStack(stack);

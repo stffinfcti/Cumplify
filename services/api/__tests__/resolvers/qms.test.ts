@@ -215,9 +215,14 @@ describe('saveOrgProfile', () => {
     await handler(makeEvent('saveOrgProfile', { input: { payload } }));
 
     // The version row receives the validated payload serialized for ::jsonb
-    const [, versionParams] = mockExecute.mock.calls[1] as [string, Array<{ name: string; value: { stringValue?: string } }>];
+    const [, versionParams] = mockExecute.mock.calls[1] as [
+      string,
+      Array<{ name: string; value: { stringValue?: string } }>,
+    ];
     const payloadParam = versionParams.find((p) => p.name === 'payload');
-    expect(JSON.parse(payloadParam!.value.stringValue!)).toMatchObject({ legalName: 'Wire Shape LLC' });
+    expect(JSON.parse(payloadParam!.value.stringValue!)).toMatchObject({
+      legalName: 'Wire Shape LLC',
+    });
     expect(mockCommit).toHaveBeenCalled();
   });
 
@@ -645,7 +650,12 @@ describe('runManualSectionDraft (S3 Manual Studio)', () => {
         columnMetadata: [{ name: 'manual_document_id' }, { name: 'payload' }],
       })
       .mockResolvedValueOnce({
-        records: [[{ stringValue: 'GAP' }, { arrayValue: { stringValues: ['c-41'] } }]],
+        records: [
+          [
+            { stringValue: 'GAP' },
+            { arrayValue: { stringValues: ['c0000000-0000-4000-a000-000000000041'] } },
+          ],
+        ],
         columnMetadata: [{ name: 'status' }, { name: 'clause_registry_ids' }],
       })
       .mockResolvedValueOnce({
@@ -682,7 +692,9 @@ describe('runManualSectionDraft (S3 Manual Studio)', () => {
     expect(result.runId).toBeTruthy();
 
     expect(mockLambdaSend).toHaveBeenCalledOnce();
-    const cmd = mockLambdaSend.mock.calls[0][0] as { input: { InvocationType: string; Payload: string } };
+    const cmd = mockLambdaSend.mock.calls[0][0] as {
+      input: { InvocationType: string; Payload: string };
+    };
     expect(cmd.input.InvocationType).toBe('Event');
     const payload = JSON.parse(cmd.input.Payload);
     expect(payload.sectionDraftIntent.generationRunId).toBe('genrun-1');

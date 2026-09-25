@@ -80,7 +80,7 @@ export interface InvokeRequest {
   /** Retrieved KB chunks for grounding check (L1). Omit for non-grounded calls. */
   groundingContext?: {
     source: string; // concatenated retrieval chunks (≤100,000 chars)
-    query: string;  // original user question (≤1,000 chars)
+    query: string; // original user question (≤1,000 chars)
   };
   /** Tenant document locale for honest-miss template (defaults to 'en') */
   locale?: 'en' | 'es' | 'pt';

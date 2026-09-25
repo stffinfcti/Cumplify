@@ -91,6 +91,10 @@ const APPROVE_MUTATION = `mutation Approve($input: ApproveDocumentVersionInput!)
   approveDocumentVersion(input: $input) { id decision }
 }`;
 
+const SAVE_SECTION_EDIT = `mutation SaveDocumentSectionEdit($input: SaveDocumentSectionEditInput!) {
+  saveDocumentSectionEdit(input: $input) { id versionNo changeSummary createdAt }
+}`;
+
 const PUBLISH_MUTATION = `mutation Publish($versionId: ID!) {
   publishControlledDocument(versionId: $versionId) { id status }
 }`;
@@ -149,13 +153,52 @@ export default function DocumentsPage() {
     if (chipDraft) setDrawerOpen(true);
   }, [chipDraft]);
 
-  // URL-sync for detail
+  // ─── Detail view ───────────────────────────────────────────────────────────
+  const openDetail = useCallback(
+    async (doc: Document) => {
+      setSelectedDoc(doc);
+      setDetailLoading(true);
+      setDocumentContent(null);
+      router.replace(`?doc=${doc.id}`, { scroll: false });
+
+      try {
+        const vData = await query<{ listDocumentVersions: DocumentVersion[] }>(LIST_VERSIONS, {
+          documentId: doc.id,
+        });
+        setVersions(vData.listDocumentVersions);
+
+        if (vData.listDocumentVersions.length > 0) {
+          // "latest" = max(versionNo) — never assume the API returns sorted rows
+          const latest = [...vData.listDocumentVersions].sort(
+            (a, b) => b.versionNo - a.versionNo,
+          )[0];
+          try {
+            const cData = await query<{ getDocumentContent: string }>(GET_CONTENT, {
+              versionId: latest.id,
+            });
+            setDocumentContent(cData.getDocumentContent);
+          } catch {
+            // Content may not be available — graceful
+          }
+        }
+      } catch {
+        // Non-critical
+      } finally {
+        setDetailLoading(false);
+      }
+    },
+    [router, query],
+  );
+
+  // URL-sync for detail: a shared ?doc=<id> link restores the detail view
+  // once the document list has loaded (the param must map to a real row).
+  const docParam = searchParams.get('doc');
   useEffect(() => {
-    const docParam = searchParams.get('doc');
-    if (docParam && !selectedDoc) {
-      // We'll load the detail when user clicks — just track the param
+    if (docParam && !selectedDoc && docs.length > 0) {
+      const match = docs.find((d) => d.id === docParam);
+      if (match) void openDetail(match);
     }
-  }, [searchParams, selectedDoc]);
+  }, [docParam, docs, selectedDoc, openDetail]);
 
   const effectiveStandard = isIMS ? localFilterStandard : globalStandard;
 
@@ -216,37 +259,6 @@ export default function DocumentsPage() {
     }
     return groups;
   }, [docs, hasClauseRefs, t]);
-
-  // ─── Detail view ───────────────────────────────────────────────────────────
-  async function openDetail(doc: Document) {
-    setSelectedDoc(doc);
-    setDetailLoading(true);
-    setDocumentContent(null);
-    router.replace(`?doc=${doc.id}`, { scroll: false });
-
-    try {
-      const vData = await query<{ listDocumentVersions: DocumentVersion[] }>(LIST_VERSIONS, {
-        documentId: doc.id,
-      });
-      setVersions(vData.listDocumentVersions);
-
-      if (vData.listDocumentVersions.length > 0) {
-        const latest = vData.listDocumentVersions[0];
-        try {
-          const cData = await query<{ getDocumentContent: string }>(GET_CONTENT, {
-            versionId: latest.id,
-          });
-          setDocumentContent(cData.getDocumentContent);
-        } catch {
-          // Content may not be available — graceful
-        }
-      }
-    } catch {
-      // Non-critical
-    } finally {
-      setDetailLoading(false);
-    }
-  }
 
   function closeDetail() {
     setSelectedDoc(null);
@@ -430,9 +442,21 @@ export default function DocumentsPage() {
                   }
                 })()}
                 runId={selectedDoc.id}
-                documentId={selectedDoc.id}
                 versionId={latestVersion?.id ?? null}
                 onSaved={() => openDetail(selectedDoc)}
+                onConverge={async (harmonizationKey, content) => {
+                  // A converged section is durable state: persist it as a
+                  // new version immediately, same door the manual save uses.
+                  if (!latestVersion?.id) return;
+                  await mutate(SAVE_SECTION_EDIT, {
+                    input: {
+                      versionId: latestVersion.id,
+                      harmonizationKey,
+                      body: content,
+                    },
+                  });
+                  openDetail(selectedDoc);
+                }}
               />
             )}
             {/* Non-DRAFT status: ControlledDocViewer (§7-compliant, read-only) */}
@@ -440,6 +464,8 @@ export default function DocumentsPage() {
               <ControlledDocViewer
                 contentRaw={documentContent}
                 documentId={selectedDoc.id}
+                versionNo={latestVersion?.versionNo}
+                generatedAt={latestVersion?.createdAt}
               />
             )}
             {!detailLoading && !documentContent && (
@@ -515,82 +541,80 @@ export default function DocumentsPage() {
     <>
       <PageHeader title={t('title')} />
       <StudioShell rail={rail} railLabel={tStudio('railLabel')}>
-
-      {/* Filter bar: standard pills visible only in IMS mode */}
-      <div className={styles.filters}>
-        {isIMS && (
-          <div className={styles.pills}>
-            {STANDARDS.map((s) => (
-              <button
-                key={s || 'all'}
-                type="button"
-                className={`${styles.pill} ${localFilterStandard === s ? styles.pillActive : ''}`}
-                onClick={() => setLocalFilterStandard(s)}
-              >
-                {s ? s.replace('ISO', 'ISO ') : tM1('filterAll')}
-              </button>
+        {/* Filter bar: standard pills visible only in IMS mode */}
+        <div className={styles.filters}>
+          {isIMS && (
+            <div className={styles.pills}>
+              {STANDARDS.map((s) => (
+                <button
+                  key={s || 'all'}
+                  type="button"
+                  className={`${styles.pill} ${localFilterStandard === s ? styles.pillActive : ''}`}
+                  onClick={() => setLocalFilterStandard(s)}
+                >
+                  {s ? s.replace('ISO', 'ISO ') : tM1('filterAll')}
+                </button>
+              ))}
+            </div>
+          )}
+          <select
+            className={styles.statusSelect}
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            aria-label={tM1('filterStatus')}
+          >
+            {STATUSES.map((s) => (
+              <option key={s || 'all'} value={s}>
+                {s ? tStatus(s) : tM1('filterAll')}
+              </option>
             ))}
-          </div>
-        )}
-        <select
-          className={styles.statusSelect}
-          value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
-          aria-label={tM1('filterStatus')}
-        >
-          {STATUSES.map((s) => (
-            <option key={s || 'all'} value={s}>
-              {s ? tStatus(s) : tM1('filterAll')}
-            </option>
-          ))}
-        </select>
-      </div>
+          </select>
+        </div>
 
-      {loading ? (
-        <p className={styles.loading}>{tM1('loading')}</p>
-      ) : groupedDocs ? (
-        /* Clause-family grouped view (RS-1 available) */
-        <>
-          {CLAUSE_FAMILIES.map((family) => {
-            const familyDocs = groupedDocs.get(family.label);
-            if (!familyDocs || familyDocs.length === 0) return null;
-            return (
-              <div key={family.prefix} className={styles.clauseGroup}>
-                <h3 className={styles.clauseGroupHeader}>{family.label}</h3>
+        {loading ? (
+          <p className={styles.loading}>{tM1('loading')}</p>
+        ) : groupedDocs ? (
+          /* Clause-family grouped view (RS-1 available) */
+          <>
+            {CLAUSE_FAMILIES.map((family) => {
+              const familyDocs = groupedDocs.get(family.label);
+              if (!familyDocs || familyDocs.length === 0) return null;
+              return (
+                <div key={family.prefix} className={styles.clauseGroup}>
+                  <h3 className={styles.clauseGroupHeader}>{family.label}</h3>
+                  <DataTable
+                    columns={columns}
+                    data={familyDocs}
+                    rowKey={(d) => d.id}
+                    onRowClick={openDetail}
+                    emptyMessage={tM1('emptyList')}
+                  />
+                </div>
+              );
+            })}
+            {groupedDocs.has(t('ungrouped')) && (
+              <div className={styles.clauseGroup}>
+                <h3 className={styles.clauseGroupHeader}>{t('ungrouped')}</h3>
                 <DataTable
                   columns={columns}
-                  data={familyDocs}
+                  data={groupedDocs.get(t('ungrouped'))!}
                   rowKey={(d) => d.id}
                   onRowClick={openDetail}
                   emptyMessage={tM1('emptyList')}
                 />
               </div>
-            );
-          })}
-          {groupedDocs.has(t('ungrouped')) && (
-            <div className={styles.clauseGroup}>
-              <h3 className={styles.clauseGroupHeader}>{t('ungrouped')}</h3>
-              <DataTable
-                columns={columns}
-                data={groupedDocs.get(t('ungrouped'))!}
-                rowKey={(d) => d.id}
-                onRowClick={openDetail}
-                emptyMessage={tM1('emptyList')}
-              />
-            </div>
-          )}
-        </>
-      ) : (
-        /* Flat list (RS-1 not yet available — graceful degradation) */
-        <DataTable
-          columns={columns}
-          data={docs}
-          rowKey={(d) => d.id}
-          onRowClick={openDetail}
-          emptyMessage={tM1('emptyList')}
-        />
-      )}
-
+            )}
+          </>
+        ) : (
+          /* Flat list (RS-1 not yet available — graceful degradation) */
+          <DataTable
+            columns={columns}
+            data={docs}
+            rowKey={(d) => d.id}
+            onRowClick={openDetail}
+            emptyMessage={tM1('emptyList')}
+          />
+        )}
       </StudioShell>
 
       <FormDrawer

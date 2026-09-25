@@ -22,9 +22,13 @@
  */
 
 import { Logger } from '@aws-lambda-powertools/logger';
-import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+import {
+  SecretsManagerClient,
+  GetSecretValueCommand,
+  PutSecretValueCommand,
+} from '@aws-sdk/client-secrets-manager';
 import Stripe from 'stripe';
-import { extractContext } from './shared.js';
+import { extractContext, type AppSyncEvent } from './shared.js';
 
 const logger = new Logger({ serviceName: 'resolver-billing' });
 const sm = new SecretsManagerClient({});
@@ -33,12 +37,6 @@ interface StripeSecret {
   secretKey: string;
   portalConfigurationId?: string;
   customersByTenant?: Record<string, string>;
-}
-
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
 }
 
 /**
@@ -57,12 +55,12 @@ async function loadStripe(): Promise<{ secret: StripeSecret; stripe: Stripe }> {
 }
 
 export async function handler(event: AppSyncEvent): Promise<unknown> {
-  const { tenantId } = extractContext(event);
+  const { tenantId, poolClass } = extractContext(event);
   logger.appendKeys({ tenantId, requestField: event.info.fieldName });
 
   switch (event.info.fieldName) {
     case 'createBillingPortalSession':
-      return createBillingPortalSession(event, tenantId);
+      return createBillingPortalSession(event, tenantId, poolClass);
     default:
       throw new Error(`Unknown field: ${event.info.fieldName}`);
   }
@@ -71,9 +69,26 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
 async function createBillingPortalSession(
   event: AppSyncEvent,
   tenantId: string,
+  poolClass: string,
 ): Promise<{ url: string }> {
+  // Billing is an admin surface — Pool B (tenant-admin) only.
+  if (poolClass !== 'tenant-admin') {
+    throw new Error('FORBIDDEN: billing portal requires tenant-admin');
+  }
+
   const returnUrl = event.arguments.returnUrl as string | undefined;
-  if (!returnUrl || !/^https?:\/\//.test(returnUrl)) {
+  // URL-parse, not prefix-match: `https://localhost:9999@evil.example/x`
+  // passes a `localhost[:/]` regex while Stripe 302s to evil.example.
+  const isValidReturn = (() => {
+    if (!returnUrl) return false;
+    try {
+      const u = new URL(returnUrl);
+      return u.protocol === 'https:' || (u.protocol === 'http:' && u.hostname === 'localhost');
+    } catch {
+      return false;
+    }
+  })();
+  if (!isValidReturn) {
     throw new Error('INVALID_RETURN_URL');
   }
 
@@ -87,6 +102,9 @@ async function createBillingPortalSession(
     const customer = await stripe.customers.create({ metadata: { tenantId } });
     customerId = customer.id;
     logger.info('Created Stripe customer for tenant', { customerId });
+    // Persist back into the secret's tenant→customer map so repeat calls
+    // reuse this customer instead of minting a duplicate every time.
+    await persistCustomerMapping(tenantId, customerId);
   }
 
   const session = await stripe.billingPortal.sessions.create({
@@ -97,4 +115,30 @@ async function createBillingPortalSession(
 
   logger.info('Created billing portal session', { customerId });
   return { url: session.url };
+}
+
+/**
+ * Read-modify-write the Stripe secret to record tenantId→customerId.
+ * The secret already owns the seeded map — this extends it for tenants
+ * created after seeding. Concurrent writers could interleave; the window
+ * is two admins of the SAME tenant opening the portal at once, and the
+ * worst case is one duplicate customer that the map resolves on retry.
+ */
+async function persistCustomerMapping(tenantId: string, customerId: string): Promise<void> {
+  const secretName = process.env.STRIPE_SECRET_NAME!;
+  try {
+    const resp = await sm.send(new GetSecretValueCommand({ SecretId: secretName }));
+    const current = JSON.parse(resp.SecretString ?? '{}') as StripeSecret;
+    current.customersByTenant = { ...current.customersByTenant, [tenantId]: customerId };
+    await sm.send(
+      new PutSecretValueCommand({ SecretId: secretName, SecretString: JSON.stringify(current) }),
+    );
+  } catch (err) {
+    // The customer exists and the portal session still works — a missed
+    // persist just means the next call may create one more customer.
+    logger.warn('Failed to persist Stripe customer mapping', {
+      tenantId,
+      error: (err as Error).message,
+    });
+  }
 }

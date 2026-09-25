@@ -24,8 +24,7 @@ function makeDeployFrontendStep(
   envName: string,
 ): pipelines.CodeBuildStep {
   // Synth-time ARN — deterministic role name enables IAM grant without runtime env vars (A-1)
-  const contentDeployRoleArn =
-    `arn:aws:iam::${envAccount}:role/cumplify-${envName}-frontend-content-deploy`;
+  const contentDeployRoleArn = `arn:aws:iam::${envAccount}:role/cumplify-${envName}-frontend-content-deploy`;
 
   return new pipelines.CodeBuildStep('DeployFrontendContent', {
     envFromCfnOutputs: {
@@ -85,7 +84,7 @@ export class PipelineStack extends cdk.Stack {
       selfMutation: true, // AC-1.2 — pipeline updates its own definition
 
       synth: new pipelines.ShellStep('Synth', {
-        input: pipelines.CodePipelineSource.connection('Cumplifyrepo/Cumplify', 'develop', {
+        input: pipelines.CodePipelineSource.connection('stffinfcti/Cumplify', 'develop', {
           connectionArn,
         }),
         commands: [
@@ -99,11 +98,16 @@ export class PipelineStack extends cdk.Stack {
           // i18n gate: CLAUDE.md promised this check in CI but it was never
           // wired — 5 violations shipped unnoticed before 2026-07-22.
           'cd frontend && npm run i18n:check && cd ..',
+          'npm run lint',
+          'npm run typecheck',
           // Hard audit gate with an explicit EXPIRING allowlist — raw
           // `npm audit --audit-level=high` cannot express exceptions for deps
           // bundled inside another package's tarball (aws-cdk-lib
           // bundleDependencies), which broke Synth on GHSA-3jxr-9vmj-r5cp.
+          // The gate only inspects the root lockfile, so frontend deps get
+          // their own audit pass.
           'npx tsx scripts/audit-gate.ts',
+          'npx tsx scripts/audit-gate.ts frontend',
           'npx cdk synth --all',
           // CDK Nag runs as an Aspect during synth; a Nag error fails synth here.
         ],
@@ -138,7 +142,9 @@ export class PipelineStack extends cdk.Stack {
       envConfig: ENV_CONFIGS.staging,
     });
     const stagingDeployContent = makeDeployFrontendStep(
-      stagingStage, ENV_CONFIGS.staging.account, 'staging',
+      stagingStage,
+      ENV_CONFIGS.staging.account,
+      'staging',
     );
     const smokeTest = new pipelines.ShellStep('SmokeTest', {
       envFromCfnOutputs: {
@@ -168,7 +174,8 @@ export class PipelineStack extends cdk.Stack {
       pre: [
         new pipelines.ManualApprovalStep('ApproveToProd'),
         new pipelines.ShellStep('LegalSignoffGuard', {
-          commands: ['npx tsx scripts/assert-legal-signoff.ts'],
+          // stdlib-only script — no tsx/npm install needed in the gate step.
+          commands: ['node scripts/assert-legal-signoff.mjs'],
         }),
       ],
       post: [makeDeployFrontendStep(prodStage, ENV_CONFIGS.prod.account, 'prod')],

@@ -11,6 +11,7 @@
  * T3E-F4: payload includes seedHash for re-trigger detection.
  */
 
+import { createHash } from 'node:crypto';
 import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { Logger } from '@aws-lambda-powertools/logger';
@@ -64,6 +65,14 @@ export async function handler(event: {
   for (const [modelId, weights] of Object.entries(seed.models)) {
     const pk = `MODELWEIGHT#${modelId}`;
     const sk = `VERSION#${version}`;
+    // F31: compare-and-swap on content — a same-day corrected seed file must
+    // overwrite the row, not silently skip it (metering would keep pricing
+    // with the stale weights). Same hash → no-op.
+    const contentHash = createHash('sha256')
+      .update(
+        JSON.stringify({ modelId, wIn: weights.wIn, wOut: weights.wOut, wCache: weights.wCache }),
+      )
+      .digest('hex');
 
     try {
       await ddb.send(
@@ -79,18 +88,21 @@ export async function handler(event: {
               ...(weights.wCache !== null ? { wCache: weights.wCache } : {}),
               effectiveFrom: seed.capturedAt,
               sourceCommit: seed.sourceCommit,
+              contentHash,
               seededAt: new Date().toISOString(),
             },
             { removeUndefinedValues: true },
           ),
-          ConditionExpression: 'attribute_not_exists(PK)',
+          // Put only when the row is absent or its stored weights differ.
+          ConditionExpression: 'attribute_not_exists(contentHash) OR contentHash <> :contentHash',
+          ExpressionAttributeValues: marshall({ ':contentHash': contentHash }),
         }),
       );
 
       logger.info('Seeded weight', { modelId, pk, sk });
       seeded++;
     } catch (err: unknown) {
-      // T3E-F3 FIX: ConditionalCheckFailedException = already seeded, skip
+      // ConditionalCheckFailedException = same content already seeded, skip
       if ((err as Error).name === 'ConditionalCheckFailedException') {
         logger.info('Weight already seeded, skipping', { modelId, pk, sk });
         skipped++;

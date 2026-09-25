@@ -98,8 +98,14 @@ describe('ProposalView — rca-write (C1)', () => {
             method: '5why',
             findings: {
               whys: [
-                { question: 'Why did the finish not match?', answer: 'Wrong lacquer batch was pulled.' },
-                { question: 'Why was the wrong batch pulled?', answer: 'Bins are not labeled by job.' },
+                {
+                  question: 'Why did the finish not match?',
+                  answer: 'Wrong lacquer batch was pulled.',
+                },
+                {
+                  question: 'Why was the wrong batch pulled?',
+                  answer: 'Bins are not labeled by job.',
+                },
               ],
             },
             rootCauseSummary: 'No job-level material identification at the finishing station.',

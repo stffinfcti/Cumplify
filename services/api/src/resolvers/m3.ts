@@ -13,27 +13,36 @@ import {
   extractAgentContext,
   beginTenantTransaction,
   publishAuditEvent,
+  requireModuleRole,
   marshalOne,
   marshalMany,
+  LIST_QUERY_LIMIT,
+  type AppSyncEvent,
+  type SqlParameter,
+  rollbackQuietly,
 } from './shared.js';
 import { mapEnum, FINDING_TYPE_MAP } from './enum-mappings.js';
 
 const logger = new Logger({ serviceName: 'resolver-m3' });
 const lambdaClient = new LambdaClient({});
 
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
-}
-
 const AGENT_FIELDS = new Set(['agentGenerateChecklist', 'agentScoreReadiness']);
+
+// M-effort: every id the resolver casts to ::uuid is validated as a UUID up
+// front — a malformed id gets a clean VALIDATION error instead of a Postgres
+// cast failure (or a silent no-match update).
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+function assertUuid(value: unknown, field: string): asserts value is string {
+  if (typeof value !== 'string' || !UUID_RE.test(value)) {
+    throw new Error(`VALIDATION: ${field} must be a UUID`);
+  }
+}
 
 export async function handler(event: AppSyncEvent): Promise<unknown> {
   // RS-7: agent* (@aws_iam) fields never carry resolverContext — branch
   // BEFORE extractContext, which would throw for them.
   if (AGENT_FIELDS.has(event.info.fieldName)) {
-    const { tenantId, actor } = extractAgentContext(event.arguments, 'LeadAuditor');
+    const { tenantId, actor } = extractAgentContext(event.arguments, 'LeadAuditor', event.identity);
     logger.appendKeys({ tenantId, requestField: event.info.fieldName });
     return event.info.fieldName === 'agentGenerateChecklist'
       ? generateAuditChecklist(event, tenantId, actor) // one implementation, two entry points
@@ -41,18 +50,20 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
   }
 
   const ctx = extractContext(event);
-  const { tenantId, sub } = ctx;
+  const { tenantId, sub, role } = ctx;
   logger.appendKeys({ tenantId, requestField: event.info.fieldName });
 
+  // M-effort: M3 write mutations are role-gated at entry (Part 13 matrix);
+  // queries stay at the authenticated floor.
   switch (event.info.fieldName) {
     case 'createAuditProgramme':
-      return createAuditProgramme(event, tenantId, sub);
+      return requireModuleRole(role, 'M3', () => createAuditProgramme(event, tenantId, sub));
     case 'scheduleAudit':
-      return scheduleAudit(event, tenantId, sub);
+      return requireModuleRole(role, 'M3', () => scheduleAudit(event, tenantId, sub));
     case 'recordFinding':
-      return recordFinding(event, tenantId, sub);
+      return requireModuleRole(role, 'M3', () => recordFinding(event, tenantId, sub));
     case 'completeAudit':
-      return completeAudit(event, tenantId, sub);
+      return requireModuleRole(role, 'M3', () => completeAudit(event, tenantId, sub));
     case 'getAudit':
       return getAudit(event, tenantId);
     case 'listAudits':
@@ -62,11 +73,11 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
     case 'listAuditChecklists':
       return listAuditChecklists(event, tenantId);
     case 'runAuditFindings':
-      return runAuditFindings(event, tenantId, sub);
+      return requireModuleRole(role, 'M3', () => runAuditFindings(event, tenantId, sub));
     case 'getAuditReadiness':
       return getAuditReadiness(event, tenantId);
     case 'generateAuditChecklist':
-      return generateAuditChecklist(event, tenantId, sub);
+      return requireModuleRole(role, 'M3', () => generateAuditChecklist(event, tenantId, sub));
     default:
       throw new Error(`Unknown field: ${event.info.fieldName}`);
   }
@@ -109,13 +120,14 @@ async function createAuditProgramme(event: AppSyncEvent, tenantId: string, actor
     logger.info('Audit programme created', { tenantId });
     return programme;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
 
 async function scheduleAudit(event: AppSyncEvent, tenantId: string, actor: string) {
   const input = event.arguments.input as Record<string, unknown>;
+  assertUuid(input.programmeId, 'programmeId');
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(
@@ -152,13 +164,17 @@ async function scheduleAudit(event: AppSyncEvent, tenantId: string, actor: strin
     logger.info('Audit scheduled', { tenantId });
     return audit;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
 
 async function recordFinding(event: AppSyncEvent, tenantId: string, actor: string) {
   const input = event.arguments.input as Record<string, unknown>;
+  assertUuid(input.auditId, 'auditId');
+  if (input.checklistId !== undefined && input.checklistId !== null) {
+    assertUuid(input.checklistId, 'checklistId');
+  }
   const findingType = mapEnum(FINDING_TYPE_MAP, input.findingType as string, 'findingType');
   const txn = await beginTenantTransaction(tenantId);
   try {
@@ -207,20 +223,26 @@ async function recordFinding(event: AppSyncEvent, tenantId: string, actor: strin
     });
     return finding;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
 
 async function completeAudit(event: AppSyncEvent, tenantId: string, actor: string) {
   const id = event.arguments.id as string;
+  assertUuid(id, 'id');
   const txn = await beginTenantTransaction(tenantId);
   try {
+    // M-effort: status predicate rides the UPDATE — a concurrent complete can
+    // no longer double-complete (and double-emit Audit.Completed for) the row.
     const result = await txn.execute(
       `UPDATE m3.audits SET status = 'completed', actual_date = NOW(), updated_at = NOW()
-       WHERE id = :id::uuid RETURNING *`,
+       WHERE id = :id::uuid AND status <> 'completed' RETURNING *`,
       [{ name: 'id', value: { stringValue: id } }],
     );
+    if (!result.records || result.records.length === 0) {
+      throw new Error('AUDIT_NOT_FOUND_OR_ALREADY_COMPLETED');
+    }
     await txn.commit();
     await publishAuditEvent({
       tenantId,
@@ -235,12 +257,13 @@ async function completeAudit(event: AppSyncEvent, tenantId: string, actor: strin
     });
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
 
 async function getAudit(event: AppSyncEvent, tenantId: string) {
+  assertUuid(event.arguments.id, 'id');
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(`SELECT * FROM m3.audits WHERE id = :id::uuid`, [
@@ -249,7 +272,7 @@ async function getAudit(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -265,7 +288,7 @@ async function getAuditReadiness(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -304,23 +327,28 @@ async function agentScoreReadiness(event: AppSyncEvent, tenantId: string, actor:
     );
 
     const rows = result.records ?? [];
-    for (const row of rows) {
-      const clauseRef = (row[0] as { stringValue?: string }).stringValue!;
-      const status = (row[1] as { stringValue?: string; isNull?: boolean }).stringValue;
-      const score = status === 'prose' || status === 'na_justified' ? 100.0 : 0.0;
+    if (rows.length) {
+      const params: SqlParameter[] = [
+        { name: 'tenantId', value: { stringValue: tenantId } },
+        { name: 'standard', value: { stringValue: standard } },
+        { name: 'actor', value: { stringValue: actor } },
+      ];
+      const tuples = rows.map((row, i) => {
+        const clauseRef = (row[0] as { stringValue?: string }).stringValue!;
+        const status = (row[1] as { stringValue?: string; isNull?: boolean }).stringValue;
+        const score = status === 'prose' || status === 'na_justified' ? 100.0 : 0.0;
+        params.push(
+          { name: `clauseRef${i}`, value: { stringValue: clauseRef } },
+          { name: `score${i}`, value: { doubleValue: score } },
+        );
+        return `(:tenantId, :standard, :clauseRef${i}, :score${i}, NOW(), :actor)`;
+      });
       await txn.execute(
         `INSERT INTO m3.audit_readiness_scores (tenant_id, standard, clause_ref, score, assessed_at, created_by)
-         VALUES (:tenantId, :standard, :clauseRef, :score, NOW(), :actor)
+         VALUES ${tuples.join(', ')}
          ON CONFLICT (tenant_id, standard, clause_ref)
-         DO UPDATE SET score = EXCLUDED.score, assessed_at = NOW(), updated_at = NOW(), version = m3.audit_readiness_scores.version + 1
-         RETURNING id`,
-        [
-          { name: 'tenantId', value: { stringValue: tenantId } },
-          { name: 'standard', value: { stringValue: standard } },
-          { name: 'clauseRef', value: { stringValue: clauseRef } },
-          { name: 'score', value: { doubleValue: score } },
-          { name: 'actor', value: { stringValue: actor } },
-        ],
+         DO UPDATE SET score = EXCLUDED.score, assessed_at = NOW(), updated_at = NOW(), version = m3.audit_readiness_scores.version + 1`,
+        params,
       );
     }
 
@@ -345,10 +373,14 @@ async function agentScoreReadiness(event: AppSyncEvent, tenantId: string, actor:
       payload: { standard, clauseCount: rows.length },
     });
 
-    logger.info('Agent readiness scoring complete', { tenantId, standard, clauseCount: rows.length });
+    logger.info('Agent readiness scoring complete', {
+      tenantId,
+      standard,
+      clauseCount: rows.length,
+    });
     return marshalMany(scoresResult);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -367,6 +399,7 @@ async function agentScoreReadiness(event: AppSyncEvent, tenantId: string, actor:
  */
 async function generateAuditChecklist(event: AppSyncEvent, tenantId: string, actor: string) {
   const auditId = event.arguments.auditId as string;
+  assertUuid(auditId, 'auditId');
   const txn = await beginTenantTransaction(tenantId);
   try {
     // 1. Validate audit exists and get its standard
@@ -481,15 +514,10 @@ async function generateAuditChecklist(event: AppSyncEvent, tenantId: string, act
     });
     return marshalMany(checklistResult);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
-
 
 // ─── S4 Audit Studio read surfaces + LeadAuditor findings dispatch ──────────
 
@@ -498,28 +526,24 @@ async function listAudits(tenantId: string) {
   try {
     const result = await txn.execute(
       `SELECT id, programme_id, standard, scope, lead_auditor_id, planned_date, actual_date, status
-       FROM m3.audits ORDER BY planned_date DESC`,
+       FROM m3.audits ORDER BY planned_date DESC LIMIT ${LIST_QUERY_LIMIT}`,
     );
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
 
 async function listAuditFindings(event: AppSyncEvent, tenantId: string) {
   const auditId = (event.arguments.auditId as string) ?? '';
-  if (!auditId.trim()) throw new Error('VALIDATION: auditId is required');
+  assertUuid(auditId, 'auditId');
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(
       `SELECT id, audit_id, checklist_id, finding_type, clause_ref, description, evidence_ref
-       FROM m3.audit_findings WHERE audit_id = :auditId::uuid ORDER BY created_at DESC`,
+       FROM m3.audit_findings WHERE audit_id = :auditId::uuid ORDER BY created_at DESC LIMIT ${LIST_QUERY_LIMIT}`,
       [{ name: 'auditId', value: { stringValue: auditId } }],
     );
     await txn.commit();
@@ -529,33 +553,25 @@ async function listAuditFindings(event: AppSyncEvent, tenantId: string) {
       findingType: String(r.findingType).toUpperCase(),
     }));
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
 
 async function listAuditChecklists(event: AppSyncEvent, tenantId: string) {
   const auditId = (event.arguments.auditId as string) ?? '';
-  if (!auditId.trim()) throw new Error('VALIDATION: auditId is required');
+  assertUuid(auditId, 'auditId');
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(
       `SELECT id, audit_id, clause_ref, question, expected_evidence
-       FROM m3.audit_checklists WHERE audit_id = :auditId::uuid ORDER BY clause_ref`,
+       FROM m3.audit_checklists WHERE audit_id = :auditId::uuid ORDER BY clause_ref LIMIT ${LIST_QUERY_LIMIT}`,
       [{ name: 'auditId', value: { stringValue: auditId } }],
     );
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -571,7 +587,7 @@ async function listAuditChecklists(event: AppSyncEvent, tenantId: string) {
 async function runAuditFindings(event: AppSyncEvent, tenantId: string, actor: string) {
   const leadAuditorFnArn = process.env.LEAD_AUDITOR_FN_ARN ?? '';
   const auditId = (event.arguments.auditId as string) ?? '';
-  if (!auditId.trim()) throw new Error('VALIDATION: auditId is required');
+  assertUuid(auditId, 'auditId');
   if (!leadAuditorFnArn) throw new Error('LEAD_AUDITOR_NOT_AVAILABLE');
 
   const txn = await beginTenantTransaction(tenantId);
@@ -602,11 +618,7 @@ async function runAuditFindings(event: AppSyncEvent, tenantId: string, actor: st
     priorFindings = marshalMany(fResult);
     await txn.commit();
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 

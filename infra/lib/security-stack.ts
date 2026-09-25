@@ -17,6 +17,8 @@ import * as cdk from 'aws-cdk-lib';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as sns from 'aws-cdk-lib/aws-sns';
+import * as snsSubscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import { Construct } from 'constructs';
 import { NagSuppressions } from 'cdk-nag';
 import { type EnvConfig } from './env-config.js';
@@ -38,6 +40,7 @@ export interface SecurityOutputs {
   readonly bedrockKey: kms.IKey;
   readonly regionalWaf: wafv2.CfnWebACL;
   readonly cloudfrontWaf: wafv2.CfnWebACL;
+  readonly opsAlertTopic: sns.ITopic;
 }
 
 /**
@@ -253,6 +256,18 @@ export class SecurityStack extends cdk.Stack {
     });
 
     // -----------------------------------------------------------------------
+    // Ops alert topic — every DLQ/integrity alarm publishes here (email for
+    // now; a paging integration can subscribe alongside). CMK-encrypted so
+    // cloudwatch.amazonaws.com (allowed on the sns key policy) can publish.
+    // -----------------------------------------------------------------------
+    const opsAlertTopic = new sns.Topic(this, 'OpsAlertTopic', {
+      topicName: `cumplify-${envConfig.envName}-ops-alerts`,
+      masterKey: snsKey,
+      enforceSSL: true,
+    });
+    opsAlertTopic.addSubscription(new snsSubscriptions.EmailSubscription(envConfig.alertEmail));
+
+    // -----------------------------------------------------------------------
     // CDK Nag suppressions for this stack
     // -----------------------------------------------------------------------
 
@@ -288,6 +303,7 @@ export class SecurityStack extends cdk.Stack {
       bedrockKey,
       regionalWaf,
       cloudfrontWaf,
+      opsAlertTopic,
     };
   }
 }

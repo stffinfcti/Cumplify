@@ -79,7 +79,7 @@ describe('store-token handler', () => {
     expect(vals[':gsi9sk']).toBe('2026-07-09T12:00:00.000Z');
   });
 
-  it('has NO ConditionExpression (native upsert, idempotent on re-delivery)', async () => {
+  it('upserts only while unresolved — re-delivery stays idempotent, never overwrites a resolved item', async () => {
     await handler({
       taskToken: 'token-xyz',
       input: {
@@ -92,8 +92,31 @@ describe('store-token handler', () => {
     });
 
     const call = mockDdbSend.mock.calls[0][0];
-    // No ConditionExpression — upsert behavior
-    expect(call.input.ConditionExpression).toBeUndefined();
+    // Condition allows create-or-refresh only while PENDING — a re-delivered
+    // StoreToken still upserts, but a replay can never revert APPROVED/EXPIRED.
+    expect(call.input.ConditionExpression).toBe(
+      'attribute_not_exists(#status) OR #status = :status',
+    );
+
+    // Replay after resolution: the write is conditionally rejected and the
+    // handler swallows it as a no-op rather than failing the state machine.
+    mockDdbSend.mockRejectedValueOnce(
+      Object.assign(new Error('condition failed'), {
+        name: 'ConditionalCheckFailedException',
+      }),
+    );
+    await expect(
+      handler({
+        taskToken: 'token-xyz',
+        input: {
+          tenantId: 'tenant-2',
+          hitlItemId: '02ABC',
+          agentName: 'DocStudio',
+          proposedAction: { tool: 'doc-publish', args: {} },
+          createdAt: '2026-07-09T13:00:00.000Z',
+        },
+      }),
+    ).resolves.toEqual({ stored: true });
   });
 
   it('GSI9PK uses TENANT# prefix (FF-5 convention)', async () => {

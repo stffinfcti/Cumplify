@@ -39,11 +39,7 @@ export function StandardSwitch() {
   };
 
   return (
-    <div
-      className={styles.container}
-      role="radiogroup"
-      aria-label={t('standardScopeLabel')}
-    >
+    <div className={styles.container} role="radiogroup" aria-label={t('standardScopeLabel')}>
       {OPTIONS.map((opt, idx) => {
         const isActive = standard === opt.value;
         return (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import {
   StatusBadge,
@@ -10,13 +10,9 @@ import {
   ProvenanceLink,
 } from '@/components/shared';
 import { useGraphQL } from '@/lib/api';
+import { errorText } from '@/lib/error-text';
 import { canApprove } from '@/lib/role-matrix';
-import {
-  type HitlItem,
-  type ApprovalResult,
-  APPROVE_HITL_MUTATION,
-  tryParseArgs,
-} from './hitl';
+import { type HitlItem, type ApprovalResult, APPROVE_HITL_MUTATION, tryParseArgs } from './hitl';
 import { ProposalView } from './ProposalView';
 import styles from './HitlCard.module.css';
 
@@ -41,27 +37,41 @@ export interface HitlCardProps {
 
 export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
   const tCard = useTranslations('hitlCard');
+  const tErr = useTranslations('errors');
   const { mutate } = useGraphQL();
 
   const [note, setNote] = useState('');
   const [approved, setApproved] = useState<ApprovalResult | null>(null);
   const [actionError, setActionError] = useState('');
+  const [busy, setBusy] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
   const [editParseError, setEditParseError] = useState('');
+  const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isFlagged = !!item.guardrailEvidence;
   const canAct = canApprove(role, item.module);
   const isParseable = tryParseArgs(item.draftBody) !== null;
 
+  // The auto-dismiss timer must not fire after the card unmounts.
+  useEffect(
+    () => () => {
+      if (dismissTimer.current) clearTimeout(dismissTimer.current);
+    },
+    [],
+  );
+
   function markApproved(result: ApprovalResult) {
     setApproved(result);
     onApproved?.(item.hitlItemId, result);
-    setTimeout(() => onRemove?.(item.hitlItemId), 10_000);
+    dismissTimer.current = setTimeout(() => onRemove?.(item.hitlItemId), 10_000);
   }
 
   async function handleApprove() {
     if (isFlagged && !note.trim()) return;
+    // Guard against double-fire: a second SendTaskSuccess on the same token
+    // 404s as TaskDoesNotExist — the server would mark the item TIMED_OUT.
+    setBusy(true);
     setActionError('');
     try {
       const data = await mutate<{ approveHitlItem: ApprovalResult }>(APPROVE_HITL_MUTATION, {
@@ -73,7 +83,21 @@ export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
       });
       markApproved(data.approveHitlItem);
     } catch (err) {
-      setActionError((err as Error).message || tCard('actionError'));
+      setActionError(errorText(err, tErr, 'generic') || tCard('actionError'));
+      pruneIfAlreadyResolved(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** The resolver's 409/410 means this item was resolved on another surface
+   * or its SFN task expired — the card is stale either way, so prune it
+   * instead of leaving a dead card up. Matches the resolver's stable
+   * HITL_* code prefix, never the prose message. */
+  function pruneIfAlreadyResolved(err: unknown) {
+    const msg = (err as Error).message ?? '';
+    if (msg.includes('HITL_ALREADY_RESOLVED') || msg.includes('HITL_TASK_EXPIRED')) {
+      onRemove?.(item.hitlItemId);
     }
   }
 
@@ -92,6 +116,7 @@ export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
       setEditParseError(tCard('editParseError'));
       return;
     }
+    setBusy(true);
     setActionError('');
     setEditParseError('');
     try {
@@ -108,11 +133,15 @@ export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
       setIsEditing(false);
       markApproved(data.approveHitlItem);
     } catch (err) {
-      setActionError((err as Error).message || tCard('actionError'));
+      setActionError(errorText(err, tErr, 'generic') || tCard('actionError'));
+      pruneIfAlreadyResolved(err);
+    } finally {
+      setBusy(false);
     }
   }
 
   async function handleSendBack() {
+    setBusy(true);
     setActionError('');
     try {
       await mutate(APPROVE_HITL_MUTATION, {
@@ -124,7 +153,10 @@ export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
       });
       onRemove?.(item.hitlItemId);
     } catch (err) {
-      setActionError((err as Error).message || tCard('actionError'));
+      setActionError(errorText(err, tErr, 'generic') || tCard('actionError'));
+      pruneIfAlreadyResolved(err);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -184,7 +216,7 @@ export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
           <div className={styles.editActions}>
             <PrimaryButton
               onClick={handleConfirmEditApprove}
-              disabled={isFlagged && !note.trim()}
+              disabled={busy || (isFlagged && !note.trim())}
             >
               {tCard('confirmEdit')}
             </PrimaryButton>
@@ -232,13 +264,17 @@ export function HitlCard({ item, role, onApproved, onRemove }: HitlCardProps) {
       {/* CARD-3: three role-gated action buttons */}
       {canAct && !approved && !isEditing && (
         <div className={styles.actions} data-testid={`hitl-actions-${item.hitlItemId}`}>
-          <PrimaryButton onClick={handleApprove} disabled={isFlagged && !note.trim()}>
+          <PrimaryButton onClick={handleApprove} disabled={busy || (isFlagged && !note.trim())}>
             {tCard('approve')}
           </PrimaryButton>
           {isParseable && (
-            <SecondaryButton onClick={enterEditMode}>{tCard('editAndApprove')}</SecondaryButton>
+            <SecondaryButton onClick={enterEditMode} disabled={busy}>
+              {tCard('editAndApprove')}
+            </SecondaryButton>
           )}
-          <SecondaryButton onClick={handleSendBack}>{tCard('sendBack')}</SecondaryButton>
+          <SecondaryButton onClick={handleSendBack} disabled={busy}>
+            {tCard('sendBack')}
+          </SecondaryButton>
         </div>
       )}
     </div>

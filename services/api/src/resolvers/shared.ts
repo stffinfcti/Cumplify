@@ -23,8 +23,11 @@ import {
 } from '@aws-sdk/client-rds-data';
 import { STSClient, AssumeRoleCommand } from '@aws-sdk/client-sts';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { createHash } from 'node:crypto';
 import { Logger } from '@aws-lambda-powertools/logger';
 import { publish } from '../../../eventing/src/publisher.js';
+import { canApprove } from '../permissions/role-matrix.js';
+import type { DataApiResult } from './marshal.js';
 
 const rdsClient = new RDSDataClient({});
 const stsClient = new STSClient({});
@@ -35,15 +38,62 @@ const TABLE_NAME = process.env.TABLE_NAME!;
 const BUS_NAME = process.env.BUS_NAME!;
 const TENANT_DATA_ROLE_ARN = process.env.TENANT_DATA_ROLE_ARN!;
 
+// ─── Rendering/sealing env (single source — m1/common and forms/common
+// previously carried byte-identical copies; both re-export these) ────────────
+export const CONTENT_BUCKET = process.env.CONTENT_BUCKET ?? '';
+export const EVIDENCE_BUCKET = process.env.EVIDENCE_BUCKET ?? '';
+export const EVIDENCE_LOCK_MODE = process.env.EVIDENCE_LOCK_MODE ?? 'GOVERNANCE';
+export const PDF_RENDER_FN = process.env.PDF_RENDER_FN ?? '';
+export const DEFAULT_RETENTION_YEARS = 7;
+
+// Hard ceiling for unbounded list reads — single source; resolvers
+// interpolate it into their SQL (Data API has no LIMIT bind parameter).
+export const LIST_QUERY_LIMIT = 500;
+
+/** Canonical AppSync Lambda-resolver event — one definition for the whole API. */
+export interface AppSyncEvent {
+  info: { fieldName: string };
+  arguments: Record<string, unknown>;
+  identity?: {
+    resolverContext?: Record<string, string>;
+    userArn?: string;
+    username?: string;
+  };
+}
+
 // ─── Tenant-scoped DDB credential cache (per warm container) ─────────────────
 interface CachedCredentials {
   accessKeyId: string;
   secretAccessKey: string;
   sessionToken: string;
   expiration: number; // epoch ms
+  /** Client riding these credentials — cache-hit reuses it instead of
+   * minting a new DynamoDBClient (and its connection pool) per call. */
+  client: DynamoDBClient;
 }
 
 const credentialCache = new Map<string, CachedCredentials>();
+// Bound per warm container — tenant space is unbounded and stale entries
+// were never pruned. On overflow, drop expired entries first, then oldest.
+const CREDENTIAL_CACHE_MAX = 500;
+
+function pruneCredentialCache(now: number): void {
+  const evict = (key: string) => {
+    credentialCache.get(key)?.client.destroy();
+    credentialCache.delete(key);
+  };
+  for (const [key, creds] of credentialCache) {
+    if (creds.expiration - now <= 120_000) evict(key);
+  }
+  if (credentialCache.size <= CREDENTIAL_CACHE_MAX) return;
+  // Insertion-ordered: evict oldest until within cap.
+  const overflow = credentialCache.size - CREDENTIAL_CACHE_MAX;
+  let removed = 0;
+  for (const key of credentialCache.keys()) {
+    if (removed++ >= overflow) break;
+    evict(key);
+  }
+}
 
 /**
  * Assume the tenant-data role with a bare tenantId session tag.
@@ -56,50 +106,57 @@ export async function getTenantDdbClient(tenantId: string): Promise<DynamoDBClie
 
   // Reuse if >2 min remaining (buffer for clock drift)
   if (cached && cached.expiration - now > 120_000) {
-    return new DynamoDBClient({
-      credentials: {
-        accessKeyId: cached.accessKeyId,
-        secretAccessKey: cached.secretAccessKey,
-        sessionToken: cached.sessionToken,
-      },
-    });
+    return cached.client;
   }
 
   const assumed = await stsClient.send(
     new AssumeRoleCommand({
       RoleArn: TENANT_DATA_ROLE_ARN,
-      RoleSessionName: `resolver-${tenantId.substring(0, 8)}-${now}`,
+      RoleSessionName: `resolver-${tenantIdHash(tenantId)}-${now}`,
       Tags: [{ Key: 'tenantId', Value: tenantId }], // BARE tenantId (FF-3)
       DurationSeconds: 900,
     }),
   );
 
+  const client = new DynamoDBClient({
+    credentials: {
+      accessKeyId: assumed.Credentials!.AccessKeyId!,
+      secretAccessKey: assumed.Credentials!.SecretAccessKey!,
+      sessionToken: assumed.Credentials!.SessionToken!,
+    },
+  });
   const creds: CachedCredentials = {
     accessKeyId: assumed.Credentials!.AccessKeyId!,
     secretAccessKey: assumed.Credentials!.SecretAccessKey!,
     sessionToken: assumed.Credentials!.SessionToken!,
     expiration: assumed.Credentials!.Expiration!.getTime(),
+    client,
   };
 
+  pruneCredentialCache(now);
   credentialCache.set(tenantId, creds);
 
-  return new DynamoDBClient({
-    credentials: {
-      accessKeyId: creds.accessKeyId,
-      secretAccessKey: creds.secretAccessKey,
-      sessionToken: creds.sessionToken,
-    },
-  });
+  return client;
 }
 
 // ─── Aurora resume-retry (BUG-C) ─────────────────────────────────────────────
 // First call after 0-ACU auto-pause throws DatabaseResumingException.
-// Retry a few times with 15s waits (mirrors migrator's withResumeRetry).
+// Retry a few times with 15s waits. Shared by resolvers AND agent writeback
+// (execute-writeback imports this — its callers pass the Lambda context's
+// remaining-time budget so a resume cycle can't burn into a hard timeout).
 
 const MAX_RESUME_RETRIES = 3;
 const RESUME_DELAY_MS = 15_000;
+// Minimum remaining execution time needed to attempt one more resume cycle
+// (one request + one delay + margin for rollback/commit).
+const MIN_REMAINING_MS = 30_000;
 
-async function withResumeRetry<T>(fn: () => Promise<T>): Promise<T> {
+const logger = new Logger({ serviceName: 'resolver-shared' });
+
+export async function withResumeRetry<T>(
+  fn: () => Promise<T>,
+  getRemainingTimeInMillis?: () => number,
+): Promise<T> {
   for (let attempt = 0; attempt <= MAX_RESUME_RETRIES; attempt++) {
     try {
       return await fn();
@@ -113,6 +170,17 @@ async function withResumeRetry<T>(fn: () => Promise<T>): Promise<T> {
         msg.includes('Timed out');
 
       if (isDatabaseResuming && attempt < MAX_RESUME_RETRIES) {
+        // Stop retrying when the Lambda lacks the time budget to finish — a
+        // mid-retry hard timeout leaves the txn state worse than a fast fail.
+        const remaining = getRemainingTimeInMillis?.();
+        if (remaining !== undefined && remaining < MIN_REMAINING_MS) {
+          logger.warn('Aurora resuming but insufficient remaining time — failing fast', {
+            attempt,
+            remainingMs: remaining,
+          });
+          throw err;
+        }
+        logger.warn('Aurora resuming from auto-pause — retrying', { attempt });
         await new Promise((resolve) => setTimeout(resolve, RESUME_DELAY_MS));
         continue;
       }
@@ -198,6 +266,16 @@ export async function beginTenantTransaction(tenantId: string): Promise<TenantTr
   return { transactionId: transactionId!, execute, commit, rollback };
 }
 
+/** Rollback for catch paths — a failed rollback (e.g. the error came after
+ * commit) must never mask the error that triggered it. */
+export async function rollbackQuietly(txn: { rollback: () => Promise<void> }): Promise<void> {
+  try {
+    await txn.rollback();
+  } catch {
+    /* never mask the triggering error */
+  }
+}
+
 // ─── Event publishing helper ─────────────────────────────────────────────────
 
 export interface PublishAuditEventOptions {
@@ -262,6 +340,7 @@ export function extractContext(event: {
   if (!ctx?.tenantId) {
     throw new Error('Missing resolverContext.tenantId — authorization failed');
   }
+  assertTenantIdSafe(ctx.tenantId);
   return {
     tenantId: ctx.tenantId,
     role: ctx.role ?? 'Employee',
@@ -280,193 +359,175 @@ export function extractContext(event: {
  * tenantId is an explicit, required argument on these six mutations only —
  * never extend this pattern to an @aws_lambda (human-facing) mutation.
  * actor is always 'agent:<agentName>' — there is no human sub on this path.
+ *
+ * Tenant binding (RS-7a): beyond assertTenantIdSafe, when the IAM principal's
+ * assumed-role session name carries a tenant marker (see
+ * iamSessionTenantHint), the input tenantId MUST match it — a mismatch is
+ * rejected, never trusted. STS session tags are not exposed on the AppSync
+ * IAM identity, so when no marker is derivable the check is absent
+ * ("where available") and the tenant-scoped IAM role remains the binding.
  */
 export function extractAgentContext(
   args: Record<string, unknown>,
   agentName: string,
+  identity?: { userArn?: string; username?: string },
 ): { tenantId: string; actor: string } {
-  const tenantId = (args.tenantId ?? (args.input as Record<string, unknown> | undefined)?.tenantId) as
-    | string
-    | undefined;
+  const tenantId = (args.tenantId ??
+    (args.input as Record<string, unknown> | undefined)?.tenantId) as string | undefined;
   if (!tenantId) {
     throw new Error('Missing tenantId — required on every agent* mutation input (RS-7)');
+  }
+  assertTenantIdSafe(tenantId);
+
+  const hint = iamSessionTenantHint(identity);
+  // `resolver-<hash16>-<epoch>` hints carry the stamp's 64-bit tenant hash:
+  // compare hashes, not prefixes — a prefix test would accept a sibling
+  // tenant sharing the first 8 chars (cross-tenant).
+  if (hint && (hint.exact ? hint.value !== tenantId : hint.value !== tenantIdHash(tenantId))) {
+    throw new Error(
+      `FORBIDDEN: input.tenantId does not match the calling principal's tenant session tag`,
+    );
   }
   return { tenantId, actor: `agent:${agentName}` };
 }
 
+/**
+ * Derive the tenant marker embedded in an IAM principal's assumed-role
+ * session name, when one exists. AppSync surfaces the IAM identity as
+ * `userArn` = arn:aws:sts::<acct>:assumed-role/<roleName>/<sessionName> and
+ * `username` = <roleId>:<sessionName>. Tenant-scoped callers stamp the
+ * tenant into the session name by convention:
+ *   - `tenant-<tenantId>`          → full tenantId
+ *   - `resolver-<hash16>-<epoch>`  → tenant-data resolver sessions
+ *     (getTenantDdbClient's RoleSessionName), first 16 hex chars of
+ *     sha256(tenantId)
+ * Any other session name yields no hint — the caller is not tenant-bound
+ * by name and the input charset check stands alone.
+ */
+/** Deterministic 64-bit tenant marker for session names — RoleSessionName
+ * caps at 64 chars, so a full tenantId + prefix + epoch doesn't fit; a
+ * truncated first-8 stamp collides across tenants sharing an 8-char prefix
+ * (one tenant's session hint then validates a sibling tenant's input). */
+function tenantIdHash(tenantId: string): string {
+  return createHash('sha256').update(tenantId).digest('hex').slice(0, 16);
+}
+
+const SESSION_TENANT_PATTERNS: RegExp[] = [
+  /^tenant-([A-Za-z0-9-]{1,64})$/,
+  /^resolver-([0-9a-f]{16})-\d+$/,
+];
+
+export function iamSessionTenantHint(identity?: {
+  userArn?: string;
+  username?: string;
+}): { value: string; exact: boolean } | undefined {
+  let sessionName: string | undefined;
+  const userArn = identity?.userArn;
+  if (userArn) {
+    const m = /^arn:aws[a-z-]*:sts::\d+:assumed-role\/[^/]+\/(.+)$/.exec(userArn);
+    sessionName = m?.[1];
+  }
+  if (!sessionName && identity?.username) {
+    // Cognito IAM identity carries <roleId>:<sessionName> in username.
+    const colon = identity.username.indexOf(':');
+    if (colon > 0) sessionName = identity.username.slice(colon + 1);
+  }
+  if (!sessionName) return undefined;
+  for (const re of SESSION_TENANT_PATTERNS) {
+    const m = re.exec(sessionName);
+    // `tenant-<fullId>` binds exactly; `resolver-<first8>-<epoch>` is a
+    // prefix — either way, match the convention the name was stamped with.
+    if (m?.[1]) return { value: m[1], exact: re === SESSION_TENANT_PATTERNS[0] };
+  }
+  return undefined;
+}
+
+/**
+ * tenantId charset/length check — defense in depth under the api-stack IAM
+ * deny on `*`,`?`,`#` in the tenantId session tag: reject wildcard/tag-meta
+ * characters at the resolver boundary so they can never reach AssumeRole.
+ */
+const TENANT_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
+/** Client-supplied page size floored at 1 and capped — an unbounded limit is
+ * a response-size blowup and a negative one is a SQL error. Single idiom for
+ * every list resolver. */
+export function clampListLimit(limit: number | undefined, def: number, max: number): number {
+  return Math.min(Math.max(1, limit ?? def), max);
+}
+
+export function assertTenantIdSafe(tenantId: string): void {
+  if (!TENANT_ID_RE.test(tenantId)) {
+    throw new Error('Invalid tenantId format — authorization failed');
+  }
+}
+
+/** Canonical content-plane key for a document version — single writer for
+ * the `tenants/<t>/documents/<doc>/v<n>.json` convention (previously
+ * triplicated in m1/common, regenerate-section, finalize-manual). */
+export function versionContentKey(tenantId: string, documentId: string, versionNo: number): string {
+  return `tenants/${tenantId}/documents/${documentId}/v${versionNo}.json`;
+}
+
+/** The tenant's current org-profile version + parsed payload, or null when
+ * none exists. Data API returns jsonb stringified — callers get it parsed
+ * (the qms org-profile join duplicated in drafts/catalog/generation). */
+export interface OrgProfileCurrent {
+  currentVersion: number;
+  payload: Record<string, unknown>;
+}
+export async function getCurrentOrgProfile(txn: {
+  execute: (sql: string, params?: SqlParameter[]) => Promise<DataApiResult>;
+}): Promise<OrgProfileCurrent | null> {
+  const result = await txn.execute(
+    `SELECT op.current_version, opv.payload
+     FROM qms.org_profiles op
+     JOIN qms.org_profile_versions opv
+       ON opv.profile_id = op.id AND opv.version_no = op.current_version
+     LIMIT 1`,
+  );
+  const rec = result.records?.[0];
+  if (!rec) return null;
+  return {
+    currentVersion: Number((rec[0] as { longValue?: number }).longValue ?? 0),
+    payload: JSON.parse((rec[1] as { stringValue?: string }).stringValue ?? '{}') as Record<
+      string,
+      unknown
+    >,
+  };
+}
+
+// ─── Module role gate (M-effort, Part 13 floor+matrix) ───────────────────────
+/**
+ * Server-side role gate for module write mutations — the same canApprove()
+ * matrix hitl-approval.ts uses to approve HITL items. Apply at resolver entry:
+ *   return requireModuleRole(ctx.role, 'M2', () => raiseNonconformity(...))
+ * Unknown/missing role → UNAUTHORIZED (deny-by-default, mirroring
+ * m4.getAuditTrail's AUDIT_TRAIL_ROLES fail-closed shape).
+ */
+export function requireModuleRole<T>(role: string, module: string, fn: () => T): T {
+  if (!canApprove(role, module)) {
+    throw new Error('UNAUTHORIZED');
+  }
+  return fn();
+}
+
 export { TABLE_NAME, BUS_NAME, CLUSTER_ARN, Logger };
 
-// ─── Data API Response Marshalling (BUG-A fix) ───────────────────────────────
-import {
-  RISK_CATEGORY_MAP,
-  DOC_TYPE_MAP,
-  DOC_STATUS_MAP,
-  APPROVAL_DECISION_MAP,
-  NC_SOURCE_MAP,
-  NC_TYPE_MAP,
-  SEVERITY_MAP,
-  DISPOSITION_MAP,
-  FINDING_TYPE_MAP,
-  CAPA_STATUS_MAP,
-  GENERATION_RUN_STATUS_MAP,
-  SECTION_KIND_MAP,
-} from './enum-mappings.js';
-
-/** Reverse maps: DB lowercase → GraphQL UPPERCASE */
-function invertMap(map: Record<string, string>): Record<string, string> {
-  const inv: Record<string, string> = {};
-  for (const [k, v] of Object.entries(map)) {
-    inv[v] = k;
-  }
-  return inv;
-}
-
-const REVERSE_ENUMS: Record<string, Record<string, string>> = {
-  category: invertMap(RISK_CATEGORY_MAP),
-  doc_type: invertMap(DOC_TYPE_MAP),
-  // Overloaded `status` column: doc values (draft/in_review/approved/obsolete),
-  // CAPA values (open/in_progress/closed/verified), qms run values
-  // (running/complete/failed/partial), and section-kind values
-  // (pending/prose/gap/na_justified/failed) are pairwise disjoint except
-  // 'failed', which maps to FAILED in both qms maps — so one merged reverse
-  // map serves DocumentStatus!, CAPAStatus!, GenerationRunStatus!, and
-  // `status AS kind` aliases regardless of whether Data API reports the
-  // alias or the underlying column name.
-  // FIXED 2026-07-14 (architect): CAPA values previously passed through
-  // lowercase → invalid enum serialization on every M2 NC/CA read.
-  // FIXED 2026-07-15 (architect): same class, qms values — GenerationRun/
-  // GenerationSection reads would have failed enum serialization on deploy.
-  status: {
-    ...invertMap(DOC_STATUS_MAP),
-    ...invertMap(CAPA_STATUS_MAP),
-    ...invertMap(GENERATION_RUN_STATUS_MAP),
-    ...invertMap(SECTION_KIND_MAP),
-  },
-  kind: invertMap(SECTION_KIND_MAP),
-  decision: invertMap(APPROVAL_DECISION_MAP),
-  source: invertMap(NC_SOURCE_MAP),
-  nc_type: invertMap(NC_TYPE_MAP),
-  severity: invertMap(SEVERITY_MAP),
-  disposition: invertMap(DISPOSITION_MAP),
-  finding_type: invertMap(FINDING_TYPE_MAP),
-};
-
-/** snake_case → camelCase */
-export function snakeToCamel(s: string): string {
-  return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-}
-
-/**
- * RDS Data API returns TIMESTAMP/TIMESTAMPTZ as `YYYY-MM-DD HH:MM:SS[.ffffff]`
- * (UTC, no zone designator) — AppSync AWSDateTime rejects that shape AFTER
- * the resolver succeeds (AUD-1/BUG-18: 33 fields, every populated register).
- * Strict full-string match converts to ISO-8601 UTC; anything else passes
- * through untouched (AWSDate `YYYY-MM-DD` is already valid and unaffected).
- */
-const SQL_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?$/;
-
-export function sqlTimestampToIso(value: string): string {
-  const m = SQL_TIMESTAMP_RE.exec(value);
-  if (!m) return value;
-  const ms = (m[3] ?? '').padEnd(3, '0').slice(0, 3);
-  return `${m[1]}T${m[2]}.${ms}Z`;
-}
-
-/**
- * Data API wraps array columns as {stringValues|longValues|doubleValues|
- * booleanValues|arrayValues} — unwrap to a plain array (recursive for
- * nested arrays) or GraphQL list/AWSJSON fields serialize the wrapper.
- */
-function unwrapArray(av: Record<string, unknown>): unknown[] {
-  if (Array.isArray(av.arrayValues)) {
-    return (av.arrayValues as Record<string, unknown>[]).map(unwrapArray);
-  }
-  return (av.stringValues ??
-    av.longValues ??
-    av.doubleValues ??
-    av.booleanValues ??
-    []) as unknown[];
-}
-
-/** Unwrap a Data API field value */
-export function unwrapField(field: Record<string, unknown>): unknown {
-  if (field.stringValue !== undefined)
-    return typeof field.stringValue === 'string'
-      ? sqlTimestampToIso(field.stringValue)
-      : field.stringValue;
-  if (field.longValue !== undefined) return field.longValue;
-  if (field.doubleValue !== undefined) return field.doubleValue;
-  if (field.booleanValue !== undefined) return field.booleanValue;
-  if (field.isNull) return null;
-  if (field.arrayValue !== undefined)
-    return unwrapArray(field.arrayValue as Record<string, unknown>);
-  // Blob or other — return as-is
-  return Object.values(field)[0] ?? null;
-}
-
-export interface DataApiResult {
-  records?: Array<Array<Record<string, unknown>>>;
-  columnMetadata?: Array<{ name?: string; label?: string }>;
-  numberOfRecordsUpdated?: number;
-}
-
-/**
- * Marshal a Data API response into a plain object (or array of objects)
- * with camelCase keys and GraphQL enum casing.
- */
-export function marshalRow(
-  row: Array<Record<string, unknown>>,
-  columns: Array<{ name?: string; label?: string }>,
-): Record<string, unknown> {
-  const obj: Record<string, unknown> = {};
-  for (let i = 0; i < columns.length; i++) {
-    const colName = columns[i].name ?? columns[i].label ?? `col${i}`;
-    let value = unwrapField(row[i]);
-
-    // Reverse-map enum columns: DB lowercase → GraphQL UPPERCASE
-    if (typeof value === 'string' && REVERSE_ENUMS[colName]?.[value]) {
-      value = REVERSE_ENUMS[colName][value];
-    }
-
-    obj[snakeToCamel(colName)] = value;
-  }
-  return obj;
-}
-
-/**
- * Marshal a full Data API result into an array of objects.
- * For mutations (RETURNING), typically returns one row.
- */
-export function marshalResult(result: DataApiResult): Record<string, unknown>[] {
-  if (!result.records || !result.columnMetadata) return [];
-  return result.records.map((row) => marshalRow(row, result.columnMetadata!));
-}
-
-/**
- * Marshal and return a single object (for create/get mutations) or null.
- */
-export function marshalOne(result: DataApiResult): Record<string, unknown> | null {
-  const rows = marshalResult(result);
-  return rows[0] ?? null;
-}
-
-/**
- * Marshal and return an array (for list queries).
- */
-export function marshalMany(result: DataApiResult): Record<string, unknown>[] {
-  return marshalResult(result);
-}
-
-/**
- * Prepare a jsonb-derived value for an AWSJSON response field.
- *
- * AppSync serializes the resolver's return value into the AWSJSON slot
- * exactly once: return the parsed object/array and the client receives
- * parsed JSON; return the Data-API jsonb STRING and the client receives a
- * double-encoded string (found live 2026-07-22 — getDocumentContent,
- * OrgProfile.payload, GenerationSection.clauseRefs all arrived
- * double-encoded while array-returning clauseRefs arrived correctly).
- */
-export function jsonOut(value: unknown): unknown {
-  return typeof value === 'string' ? JSON.parse(value) : value;
-}
+// Marshalling helpers (snakeToCamel, marshalOne/Many/Result, unwrapField,
+// jsonOut, DataApiResult, JsonValue(+Schema), parseAwsJson) live in marshal.ts —
+// re-export so the ~15 importing files keep their './shared.js' specifiers.
+export {
+  snakeToCamel,
+  sqlTimestampToIso,
+  unwrapField,
+  marshalRow,
+  marshalResult,
+  marshalOne,
+  marshalMany,
+  jsonOut,
+  parseAwsJson,
+  JsonValueSchema,
+  type JsonValue,
+  type DataApiResult,
+} from './marshal.js';
+export type { SqlParameter } from '@aws-sdk/client-rds-data';

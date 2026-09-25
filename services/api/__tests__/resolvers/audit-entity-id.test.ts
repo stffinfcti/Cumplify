@@ -68,7 +68,7 @@ function makeEvent(fieldName: string, args: Record<string, unknown> = {}) {
   return {
     info: { fieldName },
     arguments: args,
-    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-test' } },
+    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-test', role: 'IMSLead' } },
   };
 }
 
@@ -109,7 +109,11 @@ describe('entityId = returned-row id (marshal-first sites)', () => {
 
   it('approveDocumentVersion publishes entityId = the DocumentApproval row id, not versionId', async () => {
     mockExecute
-      .mockResolvedValueOnce(rowWithId('creator-sub')) // SoD SELECT created_by (≠ actor → passes)
+      // SoD SELECT created_by + doc status (≠ actor → passes; doc in_review)
+      .mockResolvedValueOnce({
+        columnMetadata: [{ name: 'created_by' }, { name: 'doc_status' }],
+        records: [[{ stringValue: 'creator-sub' }, { stringValue: 'in_review' }]],
+      })
       .mockResolvedValueOnce(rowWithId('approval-uuid-1'));
 
     await m1Handler(
@@ -131,7 +135,7 @@ describe('entityId = returned-row id (marshal-first sites)', () => {
     await m3Handler(
       makeEvent('scheduleAudit', {
         input: {
-          programmeId: 'prog-uuid-7',
+          programmeId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d',
           standard: 'ISO9001',
           scope: 's',
           leadAuditorId: 'aud-1',

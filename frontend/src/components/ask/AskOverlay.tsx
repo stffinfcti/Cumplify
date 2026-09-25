@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { AskPanel } from './AskPanel';
+import { useDialog } from '@/lib/use-dialog';
 import styles from './AskOverlay.module.css';
 
 /**
@@ -16,6 +17,9 @@ export function AskOverlay() {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const t = useTranslations('ask');
+
+  // FE-10: Escape close, focus trap, initial + return focus, aria-modal
+  const { dialogRef, dialogProps } = useDialog(open, () => setOpen(false));
 
   // Don't show the overlay trigger on the full-page /ask route
   if (pathname === '/ask') return null;
@@ -52,7 +56,7 @@ export function AskOverlay() {
       {open && (
         <div className={styles.overlay}>
           <div className={styles.backdrop} onClick={() => setOpen(false)} />
-          <aside className={styles.sheet} aria-label={t('title')}>
+          <aside className={styles.sheet} aria-label={t('title')} ref={dialogRef} {...dialogProps}>
             <button
               className={styles.closeBtn}
               onClick={() => setOpen(false)}

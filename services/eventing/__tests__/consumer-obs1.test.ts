@@ -70,7 +70,9 @@ describe('OBS-1: transient failure log carries error message and errorName', () 
     const handler = createHandler({
       dlqUrl: 'https://sqs.us-east-1.amazonaws.com/123/test-dlq',
       handler: async () => {
-        const err = new Error('ECONNREFUSED: connect ECONNREFUSED 10.0.1.42:443 — VPC endpoint unreachable');
+        const err = new Error(
+          'ECONNREFUSED: connect ECONNREFUSED 10.0.1.42:443 — VPC endpoint unreachable',
+        );
         err.name = 'FetchError';
         throw err;
       },

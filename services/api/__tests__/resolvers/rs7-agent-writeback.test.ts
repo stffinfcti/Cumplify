@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createHash } from 'node:crypto';
 
 const { mockExecute, mockCommit, mockRollback, mockPublishAuditEvent } = vi.hoisted(() => ({
   mockExecute: vi.fn(),
@@ -51,6 +52,8 @@ import { handler as m2Handler } from '../../src/resolvers/m2.js';
 import { handler as m3Handler } from '../../src/resolvers/m3.js';
 import { handler as m5Handler } from '../../src/resolvers/m5.js';
 
+const hash16 = (id: string) => createHash('sha256').update(id).digest('hex').slice(0, 16);
+
 const EMPTY_RESULT = { records: undefined, columnMetadata: undefined };
 
 /** No identity.resolverContext at all — real @aws_iam call shape. */
@@ -67,9 +70,9 @@ beforeEach(() => {
 
 describe('extractAgentContext — SCHEMA-5 narrow exception (RS-7)', () => {
   it('throws when tenantId is missing from a bare-arg call', async () => {
-    await expect(m3Handler(makeAgentEvent('agentScoreReadiness', { standard: 'ISO9001' }))).rejects.toThrow(
-      'Missing tenantId',
-    );
+    await expect(
+      m3Handler(makeAgentEvent('agentScoreReadiness', { standard: 'ISO9001' })),
+    ).rejects.toThrow('Missing tenantId');
   });
 
   it('throws when tenantId is missing from a nested input call', async () => {
@@ -80,6 +83,68 @@ describe('extractAgentContext — SCHEMA-5 narrow exception (RS-7)', () => {
         }),
       ),
     ).rejects.toThrow('Missing tenantId');
+  });
+});
+
+describe('extractAgentContext — IAM session-tag tenant binding (RS-7a)', () => {
+  it('accepts when the principal session name carries the matching tenant', async () => {
+    const result = await m3Handler({
+      info: { fieldName: 'agentScoreReadiness' },
+      arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
+      identity: {
+        userArn: 'arn:aws:sts::123456789012:assumed-role/writeback-role/tenant-tenant-abc',
+      },
+    });
+    expect(result).toEqual([]);
+  });
+
+  it('rejects a mismatched tenant-<id> session name', async () => {
+    await expect(
+      m3Handler({
+        info: { fieldName: 'agentScoreReadiness' },
+        arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
+        identity: {
+          userArn: 'arn:aws:sts::123456789012:assumed-role/writeback-role/tenant-other-tenant',
+        },
+      }),
+    ).rejects.toThrow('FORBIDDEN');
+  });
+
+  it('accepts a resolver-<hash16>-<epoch> session whose hash matches', async () => {
+    const result = await m3Handler({
+      info: { fieldName: 'agentScoreReadiness' },
+      arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
+      identity: {
+        userArn: `arn:aws:sts::123456789012:assumed-role/tenant-data-role/resolver-${hash16('tenant-abc')}-1750000000`,
+      },
+    });
+    expect(result).toEqual([]);
+  });
+
+  it('rejects a resolver-<hash16>-<epoch> session with a different tenant hash', async () => {
+    // 'f'*16 matches the hash charset but is a different tenant's stamp —
+    // must 403 (a mismatched hint binds, never silently escapes).
+    await expect(
+      m3Handler({
+        info: { fieldName: 'agentScoreReadiness' },
+        arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
+        identity: {
+          userArn:
+            'arn:aws:sts::123456789012:assumed-role/tenant-data-role/resolver-ffffffffffffffff-1750000000',
+        },
+      }),
+    ).rejects.toThrow('FORBIDDEN');
+  });
+
+  it('no tenant marker on the principal → charset check alone (where-available escape)', async () => {
+    const result = await m3Handler({
+      info: { fieldName: 'agentScoreReadiness' },
+      arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
+      identity: {
+        userArn: 'arn:aws:sts::123456789012:assumed-role/writeback-role/agent-session-01',
+      },
+    });
+    expect(result).toEqual([]);
   });
 });
 
@@ -99,14 +164,14 @@ describe('agentDraftDocument (m1, DocStudio) — direct write', () => {
           standard: 'ISO9001',
           docType: 'PROCEDURE',
           title: 'Agent-drafted procedure',
-          contentRef: 's3://content/ref',
+          contentRef: 'tenants/tenant-agent/drafts/procedure.json',
         },
       }),
     );
 
     expect(result).toEqual({ id: 'doc-1' });
     const [docSql, docParams] = mockExecute.mock.calls[0];
-    expect(docSql).toContain("INSERT INTO m1.documents");
+    expect(docSql).toContain('INSERT INTO m1.documents');
     expect(docSql).toContain("'draft'");
     expect(docParams).toContainEqual({ name: 'actor', value: { stringValue: 'agent:DocStudio' } });
 
@@ -116,7 +181,7 @@ describe('agentDraftDocument (m1, DocStudio) — direct write', () => {
     expect(versionParams).toContainEqual({ name: 'documentId', value: { stringValue: 'doc-1' } });
     expect(versionParams).toContainEqual({
       name: 'contentRef',
-      value: { stringValue: 's3://content/ref' },
+      value: { stringValue: 'tenants/tenant-agent/drafts/procedure.json' },
     });
 
     expect(mockCommit).toHaveBeenCalledOnce();
@@ -135,7 +200,7 @@ describe('agentDraftDocument (m1, DocStudio) — direct write', () => {
             standard: 'ISO9001',
             docType: 'PROCEDURE',
             title: 'x',
-            contentRef: 'ref',
+            contentRef: 'tenants/t1/drafts/x.json',
           },
         }),
       ),
@@ -165,7 +230,7 @@ describe('agentProposeCorrectiveAction (m2, CAPAGuru) — direct write, dueDate 
     expect(result).toEqual({ id: 'ca-1', status: 'OPEN' }); // REVERSE_ENUMS: DB 'open' -> CAPAStatus.OPEN
 
     const [sql, params] = mockExecute.mock.calls[0];
-    expect(sql).toContain("INSERT INTO m2.corrective_actions");
+    expect(sql).toContain('INSERT INTO m2.corrective_actions');
     expect(sql).toContain("'open'");
     const dueDateParam = params.find((p: { name: string }) => p.name === 'dueDate');
     const dueDateMs = new Date(dueDateParam.value.stringValue).getTime();
@@ -238,16 +303,27 @@ describe('agentGenerateChecklist (m3, LeadAuditor) — delegates to generateAudi
           { name: 'required_sources' },
         ],
       })
-      .mockResolvedValueOnce({ records: [[{ stringValue: 'chk-1' }]], columnMetadata: [{ name: 'id' }] })
+      .mockResolvedValueOnce({
+        records: [[{ stringValue: 'chk-1' }]],
+        columnMetadata: [{ name: 'id' }],
+      })
       .mockResolvedValueOnce(EMPTY_RESULT);
 
-    await m3Handler(makeAgentEvent('agentGenerateChecklist', { auditId: 'audit-1', tenantId: 'tenant-agent' }));
+    await m3Handler(
+      makeAgentEvent('agentGenerateChecklist', {
+        auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d',
+        tenantId: 'tenant-agent',
+      }),
+    );
     // Same internal function as generateAuditChecklist — SQL shape assertions
     // live in m3-m4-m5-fixes.test.ts; here we assert it ran at all under the
     // agent path with actor 'agent:LeadAuditor'.
     const insertCall = mockExecute.mock.calls[2];
     expect(insertCall[0]).toContain('INSERT INTO m3.audit_checklists');
-    expect(insertCall[1]).toContainEqual({ name: 'actor', value: { stringValue: 'agent:LeadAuditor' } });
+    expect(insertCall[1]).toContainEqual({
+      name: 'actor',
+      value: { stringValue: 'agent:LeadAuditor' },
+    });
   });
 });
 
@@ -262,9 +338,7 @@ describe('agentScoreReadiness (m3, LeadAuditor) — upsert from generation-secti
         ],
         columnMetadata: [{ name: 'clause_no' }, { name: 'status' }],
       })
-      .mockResolvedValueOnce(EMPTY_RESULT) // upsert 4.1
-      .mockResolvedValueOnce(EMPTY_RESULT) // upsert 4.2
-      .mockResolvedValueOnce(EMPTY_RESULT) // upsert 4.3
+      .mockResolvedValueOnce(EMPTY_RESULT) // one batched upsert for all clauses
       .mockResolvedValueOnce({
         records: [
           [{ stringValue: '4.1' }, { doubleValue: 100.0 }],
@@ -283,13 +357,15 @@ describe('agentScoreReadiness (m3, LeadAuditor) — upsert from generation-secti
       { clauseRef: '4.3', score: 0.0 },
     ]);
 
-    const [upsert41Sql, upsert41Params] = mockExecute.mock.calls[1];
-    expect(upsert41Sql).toContain('ON CONFLICT (tenant_id, standard, clause_ref)');
-    expect(upsert41Params).toContainEqual({ name: 'score', value: { doubleValue: 100.0 } });
-    const [, upsert42Params] = mockExecute.mock.calls[2];
-    expect(upsert42Params).toContainEqual({ name: 'score', value: { doubleValue: 0.0 } });
-    const [, upsert43Params] = mockExecute.mock.calls[3];
-    expect(upsert43Params).toContainEqual({ name: 'score', value: { doubleValue: 0.0 } });
+    // One statement upserts all three clauses — named params score<i>/<clauseRef<i>.
+    const [upsertSql, upsertParams] = mockExecute.mock.calls[1];
+    expect(upsertSql).toContain('ON CONFLICT (tenant_id, standard, clause_ref)');
+    expect(upsertSql).toContain('VALUES (:tenantId, :standard, :clauseRef0, :score0');
+    expect(upsertSql).toContain('clauseRef2');
+    expect(upsertParams).toContainEqual({ name: 'score0', value: { doubleValue: 100.0 } });
+    expect(upsertParams).toContainEqual({ name: 'score1', value: { doubleValue: 0.0 } });
+    expect(upsertParams).toContainEqual({ name: 'score2', value: { doubleValue: 0.0 } });
+    expect(upsertParams).toContainEqual({ name: 'clauseRef0', value: { stringValue: '4.1' } });
 
     expect(mockPublishAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({ detailType: 'Readiness.Scored' }),
@@ -298,7 +374,7 @@ describe('agentScoreReadiness (m3, LeadAuditor) — upsert from generation-secti
 });
 
 describe('agentAssessRisk (m5, RiskSentinel) — direct write, updates existing risk', () => {
-  it('updates likelihood/severity, refreshes the register view same-transaction', async () => {
+  it('updates likelihood/severity, refreshes the register view post-commit', async () => {
     const riskRow = [
       { stringValue: 'risk-1' },
       { stringValue: 'tenant-agent' },
@@ -346,11 +422,14 @@ describe('agentAssessRisk (m5, RiskSentinel) — direct write, updates existing 
     expect((result as { severity: number }).severity).toBe(5);
 
     const [updateSql, updateParams] = mockExecute.mock.calls[0];
-    expect(updateSql).toContain('UPDATE m5.risks SET likelihood = :likelihood, severity = :severity');
+    expect(updateSql).toContain(
+      'UPDATE m5.risks SET likelihood = :likelihood, severity = :severity',
+    );
     expect(updateParams).toContainEqual({ name: 'likelihood', value: { longValue: 4 } });
 
+    // Refresh now runs post-commit in a second transaction (MV lock isolation).
     expect(mockExecute.mock.calls[1][0]).toContain('m5_views.refresh_risk_register_view()');
-    expect(mockCommit).toHaveBeenCalledOnce();
+    expect(mockCommit).toHaveBeenCalledTimes(2);
 
     expect(mockPublishAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({

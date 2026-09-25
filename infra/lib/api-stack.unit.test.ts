@@ -167,6 +167,27 @@ describe('ApiStack template assertions (source-level)', () => {
     expect(API_STACK_CODE).toContain('scoped by the task token');
   });
 
+  it("SendTask* stays on Resource '*' — AWS SAR gives these actions NO resource-level permissions", () => {
+    // states:SendTaskSuccess/Failure support no resource types per the Service
+    // Authorization Reference: any scoped ARN is non-authorizing, so '*' is
+    // mandatory. This test pins both the '*' resource and the documented
+    // justification so a future "scoping" edit fails loudly instead of
+    // silently breaking every HITL approval.
+    const stmt = API_STACK_CODE.match(
+      /actions: \[\s*'states:SendTaskSuccess', 'states:SendTaskFailure'\s*\][\s\S]*?resources: \[([\s\S]*?)\]/,
+    );
+    expect(stmt).toBeTruthy();
+    expect(stmt![1]).toBe("'*'");
+    // The rationale is documented in-place (mandatory, not deferred debt).
+    expect(API_STACK_CODE).toContain('NO resource-level permissions');
+    expect(API_STACK_CODE).toContain('MANDATORY');
+    // Execution-name wildcard intent is documented for the day AWS adds support.
+    expect(API_STACK_CODE).toContain('execution:cumplify-hitl');
+    // Only the two needed actions — SendTaskHeartbeat is deliberately absent
+    // (7-day approval window needs no heartbeat).
+    expect(API_STACK_CODE).not.toContain('states:SendTaskHeartbeat');
+  });
+
   it('HITL sweeper is wired: NodejsFunction + 5-minute schedule + index-scoped Scan (never base-table Scan IAM)', () => {
     expect(API_STACK_CODE).toContain("entry: 'services/api/src/resolvers/hitl-sweeper.ts'");
     expect(API_STACK_CODE).toContain('events.Schedule.rate(cdk.Duration.minutes(5))');

@@ -70,10 +70,7 @@ export async function handler(event: CfnEvent): Promise<void> {
 
   // Create / Update → run the seed with an internal deadline
   try {
-    const result = await Promise.race<SeederResult>([
-      seed(),
-      rejectAfter(INTERNAL_DEADLINE_MS),
-    ]);
+    const result = await Promise.race<SeederResult>([seed(), rejectAfter(INTERNAL_DEADLINE_MS)]);
 
     logger.info('Seed completed', { status: result.status, contentHash: result.contentHash });
 

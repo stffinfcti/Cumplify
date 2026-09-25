@@ -5,19 +5,9 @@
     "generator": "deterministic (necessity-direction encoding: permitted => module-in-allowed-set; SoD scenarios as PermAction enum values; wrong-positive advice INVALID, over-restrictive advice passes)",
     "workbenchPolicyArn": "arn:aws:bedrock:us-east-1:697114252993:automated-reasoning-policy/n5pd2c7ago5d:1",
     "arCheckGateMapping": {
-      "pass": [
-        "VALID",
-        "SATISFIABLE"
-      ],
-      "reject_steered_retry": [
-        "INVALID",
-        "IMPOSSIBLE"
-      ],
-      "flag_hitl": [
-        "TRANSLATION_AMBIGUOUS",
-        "NO_TRANSLATION",
-        "TOO_COMPLEX"
-      ]
+      "pass": ["VALID", "SATISFIABLE"],
+      "reject_steered_retry": ["INVALID", "IMPOSSIBLE"],
+      "flag_hitl": ["TRANSLATION_AMBIGUOUS", "NO_TRANSLATION", "TOO_COMPLEX"]
     },
     "confidenceThreshold": 0.9,
     "scopeNotes": [

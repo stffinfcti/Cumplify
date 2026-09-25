@@ -13,6 +13,7 @@ import { resolveModel } from './register-resolver.js';
 import { converse } from './converse.js';
 import { computeCredits, loadWeights, incrementMeter, emitCreditsTelemetry } from './metering.js';
 import { checkCreditBalance } from './credit-precheck.js';
+import { resolveExemptFlag } from './exempt-principals.js';
 import { assertSchemaValid } from './schema-retry.js';
 import { buildGuardrailConfig } from './guardrail.js';
 import { embed } from './embed.js';
@@ -51,7 +52,9 @@ export type { DocComposerOutput } from './doc-composer-schema.js';
  * - {op:'embed', ...} → embed path (EMB-1..5)
  * - absent op / {op:'invoke', ...} → existing invoke path (back-compat)
  */
-export async function handler(event: InvokeRequest | EmbedOp): Promise<InvokeResponse | EmbedResult> {
+export async function handler(
+  event: InvokeRequest | EmbedOp,
+): Promise<InvokeResponse | EmbedResult> {
   if ('op' in event && event.op === 'embed') {
     return embed(event);
   }
@@ -71,8 +74,12 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
   logger.info('Invoking model', { seat, modelId, tenantId, agent });
 
-  // Step 2: Credit pre-check (SERVE-9)
-  await checkCreditBalance(tenantId, request.creditExempt ?? false);
+  // Step 2: Credit pre-check (SERVE-9) — the exemption flag is honored only
+  // for registered internal/system principals (see exempt-principals.ts).
+  const cap = await checkCreditBalance(
+    tenantId,
+    resolveExemptFlag(request.creditExempt, agent, 'creditExempt'),
+  );
 
   // Load model weights for metering
   const weights = await loadWeights(modelId);
@@ -148,13 +155,18 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
     // Meter consumed usage (billing integrity — even blocked calls have token cost)
     const credits = computeCredits(usage, weights);
-    await incrementMeter(tenantId, credits);
+    await incrementMeter(tenantId, credits, cap);
     await emitCreditsTelemetry({
-      tenantId, agent, module, feature,
+      tenantId,
+      agent,
+      module,
+      feature,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       cacheReadTokens: usage.cacheReadInputTokens,
-      creditsConsumed: credits, modelId, seat,
+      creditsConsumed: credits,
+      modelId,
+      seat,
     });
 
     return {
@@ -176,7 +188,8 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
       if (isAgentRoutingTool(toolBlock.name)) {
         // Extract target agent from tool input if available
         const inputObj = toolBlock.input as Record<string, unknown> | undefined;
-        const targetAgent = (inputObj?.targetAgent as string) ?? (inputObj?.agent as string) ?? 'unknown';
+        const targetAgent =
+          (inputObj?.targetAgent as string) ?? (inputObj?.agent as string) ?? 'unknown';
 
         try {
           await checkHopPayload({
@@ -195,13 +208,18 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
           // metering even on blocked hops (same pattern as honest-miss path).
           if (err instanceof InvokeError && err.code === 'HOP_BLOCKED') {
             const credits = computeCredits(usage, weights);
-            await incrementMeter(tenantId, credits);
+            await incrementMeter(tenantId, credits, cap);
             await emitCreditsTelemetry({
-              tenantId, agent, module, feature,
+              tenantId,
+              agent,
+              module,
+              feature,
               inputTokens: usage.inputTokens,
               outputTokens: usage.outputTokens,
               cacheReadTokens: usage.cacheReadInputTokens,
-              creditsConsumed: credits, modelId, seat,
+              creditsConsumed: credits,
+              modelId,
+              seat,
             });
           }
           throw err;
@@ -233,7 +251,9 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
         {
           role: 'user' as const,
           content: [
-            { text: `${GROUNDING_RETRY_INSTRUCTION}\n\nSource:\n${request.groundingContext.source}` },
+            {
+              text: `${GROUNDING_RETRY_INSTRUCTION}\n\nSource:\n${request.groundingContext.source}`,
+            },
           ],
         },
       ];
@@ -267,13 +287,18 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
         // Meter consumed usage before returning honest-miss
         const credits = computeCredits(usage, weights);
-        await incrementMeter(tenantId, credits);
+        await incrementMeter(tenantId, credits, cap);
         await emitCreditsTelemetry({
-          tenantId, agent, module, feature,
+          tenantId,
+          agent,
+          module,
+          feature,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
           cacheReadTokens: usage.cacheReadInputTokens,
-          creditsConsumed: credits, modelId, seat,
+          creditsConsumed: credits,
+          modelId,
+          seat,
         });
 
         return {
@@ -356,13 +381,18 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
         // Meter consumed usage (FIX-W-1 pattern)
         const credits = computeCredits(usage, weights);
-        await incrementMeter(tenantId, credits);
+        await incrementMeter(tenantId, credits, cap);
         await emitCreditsTelemetry({
-          tenantId, agent, module, feature,
+          tenantId,
+          agent,
+          module,
+          feature,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
           cacheReadTokens: usage.cacheReadInputTokens,
-          creditsConsumed: credits, modelId, seat,
+          creditsConsumed: credits,
+          modelId,
+          seat,
         });
 
         return {
@@ -449,13 +479,18 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
           // Meter consumed usage (FIX-W-1 pattern)
           const credits = computeCredits(usage, weights);
-          await incrementMeter(tenantId, credits);
+          await incrementMeter(tenantId, credits, cap);
           await emitCreditsTelemetry({
-            tenantId, agent, module, feature,
+            tenantId,
+            agent,
+            module,
+            feature,
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,
             cacheReadTokens: usage.cacheReadInputTokens,
-            creditsConsumed: credits, modelId, seat,
+            creditsConsumed: credits,
+            modelId,
+            seat,
           });
 
           return {
@@ -499,7 +534,10 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
       if (err instanceof InvokeError) throw err;
       logger.error('AR check infra failure — failing open with arVerdict=error', {
         error: err instanceof Error ? err.message : String(err),
-        arPath, seat, feature, tenantId,
+        arPath,
+        seat,
+        feature,
+        tenantId,
       });
       guardrailEvidence = {
         groundingScore: guardrailEvidence?.groundingScore ?? null,
@@ -547,13 +585,18 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
           });
         } catch (retryErr) {
           const credits = computeCredits(usage, weights);
-          await incrementMeter(tenantId, credits);
+          await incrementMeter(tenantId, credits, cap);
           await emitCreditsTelemetry({
-            tenantId, agent, module, feature,
+            tenantId,
+            agent,
+            module,
+            feature,
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,
             cacheReadTokens: usage.cacheReadInputTokens,
-            creditsConsumed: credits, modelId, seat,
+            creditsConsumed: credits,
+            modelId,
+            seat,
           });
           throw retryErr;
         }
@@ -565,19 +608,26 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
   // Step 7: Meter tokens → credits (SERVE-3)
   const credits = computeCredits(usage, weights);
-  await incrementMeter(tenantId, credits);
+  await incrementMeter(tenantId, credits, cap);
 
   // Emit telemetry (non-blocking)
   await emitCreditsTelemetry({
-    tenantId, agent, module, feature,
+    tenantId,
+    agent,
+    module,
+    feature,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     cacheReadTokens: usage.cacheReadInputTokens,
-    creditsConsumed: credits, modelId, seat,
+    creditsConsumed: credits,
+    modelId,
+    seat,
   });
 
   logger.info('Invocation complete', {
-    seat, modelId, tenantId,
+    seat,
+    modelId,
+    tenantId,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     credits: credits.toFixed(4),
@@ -617,31 +667,19 @@ const CLAUSE_CITING_SEATS: ReadonlySet<string> = new Set([
 ]);
 
 /** Features that indicate clause-citing content */
-const CLAUSE_CITING_FEATURES: ReadonlySet<string> = new Set([
-  'clause-qa',
-  'record-write',
-]);
+const CLAUSE_CITING_FEATURES: ReadonlySet<string> = new Set(['clause-qa', 'record-write']);
 
 /** Features that indicate role-advisory content */
-const ROLE_ADVISORY_FEATURES: ReadonlySet<string> = new Set([
-  'role-advisory',
-  'permission-check',
-]);
+const ROLE_ADVISORY_FEATURES: ReadonlySet<string> = new Set(['role-advisory', 'permission-check']);
 
 /** Features that indicate plan-advisory content */
-const PLAN_ADVISORY_FEATURES: ReadonlySet<string> = new Set([
-  'plan-advisory',
-  'entitlement-check',
-]);
+const PLAN_ADVISORY_FEATURES: ReadonlySet<string> = new Set(['plan-advisory', 'entitlement-check']);
 
 /**
  * Resolve the AR invocation path from seat + feature.
  * Returns undefined if the invocation is not subject to AR validation.
  */
-function resolveArInvocationPath(
-  seat: string,
-  feature: string,
-): ArInvocationPath | undefined {
+function resolveArInvocationPath(seat: string, feature: string): ArInvocationPath | undefined {
   // Role/plan advisory features take precedence (advisory guardrail)
   if (ROLE_ADVISORY_FEATURES.has(feature)) return 'role-advisory';
   if (PLAN_ADVISORY_FEATURES.has(feature)) return 'plan-advisory';

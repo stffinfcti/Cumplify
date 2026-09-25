@@ -146,6 +146,16 @@ export class IdentityStack extends cdk.Stack {
     let poolBClient: cognito.UserPoolClient | undefined;
     let poolCClient: cognito.UserPoolClient | undefined;
 
+    // Missing frontendDomain on a non-dev env leaves Cognito with only
+    // localhost callbacks — OAuth breaks silently. Warn once at synth (not
+    // per-pool) so it is loud in pipeline output but does not block a first
+    // deploy (the CloudFront domain is only known after it).
+    if (envConfig.envName !== 'dev' && !envConfig.frontendDomain) {
+      cdk.Annotations.of(this).addWarning(
+        `envConfig.${envConfig.envName}.frontendDomain is unset — Cognito will only accept localhost OAuth callbacks. Populate it once the distribution exists.`,
+      );
+    }
+
     for (const poolConfig of pools) {
       const pool = new cognito.UserPool(this, poolConfig.id, {
         userPoolName: poolConfig.poolName,
@@ -205,7 +215,16 @@ export class IdentityStack extends cdk.Stack {
         oAuth: {
           flows: { authorizationCodeGrant: true, implicitCodeGrant: false },
           scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
-          callbackUrls: ['http://localhost:3000/callback'], // Placeholder — spec 3 updates
+          // localhost stays registered so `next dev` sign-in works; the deployed
+          // origin comes from envConfig.frontendDomain once the env is live.
+          callbackUrls: [
+            'http://localhost:3000/callback',
+            ...(envConfig.frontendDomain ? [`https://${envConfig.frontendDomain}/callback`] : []),
+          ],
+          logoutUrls: [
+            'http://localhost:3000/logout',
+            ...(envConfig.frontendDomain ? [`https://${envConfig.frontendDomain}/logout`] : []),
+          ],
         },
         preventUserExistenceErrors: true,
         readAttributes: new cognito.ClientAttributes().withStandardAttributes({
@@ -313,7 +332,9 @@ export class IdentityStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'PoolCId', { value: this.poolCId });
     new cdk.CfnOutput(this, 'PoolBArn', { value: this.poolBArn });
     new cdk.CfnOutput(this, 'PoolCArn', { value: this.poolCArn });
-    this.poolBClientIdOutput = new cdk.CfnOutput(this, 'PoolBClientId', { value: this.poolBClientId });
+    this.poolBClientIdOutput = new cdk.CfnOutput(this, 'PoolBClientId', {
+      value: this.poolBClientId,
+    });
     new cdk.CfnOutput(this, 'PoolCClientId', { value: this.poolCClientId });
     new cdk.CfnOutput(this, 'PoolAClientId', {
       value: poolAClient!.userPoolClientId,

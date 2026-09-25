@@ -9,6 +9,9 @@ cdk.out/
 *.d.ts.map
 !.eslintrc.cjs
 !**/md.d.ts
+# Next generates this at dev time and documents it as committable — clean
+# checkouts need it for `tsc --noEmit` to resolve CSS module imports.
+!frontend/next-env.d.ts
 *.tsbuildinfo
 .kiro/evidence/unknown-spec/
 

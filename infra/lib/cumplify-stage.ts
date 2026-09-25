@@ -89,8 +89,13 @@ export class CumplifyStage extends cdk.Stage {
     });
     identityStack.addDependency(dataStack);
 
-    // EventingStack — no cross-stack deps from spec-1 stacks; deploys independently.
-    const eventingStack = new EventingStack(this, 'EventingStack', { envConfig });
+    // EventingStack — depends on SecurityStack only for the shared ops-alert
+    // topic that its DLQ alarms publish to.
+    const eventingStack = new EventingStack(this, 'EventingStack', {
+      envConfig,
+      opsAlertTopic: securityStack.outputs.opsAlertTopic,
+    });
+    eventingStack.addDependency(securityStack);
 
     // AuditTrailStack — cross-stack deps: DataStack, SecurityStack, EventingStack.
     const auditTrailStack = new AuditTrailStack(this, 'AuditTrailStack', {
@@ -103,6 +108,7 @@ export class CumplifyStage extends cdk.Stage {
       auditSinkQueueArn: eventingStack.auditSinkQueueArn,
       auditSinkDlqUrl: eventingStack.auditSinkDlqUrl,
       auditSinkDlqArn: eventingStack.auditSinkDlqArn,
+      opsAlertTopic: securityStack.outputs.opsAlertTopic,
     });
     auditTrailStack.addDependency(dataStack);
     auditTrailStack.addDependency(securityStack);
@@ -194,8 +200,10 @@ export class CumplifyStage extends cdk.Stage {
     const frontendStack = new FrontendStack(this, 'FrontendStack', {
       envConfig,
       apiUrl: apiStack.graphqlApiUrl,
+      cloudfrontWafArn: securityStack.outputs.cloudfrontWaf.attrArn,
     });
     frontendStack.addDependency(apiStack);
+    frontendStack.addDependency(securityStack);
 
     // Expose for pipeline SmokeTest (envFromCfnOutputs)
     this.frontendDistributionDomainOutput = frontendStack.distributionDomainOutput;

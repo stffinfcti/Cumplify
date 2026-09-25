@@ -118,11 +118,7 @@ describe('AgentRunButton', () => {
     mockMutate.mockResolvedValueOnce({ runCapaAnalysis: { runId: 'r1', status: 'DISPATCHED' } });
 
     render(
-      <AgentRunButton
-        label="Analyze with CAPAGuru"
-        mutation={RUN_MUTATION}
-        agentName="CAPAGuru"
-      />,
+      <AgentRunButton label="Analyze with CAPAGuru" mutation={RUN_MUTATION} agentName="CAPAGuru" />,
     );
 
     fireEvent.click(screen.getByText('Analyze with CAPAGuru'));
@@ -144,15 +140,15 @@ describe('AgentRunButton', () => {
     mockQuery.mockResolvedValueOnce(pendingResponse([]));
     mockMutate.mockRejectedValueOnce(new Error('NC_NOT_FOUND'));
 
-    render(
-      <AgentRunButton label="Analyze" mutation={RUN_MUTATION} agentName="CAPAGuru" />,
-    );
+    render(<AgentRunButton label="Analyze" mutation={RUN_MUTATION} agentName="CAPAGuru" />);
 
     fireEvent.click(screen.getByText('Analyze'));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(screen.getByText('NC_NOT_FOUND')).toBeInTheDocument();
+    // Raw backend codes never reach the UI — NC_NOT_FOUND is a known code,
+    // localized to its catalog key rather than the raw string.
+    expect(screen.getByText('errors.notFound')).toBeInTheDocument();
     expect(screen.getByText('Analyze')).toBeInTheDocument();
   });
 });

@@ -7,7 +7,12 @@
  */
 
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
-import type { InvokeRequest, InvokeResponse, EmbedRequest, EmbedResult } from '../../ai-invoker/src/types.js';
+import type {
+  InvokeRequest,
+  InvokeResponse,
+  EmbedRequest,
+  EmbedResult,
+} from '../../ai-invoker/src/types.js';
 import type { InvokeFn } from './tool-loop.js';
 
 const lambdaClient = new LambdaClient({});

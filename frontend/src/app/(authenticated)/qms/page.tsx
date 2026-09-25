@@ -140,12 +140,34 @@ export default function QmsPage() {
     fetchProfile();
   }, [fetchProfile]);
 
+  const [saveError, setSaveError] = useState('');
+
   async function handleSaveProfile() {
+    if (!profile.legalName.trim()) {
+      setSaveError(tWizard('legalNameRequired'));
+      return;
+    }
+    // Validate required numerics before mutate — Number(v)||0 turns 'abc'
+    // into a silent 0 the server then stores as the org's real headcount.
+    if (!Number.isInteger(profile.employeeCount) || profile.employeeCount <= 0) {
+      setSaveError(tWizard('employeeCountInvalid'));
+      return;
+    }
+    if (
+      profile.yearFounded !== undefined &&
+      (!Number.isInteger(profile.yearFounded) ||
+        profile.yearFounded < 1800 ||
+        profile.yearFounded > new Date().getFullYear())
+    ) {
+      setSaveError(tWizard('yearFoundedInvalid'));
+      return;
+    }
     setSaving(true);
+    setSaveError('');
     try {
       await mutate(SAVE_PROFILE, { input: { payload: JSON.stringify(profile) } });
     } catch {
-      setError(true);
+      setSaveError(tWizard('saveError'));
     } finally {
       setSaving(false);
     }
@@ -620,6 +642,7 @@ export default function QmsPage() {
                 {saving ? tWizard('saving') : tWizard('save')}
               </PrimaryButton>
             </div>
+            {saveError && <p className={styles.errorMsg}>{saveError}</p>}
           </div>
         ))}
 

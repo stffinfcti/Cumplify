@@ -99,14 +99,28 @@ describe('PreTokenGen handler (property-based)', () => {
     );
   });
 
-  it('role is first group when groups are non-empty', () => {
+  it('role is one of the groups and deterministic for the same input', () => {
     fc.assert(
       fc.property(fc.array(groupArb, { minLength: 1, maxLength: 5 }), (groups) => {
-        const { role, fallback } = resolveRole(groups);
-        expect(role).toBe(groups[0]);
-        expect(fallback).toBe(false);
+        const first = resolveRole(groups);
+        const second = resolveRole(groups);
+        expect(groups).toContain(first.role);
+        expect(first.role).toBe(second.role);
+        expect(first.fallback).toBe(false);
       }),
     );
+  });
+
+  it('multi-group users get the highest-priority role regardless of group order', () => {
+    expect(resolveRole(['Employee', 'PlatformAdmin']).role).toBe('PlatformAdmin');
+    expect(resolveRole(['PlatformAdmin', 'Employee']).role).toBe('PlatformAdmin');
+    expect(resolveRole(['Contractor', 'TopManagement', 'Employee']).role).toBe('TopManagement');
+    expect(resolveRole(['Employee', 'ExternalAuditor']).role).toBe('Employee');
+  });
+
+  it('duplicate groups in the input do not affect role resolution', () => {
+    expect(resolveRole(['PlatformAdmin', 'PlatformAdmin']).role).toBe('PlatformAdmin');
+    expect(resolveRole(['Employee', 'Employee', 'Contractor']).role).toBe('Contractor');
   });
 
   it('role falls back to Employee when groups are empty or undefined', () => {

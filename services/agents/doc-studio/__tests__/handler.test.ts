@@ -142,7 +142,9 @@ describe('runDocDraft (S2)', () => {
 
     await runDocDraft(draftInput);
 
-    const calls = mockRetrieve.mock.calls.map((c) => c[0] as { indexName: string; tenantId: string });
+    const calls = mockRetrieve.mock.calls.map(
+      (c) => c[0] as { indexName: string; tenantId: string },
+    );
     expect(calls.find((c) => c.indexName === 'cumplify-iso-kb')!.tenantId).toBe('__ISO_CANON__');
     expect(calls.find((c) => c.indexName === 'cumplify-tenant-docs')!.tenantId).toBe('tenant-1');
     // The surviving iso leg still reaches the prompt

@@ -70,7 +70,8 @@ describe('PROMPT_BLOCKS', () => {
   it('none of the blocks contain specific ISO clause numbers (factual-claim-free)', () => {
     // Blocks may mention the format "ISO XXXXX X.X.X" as an example pattern,
     // but must NOT state actual standard facts like "ISO 9001 4.1 requires..."
-    const clausePattern = /ISO\s+(?:9001|14001|45001)\s+\d+\.\d+\s+(?:requires|states|specifies|mandates)/i;
+    const clausePattern =
+      /ISO\s+(?:9001|14001|45001)\s+\d+\.\d+\s+(?:requires|states|specifies|mandates)/i;
     for (const [, content] of Object.entries(PROMPT_BLOCKS)) {
       expect(content).not.toMatch(clausePattern);
     }

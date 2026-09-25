@@ -62,7 +62,7 @@ function makeEvent(fieldName: string, args: Record<string, unknown> = {}) {
   return {
     info: { fieldName },
     arguments: args,
-    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-9' } },
+    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-9', role: 'IMSLead' } },
   };
 }
 
@@ -95,8 +95,20 @@ describe('runCapaAnalysis (m2.ts)', () => {
         ],
       })
       .mockResolvedValueOnce({
-        records: [[{ stringValue: 'ca-1' }, { stringValue: 'Retrain' }, { stringValue: 'OPEN' }, { stringValue: 'owner-1' }]],
-        columnMetadata: [{ name: 'id' }, { name: 'action_desc' }, { name: 'status' }, { name: 'owner_id' }],
+        records: [
+          [
+            { stringValue: 'ca-1' },
+            { stringValue: 'Retrain' },
+            { stringValue: 'OPEN' },
+            { stringValue: 'owner-1' },
+          ],
+        ],
+        columnMetadata: [
+          { name: 'id' },
+          { name: 'action_desc' },
+          { name: 'status' },
+          { name: 'owner_id' },
+        ],
       });
 
     const result = await m2Handler(makeEvent('runCapaAnalysis', { ncId: 'nc-1' }));
@@ -119,7 +131,9 @@ describe('runCapaAnalysis (m2.ts)', () => {
       requestedBy: 'user-9',
       context: {
         nc: { description: 'Widget cracked', ncType: 'nc', severity: 'high', status: 'open' },
-        correctiveActions: [{ id: 'ca-1', actionDesc: 'Retrain', status: 'open', ownerId: 'owner-1' }],
+        correctiveActions: [
+          { id: 'ca-1', actionDesc: 'Retrain', status: 'open', ownerId: 'owner-1' },
+        ],
       },
     });
   });
@@ -148,7 +162,9 @@ describe('runNcIntake (m2.ts, S1 studio wave)', () => {
     // Stage-1 intake: no NC exists — the resolver must not touch RDS
     expect(mockExecute).not.toHaveBeenCalled();
 
-    const cmd = mockLambdaSend.mock.calls[0][0] as { input: { FunctionName: string; InvocationType: string; Payload: string } };
+    const cmd = mockLambdaSend.mock.calls[0][0] as {
+      input: { FunctionName: string; InvocationType: string; Payload: string };
+    };
     expect(cmd.input.FunctionName).toBe('arn:aws:lambda:us-east-1:123:function:CapaGuruFn');
     expect(cmd.input.InvocationType).toBe('Event'); // fire-and-forget
     const payload = JSON.parse(cmd.input.Payload);
@@ -174,8 +190,13 @@ describe('runNcIntake (m2.ts, S1 studio wave)', () => {
 describe('runDocDraft (m1.ts, S2 studio wave)', () => {
   it('dispatches the draft intent + CURRENT ORG PROFILE to DocStudio (S2.3: "[Organization Name]" shipped on a live card without it)', async () => {
     mockExecute.mockResolvedValueOnce({
-      records: [[{ stringValue: JSON.stringify({ legalName: 'Meridian Design-Build LLC' }) }]],
-      columnMetadata: [{ name: 'payload' }],
+      records: [
+        [
+          { longValue: 3 },
+          { stringValue: JSON.stringify({ legalName: 'Meridian Design-Build LLC' }) },
+        ],
+      ],
+      columnMetadata: [{ name: 'current_version' }, { name: 'payload' }],
     });
 
     const result = await m1Handler(
@@ -188,7 +209,9 @@ describe('runDocDraft (m1.ts, S2 studio wave)', () => {
 
     expect(result).toEqual({ runId: 'run-fixed-01', status: 'DISPATCHED' });
 
-    const cmd = mockLambdaSend.mock.calls[0][0] as { input: { FunctionName: string; InvocationType: string; Payload: string } };
+    const cmd = mockLambdaSend.mock.calls[0][0] as {
+      input: { FunctionName: string; InvocationType: string; Payload: string };
+    };
     expect(cmd.input.FunctionName).toBe('arn:aws:lambda:us-east-1:123:function:DocStudioFn');
     expect(cmd.input.InvocationType).toBe('Event');
     const payload = JSON.parse(cmd.input.Payload);

@@ -21,7 +21,10 @@ function parseProposal(draftBody: string): ParsedProposal | null {
     const parsed = JSON.parse(draftBody);
     if (!parsed || typeof parsed !== 'object') return null;
     if ('args' in parsed && parsed.args && typeof parsed.args === 'object') {
-      return { tool: (parsed.tool as string) ?? null, args: parsed.args as Record<string, unknown> };
+      return {
+        tool: (parsed.tool as string) ?? null,
+        args: parsed.args as Record<string, unknown>,
+      };
     }
     return { tool: (parsed.tool as string) ?? null, args: parsed as Record<string, unknown> };
   } catch {
@@ -51,14 +54,19 @@ function FieldChip({ label, value }: { label: string; value: unknown }) {
 
 function SectionDraftView({ args }: { args: Record<string, unknown> }) {
   const t = useTranslations('proposal');
-  const sentences = Array.isArray(args.sentences) ? (args.sentences as Array<{ text?: string }>) : [];
+  const sentences = Array.isArray(args.sentences)
+    ? (args.sentences as Array<{ text?: string }>)
+    : [];
   return (
     <div className={styles.proposal}>
       <div className={styles.chipRow}>
         <FieldChip label={t('section')} value={args.harmonizationKey} />
       </div>
       <p className={styles.prose}>
-        {sentences.map((s) => s.text ?? '').filter(Boolean).join(' ')}
+        {sentences
+          .map((s) => s.text ?? '')
+          .filter(Boolean)
+          .join(' ')}
       </p>
       <Rationale text={args.rationale} />
     </div>
@@ -180,13 +188,14 @@ function FindingView({ args }: { args: Record<string, unknown> }) {
   );
 }
 
-const TOOL_VIEWS: Record<string, (props: { args: Record<string, unknown> }) => React.JSX.Element> = {
-  'manual-section-draft': SectionDraftView,
-  'doc-draft': DocDraftView,
-  'nc-draft-write': NcDraftView,
-  'rca-write': RcaView,
-  'audit-finding-write': FindingView,
-};
+const TOOL_VIEWS: Record<string, (props: { args: Record<string, unknown> }) => React.JSX.Element> =
+  {
+    'manual-section-draft': SectionDraftView,
+    'doc-draft': DocDraftView,
+    'nc-draft-write': NcDraftView,
+    'rca-write': RcaView,
+    'audit-finding-write': FindingView,
+  };
 
 export function ProposalView({ draftBody }: { draftBody: string }) {
   const t = useTranslations('proposal');

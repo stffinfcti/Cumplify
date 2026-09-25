@@ -3,10 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTranslations } from 'next-intl';
 import { useRouter } from 'next/navigation';
-import {
-  PageHeader,
-  ErrorState,
-} from '@/components/shared';
+import { PageHeader, ErrorState } from '@/components/shared';
 import { GuidanceBanner } from '@/components/shared/GuidanceBanner';
 import { useGraphQL } from '@/lib/api';
 import { useStandardScope } from '@/lib/standard-scope';
@@ -76,9 +73,7 @@ export default function CrossReferencePage() {
       setNoMatrix(false);
       // Find the correlation-matrix document
       const docsData = await query<{ listDocuments: Document[] }>(LIST_DOCS, {});
-      const matrixDoc = docsData.listDocuments.find(
-        (d) => d.docType === 'CORRELATION_MATRIX'
-      );
+      const matrixDoc = docsData.listDocuments.find((d) => d.docType === 'CORRELATION_MATRIX');
 
       if (!matrixDoc) {
         setNoMatrix(true);
@@ -191,7 +186,9 @@ export default function CrossReferencePage() {
                                 title={entry.clauseTitle}
                               >
                                 <span className={styles.clauseNo}>{entry.clauseNo}</span>
-                                <span className={`${styles.modeBadge} ${getModeBadgeClass(entry.annexSlMode)}`}>
+                                <span
+                                  className={`${styles.modeBadge} ${getModeBadgeClass(entry.annexSlMode)}`}
+                                >
                                   {entry.annexSlMode}
                                 </span>
                               </button>

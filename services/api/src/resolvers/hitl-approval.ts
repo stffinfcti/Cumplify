@@ -12,7 +12,13 @@ import { Logger } from '@aws-lambda-powertools/logger';
 import { GetItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { SFNClient, SendTaskSuccessCommand, SendTaskFailureCommand } from '@aws-sdk/client-sfn';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { extractContext, getTenantDdbClient, publishAuditEvent, TABLE_NAME } from './shared.js';
+import {
+  extractContext,
+  getTenantDdbClient,
+  publishAuditEvent,
+  TABLE_NAME,
+  type AppSyncEvent,
+} from './shared.js';
 import { canApprove, normalizeRole, resolveModule } from '../permissions/role-matrix.js';
 import {
   approveAllowedByMatrix,
@@ -24,11 +30,9 @@ import { resolveHitlItem } from '../../../agents/shared/hitl.js';
 const logger = new Logger({ serviceName: 'resolver-hitl-approval' });
 const sfnClient = new SFNClient({});
 
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
-}
+// A persistently failing SFN target gets this many send attempts before the
+// item resolves TIMED_OUT instead of bouncing back to PENDING again.
+const MAX_SEND_ATTEMPTS = 3;
 
 interface ApprovalInput {
   hitlItemId: string;
@@ -96,7 +100,10 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
   // Step 7: Validate role — canApprove(role, module)
   if (!canApprove(role, module)) {
     logger.warn('Role lacks approval permission', { role, module, hitlItemId });
-    throw new ApprovalError(403, `Role '${role}' cannot approve items in module '${module}'`);
+    throw new ApprovalError(
+      403,
+      `FORBIDDEN: Role '${role}' cannot approve items in module '${module}'`,
+    );
   }
 
   // Step 7a (SOD-1): author ≠ approver. Items stamped with the proposing
@@ -105,7 +112,7 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
   const requestedBy = item.requestedBy as string | undefined;
   if (requestedBy && requestedBy === approverSub && decision === 'APPROVE') {
     logger.warn('SoD violation blocked: proposer attempted self-approval', { hitlItemId });
-    throw new ApprovalError(403, 'SoD violation: the proposer cannot approve their own item');
+    throw new ApprovalError(403, 'SOD_VIOLATION: the proposer cannot approve their own item');
   }
 
   // Step 7b (RS-6): tenant approval-matrix narrowing. The matrix can only
@@ -128,7 +135,7 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
       });
       throw new ApprovalError(
         403,
-        `Approval matrix: role '${role}' is not an approver for '${artifactType}'`,
+        `FORBIDDEN: role '${role}' is not an approver for '${artifactType}' in the approval matrix`,
       );
     }
   }
@@ -136,8 +143,7 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
   // L5-2 (Task 32): If guardrailEvidence.flagged=true, approval REQUIRES justification.
   // Flagged items had grounding issues — approver must explicitly justify the override.
   const guardrailEvidence = item.guardrailEvidence as
-    | { flagged?: boolean; groundingScore?: number; relevanceScore?: number }
-    | undefined;
+    { flagged?: boolean; groundingScore?: number; relevanceScore?: number } | undefined;
   const isFlagged = guardrailEvidence?.flagged === true;
 
   if (isFlagged && decision === 'APPROVE' && !justification) {
@@ -170,7 +176,12 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
     );
   } catch (err: unknown) {
     if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
-      throw new ApprovalError(409, `HITL item already resolved or being processed: ${hitlItemId}`);
+      // Code prefix is the client-facing contract — the UI prunes stale
+      // cards on these tokens, not on the prose that follows.
+      throw new ApprovalError(
+        409,
+        `HITL_ALREADY_RESOLVED: HITL item already resolved or being processed: ${hitlItemId}`,
+      );
     }
     throw err;
   }
@@ -202,10 +213,69 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
   } catch (err: unknown) {
     const errName = (err as { name?: string }).name ?? '';
     if (errName === 'TaskDoesNotExist' || errName === 'TaskTimedOut') {
-      // Rollback: item remains in RESOLVING but SFN expired — mark as timed out
+      // The token is permanently dead — resolve as TIMED_OUT (removes GSI9
+      // membership + TTLs the item) instead of leaving a ghost RESOLVING row
+      // that only the sweeper would ever reclaim.
+      await resolveHitlItem(tenantId, hitlItemId, 'TIMED_OUT', 'system', ddb).catch(
+        (resolveErr: unknown) => {
+          logger.warn('Failed to mark expired HITL item TIMED_OUT', {
+            hitlItemId,
+            resolveErr: String(resolveErr),
+          });
+        },
+      );
       throw new ApprovalError(
         410,
-        `SFN task expired or does not exist for HITL item: ${hitlItemId}`,
+        `HITL_TASK_EXPIRED: SFN task expired or does not exist for HITL item: ${hitlItemId}`,
+      );
+    }
+    // Transient send failure — reset to PENDING so the card re-appears in the
+    // queue for a retry instead of vanishing until the sweeper finds it.
+    // sendAttempts caps the cycle: a persistently failing SFN target would
+    // otherwise loop PENDING→RESOLVING→PENDING forever.
+    const reset = await ddb
+      .send(
+        new UpdateItemCommand({
+          TableName: TABLE_NAME,
+          Key: marshall({
+            PK: `TENANT#${tenantId}#HITL`,
+            SK: `PENDING#${hitlItemId}`,
+          }),
+          ConditionExpression: '#status = :resolving',
+          UpdateExpression:
+            'SET #status = :pending, sendAttempts = if_not_exists(sendAttempts, :zero) + :one REMOVE resolvingAt',
+          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeValues: marshall({
+            ':resolving': 'RESOLVING',
+            ':pending': 'PENDING',
+            ':zero': 0,
+            ':one': 1,
+          }),
+          ReturnValues: 'UPDATED_NEW',
+        }),
+      )
+      .catch((resetErr: unknown) => {
+        logger.warn('Failed to reset HITL item to PENDING after SFN send error', {
+          hitlItemId,
+          resetErr: String(resetErr),
+        });
+        return undefined;
+      });
+    const sendAttempts = Number(
+      (reset?.Attributes ? unmarshall(reset.Attributes) : {}).sendAttempts ?? 0,
+    );
+    if (sendAttempts >= MAX_SEND_ATTEMPTS) {
+      await resolveHitlItem(tenantId, hitlItemId, 'TIMED_OUT', 'system', ddb).catch(
+        (resolveErr: unknown) => {
+          logger.warn('Failed to mark retry-exhausted HITL item TIMED_OUT', {
+            hitlItemId,
+            resolveErr: String(resolveErr),
+          });
+        },
+      );
+      throw new ApprovalError(
+        410,
+        `HITL_TASK_EXPIRED: SFN send retry cap reached for HITL item: ${hitlItemId}`,
       );
     }
     throw err;
@@ -213,9 +283,23 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
 
   // Step 9: resolveHitlItem bookkeeping (removes GSI9, sets TTL) — rides the
   // same tenant-scoped client as the RESOLVING guard (BUG-14: ambient role has
-  // no DDB grants).
+  // no DDB grants). SFN already resumed above, so a failure here must not error
+  // the mutation (the decision already took effect): retry once inline, then
+  // best-effort warn — a stuck RESOLVING row is reclaimed by expire-hitl-item.
   const resolution = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
-  await resolveHitlItem(tenantId, hitlItemId, resolution, approverSub, ddb);
+  try {
+    await resolveHitlItem(tenantId, hitlItemId, resolution, approverSub, ddb);
+  } catch (resolveErr: unknown) {
+    try {
+      await resolveHitlItem(tenantId, hitlItemId, resolution, approverSub, ddb);
+    } catch (retryErr: unknown) {
+      logger.error('resolveHitlItem failed after SendTaskSuccess — item left RESOLVING', {
+        hitlItemId,
+        resolution,
+        error: String(retryErr),
+      });
+    }
+  }
 
   // Step 10: Publish audit event
   const detailType = decision === 'APPROVE' ? 'Hitl.Approved' : 'Hitl.SentBack';

@@ -13,9 +13,13 @@ import {
   extractAgentContext,
   beginTenantTransaction,
   publishAuditEvent,
+  requireModuleRole,
   marshalOne,
   marshalMany,
   jsonOut,
+  type AppSyncEvent,
+  LIST_QUERY_LIMIT,
+  rollbackQuietly,
 } from './shared.js';
 import {
   mapEnum,
@@ -28,13 +32,8 @@ import {
 
 const logger = new Logger({ serviceName: 'resolver-m2' });
 const lambdaClient = new LambdaClient({});
-const CAPA_GURU_FN_ARN = process.env.CAPA_GURU_FN_ARN ?? '';
 
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
-}
+const CAPA_GURU_FN_ARN = process.env.CAPA_GURU_FN_ARN ?? '';
 
 const AGENT_FIELDS = new Set(['agentTriageNC', 'agentProposeCorrectiveAction']);
 
@@ -42,7 +41,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
   // RS-7: agent* (@aws_iam) fields never carry resolverContext — branch
   // BEFORE extractContext, which would throw for them.
   if (AGENT_FIELDS.has(event.info.fieldName)) {
-    const { tenantId, actor } = extractAgentContext(event.arguments, 'CAPAGuru');
+    const { tenantId, actor } = extractAgentContext(event.arguments, 'CAPAGuru', event.identity);
     logger.appendKeys({ tenantId, requestField: event.info.fieldName });
     return event.info.fieldName === 'agentTriageNC'
       ? agentTriageNC(event, tenantId, actor)
@@ -50,28 +49,30 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
   }
 
   const ctx = extractContext(event);
-  const { tenantId, sub } = ctx;
+  const { tenantId, sub, role } = ctx;
   logger.appendKeys({ tenantId, requestField: event.info.fieldName });
 
+  // M-effort: M2 write mutations are role-gated at entry (Part 13 matrix);
+  // queries stay at the authenticated floor.
   switch (event.info.fieldName) {
     case 'raiseNonconformity':
-      return raiseNonconformity(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => raiseNonconformity(event, tenantId, sub));
     case 'recordRootCause':
-      return recordRootCause(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => recordRootCause(event, tenantId, sub));
     case 'createCorrectiveAction':
-      return createCorrectiveAction(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => createCorrectiveAction(event, tenantId, sub));
     case 'closeCapa':
-      return closeCapa(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => closeCapa(event, tenantId, sub));
     case 'verifyEffectiveness':
-      return verifyEffectiveness(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => verifyEffectiveness(event, tenantId, sub));
     case 'disposeNonconformingOutput':
-      return disposeNonconformingOutput(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => disposeNonconformingOutput(event, tenantId, sub));
     case 'runCapaAnalysis':
-      return runCapaAnalysis(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => runCapaAnalysis(event, tenantId, sub));
     case 'runNcIntake':
-      return runNcIntake(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => runNcIntake(event, tenantId, sub));
     case 'runRootCauseAnalysis':
-      return runRootCauseAnalysis(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => runRootCauseAnalysis(event, tenantId, sub));
     case 'listRootCauseAnalyses':
       return listRootCauseAnalyses(event, tenantId);
     case 'getNonconformity':
@@ -126,7 +127,7 @@ async function raiseNonconformity(event: AppSyncEvent, tenantId: string, actor: 
     logger.info('Nonconformity raised', { tenantId });
     return nc;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -178,7 +179,7 @@ async function recordRootCause(event: AppSyncEvent, tenantId: string, actor: str
     });
     return rca;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -221,7 +222,7 @@ async function createCorrectiveAction(event: AppSyncEvent, tenantId: string, act
     logger.info('Corrective action created', { tenantId });
     return ca;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -272,7 +273,7 @@ async function agentProposeCorrectiveAction(event: AppSyncEvent, tenantId: strin
     logger.info('Agent-proposed corrective action created', { tenantId });
     return ca;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -324,7 +325,7 @@ async function agentTriageNC(event: AppSyncEvent, tenantId: string, actor: strin
     logger.info('Agent-triaged NC reclassified', { tenantId, ncId: input.ncId });
     return nc;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -360,7 +361,7 @@ async function runCapaAnalysis(event: AppSyncEvent, tenantId: string, actor: str
     cas = marshalMany(caResult);
     await txn.commit();
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 
@@ -455,11 +456,7 @@ async function runRootCauseAnalysis(event: AppSyncEvent, tenantId: string, actor
     await txn.commit();
     nc = marshalOne(result);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
   if (!nc) throw new Error('NC_NOT_FOUND');
@@ -500,7 +497,7 @@ async function listRootCauseAnalyses(event: AppSyncEvent, tenantId: string) {
   try {
     const result = await txn.execute(
       `SELECT id, nc_id, method, findings, root_cause_summary, created_by, created_at
-       FROM m2.root_cause_analyses WHERE nc_id = :ncId::uuid ORDER BY created_at DESC`,
+       FROM m2.root_cause_analyses WHERE nc_id = :ncId::uuid ORDER BY created_at DESC LIMIT ${LIST_QUERY_LIMIT}`,
       [{ name: 'ncId', value: { stringValue: ncId } }],
     );
     await txn.commit();
@@ -508,11 +505,7 @@ async function listRootCauseAnalyses(event: AppSyncEvent, tenantId: string) {
     // object (2026-07-22 wire rule: return objects, never re-stringified).
     return marshalMany(result).map((r) => ({ ...r, findings: jsonOut(r.findings) }));
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -524,11 +517,20 @@ async function closeCapa(event: AppSyncEvent, tenantId: string, actor: string) {
     // FIXED 2026-07-14 (architect): closed_at/closed_by columns do not exist on
     // m2.corrective_actions (migration 003); input field is id per CloseCapaInput.
     // closureNotes has no column — it is preserved in the audit-trail payload.
+    // M-effort: status predicate rides the UPDATE — a concurrent close can no
+    // longer double-close (and double-emit CAPA.Closed for) the same row.
+    const cur = await txn.execute(`SELECT status FROM m2.corrective_actions WHERE id = :id::uuid`, [
+      { name: 'id', value: { stringValue: input.id as string } },
+    ]);
+    if (!cur.records?.length) throw new Error('CAPA_NOT_FOUND');
     const result = await txn.execute(
       `UPDATE m2.corrective_actions SET status = 'closed', updated_at = NOW()
-       WHERE id = :id::uuid RETURNING *`,
+       WHERE id = :id::uuid AND status <> 'closed' RETURNING *`,
       [{ name: 'id', value: { stringValue: input.id as string } }],
     );
+    if (!result.records || result.records.length === 0) {
+      throw new Error('CAPA_ALREADY_CLOSED');
+    }
     await txn.commit();
     await publishAuditEvent({
       tenantId,
@@ -546,7 +548,7 @@ async function closeCapa(event: AppSyncEvent, tenantId: string, actor: string) {
     });
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -600,7 +602,7 @@ async function verifyEffectiveness(event: AppSyncEvent, tenantId: string, actor:
     });
     return check;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -640,7 +642,7 @@ async function disposeNonconformingOutput(event: AppSyncEvent, tenantId: string,
     });
     return output;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -654,7 +656,7 @@ async function getNonconformity(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -684,13 +686,13 @@ async function listOpenCAPAs(event: AppSyncEvent, tenantId: string) {
     const result = await txn.execute(
       `SELECT ca.* FROM m2.corrective_actions ca
        JOIN m2.nonconformities nc ON nc.id = ca.nc_id
-       WHERE ${clauses.join(' AND ')} ORDER BY ca.due_date ASC`,
+       WHERE ${clauses.join(' AND ')} ORDER BY ca.due_date ASC LIMIT ${LIST_QUERY_LIMIT}`,
       params,
     );
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -715,13 +717,13 @@ async function listNonconformities(event: AppSyncEvent, tenantId: string) {
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(
-      `SELECT * FROM m2.nonconformities ${where} ORDER BY raised_at DESC`,
+      `SELECT * FROM m2.nonconformities ${where} ORDER BY raised_at DESC LIMIT ${LIST_QUERY_LIMIT}`,
       params,
     );
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -730,13 +732,13 @@ async function listCorrectiveActions(event: AppSyncEvent, tenantId: string) {
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(
-      `SELECT * FROM m2.corrective_actions WHERE nc_id = :ncId::uuid ORDER BY created_at ASC`,
+      `SELECT * FROM m2.corrective_actions WHERE nc_id = :ncId::uuid ORDER BY created_at ASC LIMIT ${LIST_QUERY_LIMIT}`,
       [{ name: 'ncId', value: { stringValue: event.arguments.ncId as string } }],
     );
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }

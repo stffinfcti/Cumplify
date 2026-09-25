@@ -50,7 +50,8 @@ function createTestStack(): Template {
     recordsQueueArn: 'arn:aws:sqs:us-east-1:123456789012:RecordsQueue',
     recordsDlqUrl: 'https://sqs.us-east-1.amazonaws.com/123456789012/RecordsDlq',
     tenantDocsIndexerQueueArn: 'arn:aws:sqs:us-east-1:123456789012:TenantDocsIndexerQueue',
-    tenantDocsIndexerDlqUrl: 'https://sqs.us-east-1.amazonaws.com/123456789012/TenantDocsIndexerDlq',
+    tenantDocsIndexerDlqUrl:
+      'https://sqs.us-east-1.amazonaws.com/123456789012/TenantDocsIndexerDlq',
     aossVpcEndpointId: 'vpce-0123456789abcdef0',
     vpc: ec2.Vpc.fromVpcAttributes(stack, 'MockVpc', {
       vpcId: 'vpc-0123456789abcdef0',
@@ -419,9 +420,16 @@ describe('AiStack', () => {
       const wait = asl.States.WaitForApproval;
       // Carry #3: sfnExecutionArn passed via $$.Execution.Id
       expect(wait.Parameters.Payload['sfnExecutionArn.$']).toBe('$$.Execution.Id');
-      expect(wait.Catch).toHaveLength(1);
-      expect(wait.Catch[0].ErrorEquals).toEqual(['SENT_BACK']);
-      expect(wait.Catch[0].Next).toBe('HandleSendBack');
+      const catches = wait.Catch as Array<{ ErrorEquals: string[]; Next: string }>;
+      const sentBack = catches.find((c) => c.ErrorEquals.includes('SENT_BACK'));
+      expect(sentBack?.Next).toBe('HandleSendBack');
+      // States.Timeout → ExpireHitlItem: a dead task token must not leave the
+      // HITL item PENDING forever — resolved via the shared resolveHitlItem
+      // Lambda path (TIMED_OUT + ttl + GSI9 removal).
+      const timeout = catches.find((c) => c.ErrorEquals.includes('States.Timeout'));
+      expect(timeout?.Next).toBe('ExpireHitlItem');
+      expect(asl.States.ExpireHitlItem).toBeDefined();
+      expect(asl.States.ExpireHitlItem.Type).toBe('Task');
     });
 
     it('exports GuardrailId', () => {
@@ -679,8 +687,8 @@ describe('AOSS Apply-Template CR (Task 9)', () => {
   it('T-9a: AOSS data-access policy — seeder/apply-template WRITE + prover-only DeleteIndex', () => {
     const policies = template.findResources('AWS::OpenSearchServerless::AccessPolicy');
     // Find the main AI access policy (not the iso-kb-seeder-specific one)
-    const mainPolicy = Object.entries(policies).find(
-      ([id]) => id.includes('AiAossDataAccessPolicy'),
+    const mainPolicy = Object.entries(policies).find(([id]) =>
+      id.includes('AiAossDataAccessPolicy'),
     );
     expect(mainPolicy).toBeDefined();
     const dataPolicy = mainPolicy![1] as any;
@@ -700,8 +708,8 @@ describe('AOSS Apply-Template CR (Task 9)', () => {
 
   it('iso-kb-seeding Task 5: seeder access policy grants DeleteIndex on iso-kb', () => {
     const policies = template.findResources('AWS::OpenSearchServerless::AccessPolicy');
-    const seederPolicy = Object.entries(policies).find(
-      ([id]) => id.includes('IsoKbSeederAccessPolicy'),
+    const seederPolicy = Object.entries(policies).find(([id]) =>
+      id.includes('IsoKbSeederAccessPolicy'),
     );
     expect(seederPolicy).toBeDefined();
     const policyStr = JSON.stringify((seederPolicy![1] as any).Properties.Policy);
@@ -874,6 +882,17 @@ describe('spec-40 DocGen generation plane (Task 5)', () => {
     ).replace(/\\"/g, '"');
     expect(def).toContain('"MaxConcurrency":4');
     expect(def).toContain('$.sections');
+    // MarkRunFailed must end in a Fail state — a bare LambdaInvoke catch
+    // target swallows the error and reports the execution SUCCEEDED.
+    const raw =
+      typeof (docgen.Properties as any).DefinitionString === 'string'
+        ? (docgen.Properties as any).DefinitionString
+        : (docgen.Properties as any).DefinitionString['Fn::Join'][1]
+            .map((p: unknown) => (typeof p === 'string' ? p : 'ARN'))
+            .join('');
+    const asl = JSON.parse(raw);
+    expect(asl.States.MarkRunFailed?.Next).toBe('RunFailed');
+    expect(asl.States.RunFailed?.Type).toBe('Fail');
   });
 
   it('ComposeSection reaches Bedrock ONLY via the invoker (one door): lambda:InvokeFunction granted, no bedrock:InvokeModel on its role', () => {
@@ -934,7 +953,9 @@ describe('spec-35 FIX-T20-3: guru handlers VPC-placed for AOSS data-plane access
 
   it('non-retrieving consumers stay OUT of the VPC until their endpoint needs are mapped', () => {
     for (const service of ['agent-records-vault']) {
-      expect((fnByService(service).Properties as { VpcConfig?: unknown }).VpcConfig).toBeUndefined();
+      expect(
+        (fnByService(service).Properties as { VpcConfig?: unknown }).VpcConfig,
+      ).toBeUndefined();
     }
   });
 });

@@ -42,25 +42,31 @@ beforeEach(() => {
     // Embed response
     if (payload.op === 'embed') {
       return Promise.resolve({
-        Payload: Buffer.from(JSON.stringify({
-          embedding: Array(1024).fill(0.01),
-          tokenCount: 10,
-          credits: 0.0002,
-        })),
+        Payload: Buffer.from(
+          JSON.stringify({
+            embedding: Array(1024).fill(0.01),
+            tokenCount: 10,
+            credits: 0.0002,
+          }),
+        ),
       });
     }
     // Invoke response (converse)
     return Promise.resolve({
-      Payload: Buffer.from(JSON.stringify({
-        text: 'Clause 4.1 requires determining external and internal issues.',
-        tokenUsage: { inputTokens: 50, outputTokens: 30 },
-      })),
+      Payload: Buffer.from(
+        JSON.stringify({
+          text: 'Clause 4.1 requires determining external and internal issues.',
+          tokenUsage: { inputTokens: 50, outputTokens: 30 },
+        }),
+      ),
     });
   });
 
   // Default: retrieval succeeds with chunks
   retrieveMock.mockResolvedValue({
-    chunks: [{ text: '[ISO 9001 4.1] Understanding the organization...', score: 0.95, metadata: {} }],
+    chunks: [
+      { text: '[ISO 9001 4.1] Understanding the organization...', score: 0.95, metadata: {} },
+    ],
     latencyMs: 200,
     coldStart: false,
     attempts: 1,

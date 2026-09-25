@@ -7,7 +7,7 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { resolve, join, dirname } from 'node:path';
+import { basename, resolve, join, dirname, relative } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
@@ -116,23 +116,54 @@ function runStep(
 }
 
 // --- Service property-test check ---
-function hasFilesMatching(root: string, patterns: string[]): boolean {
-  // Simple check: do any .test.ts files exist in services/ or infra/ dirs?
-  for (const pattern of patterns) {
-    const baseDir = pattern.startsWith('services') ? join(root, 'services') : join(root, 'infra');
-    if (!existsSync(baseDir)) continue;
-    try {
-      const output = execSync(`find "${baseDir}" -name "*.test.ts" -type f 2>/dev/null | head -1`, {
-        encoding: 'utf-8',
-        cwd: root,
-      });
-      if (output.trim().length > 0) return true;
-    } catch {
-      continue;
+function globToRegExp(glob: string): RegExp {
+  let re = '';
+  let i = 0;
+  while (i < glob.length) {
+    if (glob.startsWith('**/', i)) {
+      re += '(?:.*/)?';
+      i += 3;
+    } else if (glob.startsWith('**', i)) {
+      re += '.*';
+      i += 2;
+    } else if (glob[i] === '*') {
+      re += '[^/]*';
+      i += 1;
+    } else if (glob[i] === '?') {
+      re += '[^/]';
+      i += 1;
+    } else {
+      re += glob[i].replace(/[.+^${}()|[\]\\]/g, '\\$&');
+      i += 1;
     }
+  }
+  return new RegExp(`^${re}$`);
+}
+
+function hasFilesMatching(root: string, patterns: string[]): boolean {
+  const matchers = patterns.map(globToRegExp);
+  for (const file of walkFiles(root)) {
+    const rel = relative(root, file);
+    if (matchers.some((m) => m.test(rel))) return true;
   }
   return false;
 }
+
+/** Recursive file walker — the test-discovery checks must reach tests in
+ * src/, __tests__/, or any nested layout, not just a service's top level. */
+function* walkFiles(dir: string): Generator<string> {
+  for (const entry of readdirSync(dir)) {
+    const p = join(dir, entry);
+    if (statSync(p).isDirectory()) {
+      if (entry === 'node_modules' || entry.startsWith('.')) continue;
+      yield* walkFiles(p);
+    } else {
+      yield p;
+    }
+  }
+}
+
+const INTEGRATION_TEST_RE = /\.(integration|int)\.test\.ts$/;
 
 function checkPropertyTests(): string | null {
   const servicesDir = join(ROOT, 'services');
@@ -144,15 +175,16 @@ function checkPropertyTests(): string | null {
     const dir = join(servicesDir, entry);
     if (!statSync(dir).isDirectory()) continue;
 
-    // Check if directory has source .ts files
-    const files = readdirSync(dir);
-    const sourceFiles = files.filter(
+    const allFiles = [...walkFiles(dir)].map((f) => basename(f));
+
+    // Check if the subtree has source .ts files
+    const sourceFiles = allFiles.filter(
       (f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && f !== 'index.ts' && f !== 'types.ts',
     );
     if (sourceFiles.length === 0) continue;
 
-    // Check for property tests
-    const propertyTests = files.filter((f) => f.endsWith('.property.test.ts'));
+    // Check for property tests anywhere under the service
+    const propertyTests = allFiles.filter((f) => f.endsWith('.property.test.ts'));
     if (propertyTests.length === 0) {
       return `FAIL: services/${entry}/ has no property-based test (*.property.test.ts). Per 13-testing.md, property-based tests are mandatory on services/*.`;
     }
@@ -186,8 +218,13 @@ function main() {
     return;
   }
 
-  // Step 3: eslint + prettier
-  const s3 = runStep(3, 'eslint + prettier', 'npm run lint && npm run format:check');
+  // Step 3: eslint + prettier + codegen drift (role-matrix single-source check —
+  // hand-edits to frontend/src/lib/role-matrix.ts fail here)
+  const s3 = runStep(
+    3,
+    'eslint + prettier + codegen drift',
+    'npm run lint && npm run format:check && npm run check:role-matrix',
+  );
   if (s3 === 'FAIL') {
     computeResult();
     return;
@@ -250,16 +287,19 @@ function main() {
     const moduleTestDir = join(ROOT, 'services', moduleName);
     const hasIntegTests =
       existsSync(moduleTestDir) &&
-      readdirSync(moduleTestDir).some((f) => f.endsWith('.integration.test.ts'));
+      [...walkFiles(moduleTestDir)].some((f) => INTEGRATION_TEST_RE.test(f));
     if (!hasIntegTests) {
       runStep(6, `integration tests (module: ${moduleName})`, null, {
         skipReason: `No integration tests defined for module ${moduleName}.`,
       });
     } else {
+      // Both suffixes exist in the tree — run them together. Route through
+      // test-int.ts so the int lane gets vitest.int.config.ts (the default
+      // config excludes *.int.test.ts) plus its provisioning report.
       const s6 = runStep(
         6,
         `integration tests (module: ${moduleName})`,
-        `npx vitest run services/${moduleName}/**/*.integration.test.ts --reporter=verbose`,
+        `npx tsx scripts/test-int.ts "services/${moduleName}/**/*.integration.test.ts" "services/${moduleName}/**/*.int.test.ts" --reporter=verbose`,
       );
       if (s6 === 'FAIL') {
         computeResult();

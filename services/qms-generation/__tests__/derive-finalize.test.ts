@@ -229,6 +229,7 @@ describe('FinalizeManual handler', () => {
         columnMetadata: [
           { name: 'standards' },
           { name: 'manual_document_id' },
+          { name: 'status' },
           { name: 'requested_by' },
           { name: 'payload' },
         ],
@@ -249,6 +250,19 @@ describe('FinalizeManual handler', () => {
           { name: 'status' },
           { name: 'content_s3_key' },
           { name: 'clause_registry_ids' },
+        ],
+      })
+      // Registry query also runs before the early return (skeleton loader).
+      .mockResolvedValueOnce({
+        records: [],
+        columnMetadata: [
+          { name: 'id' },
+          { name: 'standard' },
+          { name: 'clause_no' },
+          { name: 'clause_title' },
+          { name: 'annex_sl_mode' },
+          { name: 'doc_type' },
+          { name: 'sort_order' },
         ],
       });
 
@@ -279,6 +293,7 @@ describe('FinalizeManual handler', () => {
             [
               { arrayValue: { stringValues: ['ISO9001', 'ISO14001'] } },
               { isNull: true },
+              { stringValue: 'complete' },
               { stringValue: 'owner-1' },
               { stringValue: JSON.stringify({ legalName: 'Acme', sites: [{ name: 'HQ' }] }) },
             ],
@@ -350,6 +365,12 @@ describe('FinalizeManual handler', () => {
           columnMetadata: [{ name: 'id' }],
         });
       }
+      if (sql.includes('MAX(v.version_no)')) {
+        return Promise.resolve({
+          records: [[{ longValue: 1 }]],
+          columnMetadata: [{ name: 'next' }],
+        });
+      }
       return Promise.resolve({ records: [], columnMetadata: [] });
     });
     // S3 GetObject for the prose section content
@@ -419,6 +440,7 @@ describe('FinalizeManual handler', () => {
             [
               { arrayValue: { stringValues: ['ISO9001'] } },
               { isNull: true },
+              { stringValue: 'complete' },
               { stringValue: 'owner-1' },
               { stringValue: JSON.stringify({ legalName: 'X' }) },
             ],
@@ -471,6 +493,12 @@ describe('FinalizeManual handler', () => {
         return Promise.resolve({
           records: [[{ stringValue: 'doc-idem' }]],
           columnMetadata: [{ name: 'id' }],
+        });
+      }
+      if (sql.includes('MAX(v.version_no)')) {
+        return Promise.resolve({
+          records: [[{ longValue: 1 }]],
+          columnMetadata: [{ name: 'next' }],
         });
       }
       return Promise.resolve({ records: [], columnMetadata: [] });

@@ -2,22 +2,22 @@
   "mcpServers": {
     "aws-docs": {
       "command": "uvx",
-      "args": ["awslabs.aws-documentation-mcp-server@latest"]
+      "args": ["awslabs.aws-documentation-mcp-server@1.2.1"]
     },
     "aws-pricing": {
       "command": "uvx",
-      "args": ["awslabs.aws-pricing-mcp-server@latest"]
+      "args": ["awslabs.aws-pricing-mcp-server@1.1.1"]
     },
     "aws-api": {
       "command": "uvx",
-      "args": ["awslabs.aws-api-mcp-server@latest"],
+      "args": ["awslabs.aws-api-mcp-server@1.5.5"],
       "env": {
         "AWS_PROFILE": "cumplify-dev-readonly"
       }
     },
     "aws-diagram": {
       "command": "uvx",
-      "args": ["awslabs.aws-diagram-mcp-server@latest"]
+      "args": ["awslabs.aws-diagram-mcp-server@1.0.23"]
     }
   }
 }

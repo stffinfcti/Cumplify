@@ -66,10 +66,10 @@ describe('submitDocumentForApproval — NEGATIVE PATH FIRST', () => {
       records: [[{ stringValue: 'run-1' }, { stringValue: 'running' }]],
       columnMetadata: [{ name: 'id' }, { name: 'status' }],
     });
-    // Call 2: unreviewed count = 3
+    // Call 2: combined readiness row — unreviewed = 3, gap_failed = 0
     mockExecute.mockResolvedValueOnce({
-      records: [[{ longValue: 3 }]],
-      columnMetadata: [{ name: 'cnt' }],
+      records: [[{ longValue: 3 }, { longValue: 0 }]],
+      columnMetadata: [{ name: 'unreviewed' }, { name: 'gap_failed' }],
     });
 
     await expect(handler(makeEvent('submitDocumentForApproval', { id: 'doc-1' }))).rejects.toThrow(
@@ -89,15 +89,10 @@ describe('submitDocumentForApproval — NEGATIVE PATH FIRST', () => {
       records: [[{ stringValue: 'run-1' }, { stringValue: 'running' }]],
       columnMetadata: [{ name: 'id' }, { name: 'status' }],
     });
-    // Call 2: unreviewed count = 0 (all reviewed)
+    // Call 2: combined readiness row — unreviewed = 0, gap_failed = 2
     mockExecute.mockResolvedValueOnce({
-      records: [[{ longValue: 0 }]],
-      columnMetadata: [{ name: 'cnt' }],
-    });
-    // Call 3: gap/failed count = 2
-    mockExecute.mockResolvedValueOnce({
-      records: [[{ longValue: 2 }]],
-      columnMetadata: [{ name: 'cnt' }],
+      records: [[{ longValue: 0 }, { longValue: 2 }]],
+      columnMetadata: [{ name: 'unreviewed' }, { name: 'gap_failed' }],
     });
 
     await expect(handler(makeEvent('submitDocumentForApproval', { id: 'doc-1' }))).rejects.toThrow(
@@ -138,12 +133,8 @@ describe('submitDocumentForApproval — NEGATIVE PATH FIRST', () => {
       columnMetadata: [{ name: 'id' }, { name: 'status' }],
     });
     mockExecute.mockResolvedValueOnce({
-      records: [[{ longValue: 0 }]],
-      columnMetadata: [{ name: 'cnt' }],
-    });
-    mockExecute.mockResolvedValueOnce({
-      records: [[{ longValue: 0 }]],
-      columnMetadata: [{ name: 'cnt' }],
+      records: [[{ longValue: 0 }, { longValue: 0 }]],
+      columnMetadata: [{ name: 'unreviewed' }, { name: 'gap_failed' }],
     });
     mockExecute.mockResolvedValueOnce({
       records: [[{ stringValue: 'doc-1' }]],
@@ -159,14 +150,12 @@ describe('submitDocumentForApproval — NEGATIVE PATH FIRST', () => {
     expect(runSql).toContain('manual_document_id');
 
     // Section checks use run_id::uuid and real column names
-    const [unreviewedSql] = mockExecute.mock.calls[1];
-    expect(unreviewedSql).toContain('qms.generation_sections');
-    expect(unreviewedSql).toContain(':runId::uuid');
-    expect(unreviewedSql).toContain('reviewed_at IS NULL');
-
-    const [gapSql] = mockExecute.mock.calls[2];
-    expect(gapSql).toContain(':runId::uuid');
-    expect(gapSql).toContain("status IN ('gap', 'failed')");
+    // One readiness query carries both FILTER predicates (single scan)
+    const [readinessSql] = mockExecute.mock.calls[1];
+    expect(readinessSql).toContain('qms.generation_sections');
+    expect(readinessSql).toContain(':runId::uuid');
+    expect(readinessSql).toContain('reviewed_at IS NULL');
+    expect(readinessSql).toContain("status IN ('gap', 'failed')");
   });
 });
 
@@ -176,8 +165,8 @@ describe('approveDocumentVersion — BC-11 SoD', () => {
   it('SOD_VIOLATION when approver === version created_by — writes NOTHING + publishes Security.SodViolationBlocked', async () => {
     // Call 1: version created_by = 'user-test' (same as actor from resolverContext)
     mockExecute.mockResolvedValueOnce({
-      records: [[{ stringValue: 'user-test' }]],
-      columnMetadata: [{ name: 'created_by' }],
+      records: [[{ stringValue: 'user-test' }, { stringValue: 'in_review' }]],
+      columnMetadata: [{ name: 'created_by' }, { name: 'doc_status' }],
     });
 
     await expect(
@@ -204,8 +193,8 @@ describe('approveDocumentVersion — BC-11 SoD', () => {
   it('second-user approval succeeds when approver !== created_by', async () => {
     // Call 1: version created_by = 'other-user'
     mockExecute.mockResolvedValueOnce({
-      records: [[{ stringValue: 'other-user' }]],
-      columnMetadata: [{ name: 'created_by' }],
+      records: [[{ stringValue: 'other-user' }, { stringValue: 'in_review' }]],
+      columnMetadata: [{ name: 'created_by' }, { name: 'doc_status' }],
     });
     // Call 2: INSERT approval
     mockExecute.mockResolvedValueOnce({
@@ -239,8 +228,8 @@ describe('approveDocumentVersion — BC-11 SoD', () => {
 
   it('SoD check queries version with ::uuid cast', async () => {
     mockExecute.mockResolvedValueOnce({
-      records: [[{ stringValue: 'other-user' }]],
-      columnMetadata: [{ name: 'created_by' }],
+      records: [[{ stringValue: 'other-user' }, { stringValue: 'in_review' }]],
+      columnMetadata: [{ name: 'created_by' }, { name: 'doc_status' }],
     });
     mockExecute.mockResolvedValueOnce({
       records: [[{ stringValue: 'a-1' }]],

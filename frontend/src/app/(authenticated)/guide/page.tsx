@@ -2,12 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useTranslations } from 'next-intl';
-import {
-  PageHeader,
-  DataTable,
-  ErrorState,
-  type Column,
-} from '@/components/shared';
+import { PageHeader, DataTable, ErrorState, type Column } from '@/components/shared';
 import { ReadyPill, type ReadyState } from '@/components/shared/ReadyPill';
 import { ClauseChip } from '@/components/shared';
 import { useGraphQL } from '@/lib/api';
@@ -97,10 +92,12 @@ export default function GuidePage() {
     }
     // Only keep entries with >1 standard mapping
     const harmonized = new Map<string, string[]>();
-    for (const [clauseNo, entries] of byClauseNo) {
+    for (const entries of byClauseNo.values()) {
       if (entries.length > 1) {
         for (const entry of entries) {
-          const others = entries.filter((e) => e.id !== entry.id).map((e) => `${e.standard} ${e.clauseNo}`);
+          const others = entries
+            .filter((e) => e.id !== entry.id)
+            .map((e) => `${e.standard} ${e.clauseNo}`);
           harmonized.set(entry.id, others);
         }
       }
@@ -123,7 +120,10 @@ export default function GuidePage() {
           <span className={styles.clauseNoCell}>
             {c.clauseNo}
             {harmonizationMap.has(c.id) && (
-              <span className={styles.harmonizeBadge} title={harmonizationMap.get(c.id)!.join(', ')}>
+              <span
+                className={styles.harmonizeBadge}
+                title={harmonizationMap.get(c.id)!.join(', ')}
+              >
                 ⟷
               </span>
             )}
@@ -179,41 +179,46 @@ export default function GuidePage() {
       )}
 
       {/* Expanded detail */}
-      {expandedId && (() => {
-        const clause = clauses.find((c) => c.id === expandedId);
-        if (!clause) return null;
-        const app = applicability.get(clause.id);
-        let sources: string[] = [];
-        try { sources = JSON.parse(clause.requiredSources); } catch { /* empty */ }
-        return (
-          <div className={styles.expandedDetail}>
-            <h4 className={styles.expandedTitle}>
-              {clause.clauseNo} — {clause.clauseTitle}
-            </h4>
-            <p className={styles.expandedIntent}>{clause.intentParaphrase}</p>
-            {sources.length > 0 && (
-              <div className={styles.expandedSources}>
-                <span className={styles.sourcesLabel}>{t('requiredSources')}:</span>
-                <ul className={styles.sourcesList}>
-                  {sources.map((s) => (
-                    <li key={s}>{s}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {app && !app.applicable && app.justification && (
-              <p className={styles.justification}>
-                <strong>{t('exclusionJustification')}:</strong> {app.justification}
-              </p>
-            )}
-            {harmonizationMap.has(clause.id) && (
-              <p className={styles.harmonizeNote}>
-                {t('harmonizedWith')}: {harmonizationMap.get(clause.id)!.join(', ')}
-              </p>
-            )}
-          </div>
-        );
-      })()}
+      {expandedId &&
+        (() => {
+          const clause = clauses.find((c) => c.id === expandedId);
+          if (!clause) return null;
+          const app = applicability.get(clause.id);
+          let sources: string[] = [];
+          try {
+            sources = JSON.parse(clause.requiredSources);
+          } catch {
+            /* empty */
+          }
+          return (
+            <div className={styles.expandedDetail}>
+              <h4 className={styles.expandedTitle}>
+                {clause.clauseNo} — {clause.clauseTitle}
+              </h4>
+              <p className={styles.expandedIntent}>{clause.intentParaphrase}</p>
+              {sources.length > 0 && (
+                <div className={styles.expandedSources}>
+                  <span className={styles.sourcesLabel}>{t('requiredSources')}:</span>
+                  <ul className={styles.sourcesList}>
+                    {sources.map((s) => (
+                      <li key={s}>{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {app && !app.applicable && app.justification && (
+                <p className={styles.justification}>
+                  <strong>{t('exclusionJustification')}:</strong> {app.justification}
+                </p>
+              )}
+              {harmonizationMap.has(clause.id) && (
+                <p className={styles.harmonizeNote}>
+                  {t('harmonizedWith')}: {harmonizationMap.get(clause.id)!.join(', ')}
+                </p>
+              )}
+            </div>
+          );
+        })()}
     </>
   );
 }

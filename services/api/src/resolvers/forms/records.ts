@@ -1,0 +1,867 @@
+/**
+ * forms — record lifecycle mutations + single-record fetch. Extracted from
+ * forms.ts.
+ */
+
+import {
+  beginTenantTransaction,
+  publishAuditEvent,
+  parseAwsJson,
+  unwrapField,
+  rollbackQuietly,
+} from '../shared.js';
+import type { SqlParameter } from '@aws-sdk/client-rds-data';
+import { canApprove } from '../../permissions/role-matrix.js';
+import {
+  CONTENT_BUCKET,
+  EVIDENCE_BUCKET,
+  EVIDENCE_LOCK_MODE,
+  PDF_RENDER_FN,
+  DEFAULT_RETENTION_YEARS,
+  marshalValues,
+  marshalRecordRows,
+  FormValuesSchema,
+  FIELD_TYPE_COLUMN,
+  IMMUTABLE_STATUSES,
+  VALUE_COLUMN_CAST,
+  RELATION_TARGET_TABLE,
+  fetchTemplateFieldMeta,
+  completionFrom,
+  getFormRecordById,
+  buildValueParam,
+  sqlStringOrNull,
+  marshalFieldMeta,
+  marshalFieldMetaFull,
+  type AppSyncEvent,
+} from './common.js';
+import { upsertRetentionPolicy, renderAndSealRecordPdf, commitSealToM4 } from './export.js';
+
+/**
+ * getFormRecord — single record with full values + server-computed completion.
+ */
+export async function getFormRecord(event: AppSyncEvent, tenantId: string): Promise<unknown> {
+  // Identical read path to the post-mutation re-read — one implementation.
+  return getFormRecordById(event.arguments.id as string, tenantId);
+}
+
+// ─── Mutations ───────────────────────────────────────────────────────────────
+
+/**
+ * createFormRecord — creates a new record in draft status.
+ */
+export async function createFormRecord(
+  event: AppSyncEvent,
+  tenantId: string,
+  actor: string,
+): Promise<unknown> {
+  const templateId = event.arguments.templateId as string;
+  const txn = await beginTenantTransaction(tenantId);
+  try {
+    const result = await txn.execute(
+      `
+      INSERT INTO forms.records (tenant_id, template_id, status, opened_by)
+      VALUES (:tenantId, :templateId::uuid, 'draft', :actor)
+      RETURNING id, template_id, status, opened_by, completed_by, m2_nc_id, created_at, updated_at
+    `,
+      [
+        { name: 'tenantId', value: { stringValue: tenantId } },
+        { name: 'templateId', value: { stringValue: templateId } },
+        { name: 'actor', value: { stringValue: actor } },
+      ],
+    );
+    const rec = marshalRecordRows(result)[0];
+    // BUG-1 fix: compute real completion from catalog (not hardcoded 0/0/[]).
+    // Task 10: fresh record has zero filled fields — one fields query suffices.
+    const fieldsMeta = await fetchTemplateFieldMeta(txn, templateId);
+    rec.completion = completionFrom(fieldsMeta, new Set());
+    rec.values = {};
+    await txn.commit();
+    return rec;
+  } catch (err) {
+    await rollbackQuietly(txn);
+    throw err;
+  }
+}
+
+/**
+ * saveFormRecordValues — partial autosave with typed-column dispatch.
+ * Immutability guard: rejects writes on complete/approved status.
+ * REC-3: no validation on save, only on submit.
+ */
+export async function saveFormRecordValues(
+  event: AppSyncEvent,
+  tenantId: string,
+): Promise<unknown> {
+  const input = event.arguments.input as {
+    recordId: string;
+    values: string | Record<string, unknown>;
+  };
+  const recordId = input.recordId;
+  // AWSJSON arrives parsed (object) from AppSync, as a string from hermetic
+  // fixtures — accept both (same wire-shape class as saveOrgProfile, found
+  // live 2026-07-22). Boundary zod: values is a fieldKey→JSON-value map;
+  // a top-level array/scalar is INVALID_PAYLOAD, not silent corruption.
+  const values = parseAwsJson(FormValuesSchema, input.values, 'values');
+
+  const txn = await beginTenantTransaction(tenantId);
+  try {
+    // Check record status — immutability guard. FOR UPDATE: the lock rides the
+    // whole txn so a concurrent approve/submit can't flip the record between
+    // this check and the value upserts (check-then-act, M-effort).
+    const statusResult = await txn.execute(
+      `SELECT status, template_id FROM forms.records WHERE id = :id::uuid FOR UPDATE`,
+      [{ name: 'id', value: { stringValue: recordId } }],
+    );
+    const statusRows = marshalRecordRows(statusResult);
+    if (statusRows.length === 0) throw new Error('RECORD_NOT_FOUND');
+
+    const currentStatus = statusRows[0].status as string;
+    if (IMMUTABLE_STATUSES.has(currentStatus)) {
+      throw new Error('RECORD_IMMUTABLE');
+    }
+
+    const templateId = statusRows[0].templateId as string;
+
+    // Update status to in_progress if still draft
+    if (currentStatus === 'DRAFT') {
+      await txn.execute(
+        `UPDATE forms.records SET status = 'in_progress', updated_at = NOW() WHERE id = :id::uuid`,
+        [{ name: 'id', value: { stringValue: recordId } }],
+      );
+    }
+
+    // Resolve field metadata for typed dispatch. `required` rides along so
+    // the completion meta for the post-write re-read comes from this one
+    // query — getFormRecordById would otherwise run a second fields SELECT.
+    const fieldsResult = await txn.execute(
+      `
+      SELECT f.id, f.field_key, f.field_type, f.required, f.relation_target
+      FROM forms.template_fields f
+      JOIN forms.template_sections s ON f.section_id = s.id
+      WHERE s.template_id = :templateId::uuid
+    `,
+      [{ name: 'templateId', value: { stringValue: templateId } }],
+    );
+
+    const fieldMeta = marshalFieldMeta(fieldsResult);
+    const fieldsMeta = marshalFieldMetaFull(fieldsResult).map((f) => ({
+      fieldKey: f.fieldKey,
+      required: f.required,
+    }));
+
+    // Typed-column dispatch into two batched statements: one DELETE for
+    // cleared fields, one multi-row upsert for written fields — was one
+    // round-trip per field, which serialized every autosave flush.
+    const deleteFieldIds: string[] = [];
+    const upserts: Array<{ fieldId: string; column: string; param: SqlParameter }> = [];
+    const relationProbes = new Map<string, string[]>(); // targetTable → ids to verify
+
+    for (const [fieldKey, value] of Object.entries(values)) {
+      const meta = fieldMeta.get(fieldKey);
+      if (!meta) {
+        // A key the template doesn't define would drop silently — refuse
+        // loudly instead (INVALID_PAYLOAD, same boundary as values shape).
+        throw new Error(`INVALID_PAYLOAD: unknown fieldKey '${fieldKey}'`);
+      }
+
+      // BUG-2 fix: null value → DELETE the row (clearing a field)
+      if (value === null || value === undefined) {
+        deleteFieldIds.push(meta.fieldId);
+        continue;
+      }
+
+      const valueColumn = FIELD_TYPE_COLUMN[meta.fieldType];
+      if (!valueColumn) continue;
+
+      if (meta.fieldType === 'relation' && meta.relationTarget) {
+        const targetTable = RELATION_TARGET_TABLE[meta.relationTarget];
+        if (!targetTable) {
+          throw new Error(`INVALID_RELATION_TARGET: ${meta.relationTarget}`);
+        }
+        const ids = relationProbes.get(targetTable) ?? [];
+        ids.push(String(value));
+        relationProbes.set(targetTable, ids);
+      }
+
+      upserts.push({
+        fieldId: meta.fieldId,
+        column: valueColumn,
+        param: buildValueParam(valueColumn, value),
+      });
+    }
+
+    // BC-2: batched relation existence probes — one query per target table
+    // inside the tenant transaction (RLS-enforced), not one per field.
+    for (const [targetTable, ids] of relationProbes) {
+      const probeResult = await txn.execute(
+        `SELECT id::text FROM ${targetTable} WHERE id = ANY(:ids::uuid[])`,
+        [{ name: 'ids', value: { stringValue: `{${ids.join(',')}}` } }],
+      );
+      const found = new Set(
+        (probeResult.records ?? []).map((r) => (r[0] as { stringValue?: string }).stringValue),
+      );
+      if (ids.some((id) => !found.has(id))) {
+        throw new Error('LINK_TARGET_NOT_FOUND');
+      }
+    }
+
+    if (deleteFieldIds.length > 0) {
+      await txn.execute(
+        `
+        DELETE FROM forms.record_values
+        WHERE record_id = :recordId::uuid
+          AND field_id IN (${deleteFieldIds.map((_, i) => `:d${i}::uuid`).join(', ')})
+      `,
+        [
+          { name: 'recordId', value: { stringValue: recordId } },
+          ...deleteFieldIds.map((id, i) => ({ name: `d${i}`, value: { stringValue: id } })),
+        ],
+      );
+    }
+
+    if (upserts.length > 0) {
+      // Each row carries its value in the column matching its field_type and
+      // NULL elsewhere — DO UPDATE applies every column from EXCLUDED, which
+      // sets the typed column and clears the rest (same effect as the old
+      // per-field nullOtherColumns clause).
+      const ALL_COLUMNS = [
+        'value_text',
+        'value_number',
+        'value_date',
+        'value_bool',
+        'value_uuid',
+        'value_json',
+      ];
+      // IS DISTINCT FROM skips no-op rewrites — an unchanged value re-sent
+      // by a debounced autosave used to mark every row dirty (row lock +
+      // updated_at churn on the hot path).
+      const rowSql = upserts
+        .map((u, i) => {
+          const cells = ALL_COLUMNS.map((c) =>
+            c === u.column ? `:v${i}${VALUE_COLUMN_CAST[c] ?? ''}` : 'NULL',
+          ).join(', ');
+          return `(:recordId::uuid, :tenantId, :f${i}::uuid, ${cells})`;
+        })
+        .join(',\n        ');
+      const allColsDistinct = ALL_COLUMNS.map(
+        (c) => `forms.record_values.${c} IS DISTINCT FROM EXCLUDED.${c}`,
+      ).join(' OR ');
+      await txn.execute(
+        `
+        INSERT INTO forms.record_values
+          (record_id, tenant_id, field_id, ${ALL_COLUMNS.join(', ')})
+        VALUES
+        ${rowSql}
+        ON CONFLICT (record_id, field_id)
+        DO UPDATE SET ${ALL_COLUMNS.map((c) => `${c} = EXCLUDED.${c}`).join(', ')}
+        WHERE ${allColsDistinct}
+      `,
+        [
+          { name: 'recordId', value: { stringValue: recordId } },
+          { name: 'tenantId', value: { stringValue: tenantId } },
+          ...upserts.flatMap((u, i) => [
+            { name: `f${i}`, value: { stringValue: u.fieldId } },
+            { ...u.param, name: `v${i}` },
+          ]),
+        ],
+      );
+    }
+
+    // Update record timestamp
+    await txn.execute(`UPDATE forms.records SET updated_at = NOW() WHERE id = :id::uuid`, [
+      { name: 'id', value: { stringValue: recordId } },
+    ]);
+
+    // Re-read inside the txn so the returned record is exactly what commits
+    const refreshed = await getFormRecordById(recordId, tenantId, txn, fieldsMeta);
+    await txn.commit();
+    return refreshed;
+  } catch (err) {
+    await rollbackQuietly(txn);
+    throw err;
+  }
+}
+
+/**
+ * submitFormRecord — full validation + NCR→M2 mapping (BC-3 core, design §3).
+ *
+ * Status guard: only DRAFT/IN_PROGRESS/REOPENED can submit (else SUBMIT_INVALID_STATUS).
+ * Full validation (REC-3): ALL required fields must be filled (VALIDATION_INCOMPLETE).
+ * Mapped validation (BC-3): all maps_to_column required fields filled (MAPPING_INCOMPLETE).
+ * Resubmit-after-reopen: if m2_nc_id already set, UPDATE existing NC row (not INSERT).
+ *
+ * ZERO hardcoded defaults for clause_ref/severity/source/standard/nc_type.
+ */
+export async function submitFormRecord(
+  event: AppSyncEvent,
+  tenantId: string,
+  actor: string,
+  role: string,
+): Promise<unknown> {
+  const input = event.arguments.input as { recordId: string };
+  const recordId = input.recordId;
+
+  const txn = await beginTenantTransaction(tenantId);
+  try {
+    // 1. Fetch record + template metadata. FOR UPDATE: serializes concurrent
+    // submits — a second submit blocks on the lock, then re-reads the new
+    // status and fails SUBMIT_INVALID_STATUS instead of double-writing the NC.
+    const recResult = await txn.execute(
+      `
+      SELECT r.id, r.template_id, r.status, r.opened_by, r.m2_nc_id
+      FROM forms.records r WHERE r.id = :id::uuid FOR UPDATE
+    `,
+      [{ name: 'id', value: { stringValue: recordId } }],
+    );
+    const recRows = marshalRecordRows(recResult);
+    if (recRows.length === 0) throw new Error('RECORD_NOT_FOUND');
+    const rec = recRows[0];
+    const templateId = rec.templateId as string;
+    const currentStatus = rec.status as string;
+    const existingNcId = rec.m2NcId as string | null;
+
+    // F1: Status guard — submit only from DRAFT/IN_PROGRESS/REOPENED
+    const SUBMITTABLE_STATUSES = new Set(['DRAFT', 'IN_PROGRESS', 'REOPENED']);
+    if (!SUBMITTABLE_STATUSES.has(currentStatus)) {
+      throw new Error('SUBMIT_INVALID_STATUS');
+    }
+
+    // Check template maps_to + standards + clause_refs
+    const tplResult = await txn.execute(
+      `
+      SELECT maps_to, standards, clause_refs FROM forms.templates WHERE id = :id::uuid
+    `,
+      [{ name: 'id', value: { stringValue: templateId } }],
+    );
+    const tplRows = marshalRecordRows(tplResult);
+    const mapsTo = tplRows[0]?.mapsTo as string | null;
+    const tplStandards = tplRows[0]?.standards as string[] | null;
+    const tplClauseRefs = tplRows[0]?.clauseRefs as string[] | null;
+
+    // Submitting through an m2_ncr template writes an M2 nonconformity row —
+    // gate on the M2 write matrix BEFORE the heavy field/value reads (a
+    // denied caller shouldn't pay for them).
+    if (mapsTo === 'm2_ncr' && !canApprove(role, 'M2')) {
+      throw new Error('UNAUTHORIZED');
+    }
+
+    // Fetch all field metadata with maps_to_column
+    const fieldMetaResult = await txn.execute(
+      `
+      SELECT f.id, f.field_key, f.field_type, f.required, f.maps_to_column, f.relation_target
+      FROM forms.template_fields f
+      JOIN forms.template_sections s ON f.section_id = s.id
+      WHERE s.template_id = :templateId::uuid
+    `,
+      [{ name: 'templateId', value: { stringValue: templateId } }],
+    );
+
+    // Fetch all current record values
+    const valuesResult = await txn.execute(
+      `
+      SELECT f.field_key, rv.value_text, rv.value_number, rv.value_date,
+             rv.value_bool, rv.value_uuid, rv.value_json
+      FROM forms.record_values rv
+      JOIN forms.template_fields f ON rv.field_id = f.id
+      WHERE rv.record_id = :recordId::uuid
+    `,
+      [{ name: 'recordId', value: { stringValue: recordId } }],
+    );
+
+    const currentValues = marshalValues(valuesResult);
+    const fieldsMeta = marshalFieldMetaFull(fieldMetaResult);
+
+    // BC-3: Validate mapped fields FIRST (MAPPING_INCOMPLETE is the BC-3 signal)
+    if (mapsTo === 'm2_ncr') {
+      const mappedFields = fieldsMeta.filter((f) => f.mapsToColumn !== null);
+      const requiredMapped = mappedFields.filter((f) => f.required);
+
+      for (const field of requiredMapped) {
+        const value = currentValues[field.fieldKey];
+        if (value === null || value === undefined || value === '') {
+          throw new Error('MAPPING_INCOMPLETE');
+        }
+      }
+    }
+
+    // F3: Full validation (REC-3) — ALL required fields must be filled
+    const allRequired = fieldsMeta.filter((f) => f.required);
+    for (const field of allRequired) {
+      const value = currentValues[field.fieldKey];
+      if (value === null || value === undefined || value === '') {
+        throw new Error('VALIDATION_INCOMPLETE');
+      }
+    }
+
+    let refreshed: unknown;
+
+    // NCR→M2 mapping path
+    if (mapsTo === 'm2_ncr') {
+      // Resolve clause_ref UUID → clause_no TEXT from qms.clause_registry (pending 011)
+      const clauseRefUuid = currentValues['clause_ref'] as string;
+      const clauseResult = await txn.execute(
+        `
+        SELECT clause_no FROM qms.clause_registry WHERE id = :id::uuid
+      `,
+        [{ name: 'id', value: { stringValue: clauseRefUuid } }],
+      );
+      const clauseRows = marshalRecordRows(clauseResult);
+      if (clauseRows.length === 0) throw new Error('LINK_TARGET_NOT_FOUND');
+      const clauseNoText = clauseRows[0].clauseNo as string;
+
+      // F1: Resubmit-after-reopen — if m2_nc_id already set, UPDATE existing NC (not INSERT)
+      let ncId: string;
+      if (existingNcId) {
+        // UPDATE existing m2.nonconformities mapped columns (do NOT touch CA row — its lifecycle belongs to M2)
+        await txn.execute(
+          `
+          UPDATE m2.nonconformities
+          SET standard = :standard, source = :source, nc_type = :ncType,
+              description = :description, clause_ref = :clauseRef, severity = :severity,
+              updated_at = NOW()
+          WHERE id = :ncId::uuid
+        `,
+          [
+            { name: 'standard', value: sqlStringOrNull(currentValues['standard']) },
+            { name: 'source', value: sqlStringOrNull(currentValues['source']) },
+            { name: 'ncType', value: sqlStringOrNull(currentValues['nc_type']) },
+            {
+              name: 'description',
+              value: sqlStringOrNull(currentValues['nc_description']),
+            },
+            { name: 'clauseRef', value: { stringValue: clauseNoText } },
+            { name: 'severity', value: sqlStringOrNull(currentValues['severity']) },
+            { name: 'ncId', value: { stringValue: existingNcId } },
+          ],
+        );
+        ncId = existingNcId;
+      } else {
+        // First submit: INSERT m2.nonconformities (real column names from migration 003)
+        const ncResult = await txn.execute(
+          `
+          INSERT INTO m2.nonconformities (tenant_id, standard, source, nc_type, description, clause_ref, severity, raised_by, created_by)
+          VALUES (:tenantId, :standard, :source, :ncType, :description, :clauseRef, :severity, :raisedBy, :actor)
+          RETURNING id
+        `,
+          [
+            { name: 'tenantId', value: { stringValue: tenantId } },
+            { name: 'standard', value: sqlStringOrNull(currentValues['standard']) },
+            { name: 'source', value: sqlStringOrNull(currentValues['source']) },
+            { name: 'ncType', value: sqlStringOrNull(currentValues['nc_type']) },
+            {
+              name: 'description',
+              value: sqlStringOrNull(currentValues['nc_description']),
+            },
+            { name: 'clauseRef', value: { stringValue: clauseNoText } },
+            { name: 'severity', value: sqlStringOrNull(currentValues['severity']) },
+            { name: 'raisedBy', value: sqlStringOrNull(currentValues['raised_by']) },
+            { name: 'actor', value: { stringValue: actor } },
+          ],
+        );
+        ncId = unwrapField((ncResult.records![0] as Array<Record<string, unknown>>)[0]) as string;
+
+        // INSERT m2.corrective_actions (nc_id from INSERT; action_desc/owner_id/due_date NOT NULL)
+        const containmentFlag =
+          currentValues['containment_flag'] === true ||
+          currentValues['containment_flag'] === 'true';
+        await txn.execute(
+          `
+          INSERT INTO m2.corrective_actions (tenant_id, nc_id, action_desc, owner_id, due_date, containment_flag, created_by)
+          VALUES (:tenantId, :ncId::uuid, :actionDesc, :ownerId, :dueDate::timestamptz, :containmentFlag, :actor)
+        `,
+          [
+            { name: 'tenantId', value: { stringValue: tenantId } },
+            { name: 'ncId', value: { stringValue: ncId } },
+            {
+              name: 'actionDesc',
+              value: sqlStringOrNull(currentValues['corrective_action_desc']),
+            },
+            { name: 'ownerId', value: sqlStringOrNull(currentValues['ca_owner']) },
+            { name: 'dueDate', value: sqlStringOrNull(currentValues['ca_due_date']) },
+            { name: 'containmentFlag', value: { booleanValue: containmentFlag } },
+            { name: 'actor', value: { stringValue: actor } },
+          ],
+        );
+      }
+
+      // Stamp forms.records.m2_nc_id + mark complete
+      await txn.execute(
+        `
+        UPDATE forms.records
+        SET m2_nc_id = :ncId::uuid, status = 'complete', completed_by = :actor, completed_at = NOW(), updated_at = NOW()
+        WHERE id = :id::uuid
+      `,
+        [
+          { name: 'ncId', value: { stringValue: ncId } },
+          { name: 'actor', value: { stringValue: actor } },
+          { name: 'id', value: { stringValue: recordId } },
+        ],
+      );
+
+      refreshed = await getFormRecordById(
+        recordId,
+        tenantId,
+        txn,
+        fieldsMeta.map((f) => ({ fieldKey: f.fieldKey, required: f.required })),
+      );
+      await txn.commit();
+
+      // F2: Audit event — standard + clauseRef from mapped values (no literals)
+      await publishAuditEvent({
+        tenantId,
+        actor,
+        module: 'M4',
+        clauseRef: clauseNoText,
+        standard: currentValues['standard'] as 'ISO9001' | 'ISO14001' | 'ISO45001',
+        detailType: 'FormRecord.Submitted',
+        source: 'cumplify.forms',
+        entityId: recordId,
+        payload: { recordId, templateId, mapsTo, ncId },
+      });
+    } else {
+      // Audit event — standard/clauseRef from template metadata. The check
+      // rides INSIDE the txn: a template that can't produce a truthful event
+      // must roll the status flip back, not commit state the audit never saw
+      // (TODO-011: once IMS enum lands, multi-standard templates use 'IMS').
+      if (!tplStandards?.[0] || !tplClauseRefs?.[0]) {
+        throw new Error('TEMPLATE_METADATA_MISSING');
+      }
+
+      // Non-mapping template: just mark complete (no m2 writes)
+      await txn.execute(
+        `
+        UPDATE forms.records
+        SET status = 'complete', completed_by = :actor, completed_at = NOW(), updated_at = NOW()
+        WHERE id = :id::uuid
+      `,
+        [
+          { name: 'actor', value: { stringValue: actor } },
+          { name: 'id', value: { stringValue: recordId } },
+        ],
+      );
+
+      refreshed = await getFormRecordById(
+        recordId,
+        tenantId,
+        txn,
+        fieldsMeta.map((f) => ({ fieldKey: f.fieldKey, required: f.required })),
+      );
+      await txn.commit();
+
+      await publishAuditEvent({
+        tenantId,
+        actor,
+        module: 'M4',
+        clauseRef: tplClauseRefs[0],
+        standard: tplStandards[0] as 'ISO9001' | 'ISO14001' | 'ISO45001',
+        detailType: 'FormRecord.Submitted',
+        source: 'cumplify.forms',
+        entityId: recordId,
+        payload: { recordId, templateId, mapsTo },
+      });
+    }
+
+    return refreshed;
+  } catch (err) {
+    await rollbackQuietly(txn);
+    throw err;
+  }
+}
+
+/**
+ * approveFormRecord — SoD enforcement (BC-4).
+ * Only for requires_approval templates, only from COMPLETE status.
+ * SoD: approver ≠ completed_by AND approver ≠ opened_by.
+ * Violation → Security.SodViolationBlocked, writes NOTHING.
+ */
+export async function approveFormRecord(
+  event: AppSyncEvent,
+  tenantId: string,
+  actor: string,
+): Promise<unknown> {
+  const input = event.arguments.input as { recordId: string };
+  const recordId = input.recordId;
+  const sealConfigured = !!(CONTENT_BUCKET && EVIDENCE_BUCKET && PDF_RENDER_FN);
+  // One timestamp stamps both the sealed PDF (overlay) and the row's
+  // approved_at — the artifact and the register agree to the millisecond.
+  const approvedAt = new Date();
+
+  // ── Phase 1: lock the record, run every guard, seed the retention row. ──
+  // The seal's content build, PDF render, and vault copy CANNOT ride a FOR
+  // UPDATE txn (a seconds-long lock held across S3 + a Lambda render is the
+  // anti-pattern wave-1 removed from publishControlledDocument) — so the
+  // approve is three transactions: lock+checks+seed → render+seal → flip.
+  const txn1 = await beginTenantTransaction(tenantId);
+  let templateId = '';
+  let openedBy = '';
+  let completedBy: string | null = null;
+  let tplStandards: string[] | null = null;
+  let tplClauseRefs: string[] | null = null;
+  let retentionYears = DEFAULT_RETENTION_YEARS;
+  let fieldsMeta: Awaited<ReturnType<typeof fetchTemplateFieldMeta>> | undefined;
+  try {
+    // FOR UPDATE: serializes concurrent approvals (and an approve/reopen
+    // race) — the loser re-reads the flipped status and fails
+    // APPROVE_INVALID_STATUS instead of double-approving + double-sealing.
+    const recResult = await txn1.execute(
+      `
+      SELECT r.id, r.template_id, r.status, r.opened_by, r.completed_by
+      FROM forms.records r WHERE r.id = :id::uuid FOR UPDATE
+    `,
+      [{ name: 'id', value: { stringValue: recordId } }],
+    );
+    const recRows = marshalRecordRows(recResult);
+    if (recRows.length === 0) throw new Error('RECORD_NOT_FOUND');
+    const rec = recRows[0];
+    templateId = rec.templateId as string;
+    const currentStatus = rec.status as string;
+    openedBy = rec.openedBy as string;
+    completedBy = rec.completedBy as string | null;
+
+    // Status guard: approve only from COMPLETE
+    if (currentStatus !== 'COMPLETE') {
+      throw new Error('APPROVE_INVALID_STATUS');
+    }
+
+    // Template guard: only requires_approval templates
+    const tplResult = await txn1.execute(
+      `
+      SELECT requires_approval, standards, clause_refs FROM forms.templates WHERE id = :id::uuid
+    `,
+      [{ name: 'id', value: { stringValue: templateId } }],
+    );
+    const tplRows = marshalRecordRows(tplResult);
+    const requiresApproval = tplRows[0]?.requiresApproval;
+    tplStandards = tplRows[0]?.standards as string[] | null;
+    tplClauseRefs = tplRows[0]?.clauseRefs as string[] | null;
+
+    if (!requiresApproval) {
+      throw new Error('APPROVAL_NOT_REQUIRED');
+    }
+
+    // Metadata gate BEFORE the flip and BEFORE the SoD path's own fallbacks:
+    // a template that can't produce a truthful audit event stops the approve
+    // here — the record stays COMPLETE for a retry (a post-commit throw used
+    // to leave the state flipped with no FormRecord.Approved event).
+    if (!tplStandards?.[0] || !tplClauseRefs?.[0]) {
+      throw new Error('TEMPLATE_METADATA_MISSING');
+    }
+
+    // BC-4: SoD — approver ≠ completed_by AND approver ≠ opened_by
+    if (actor === completedBy || actor === openedBy) {
+      // Publish Security.SodViolationBlocked, write NOTHING
+      await rollbackQuietly(txn1);
+      await publishAuditEvent({
+        tenantId,
+        actor,
+        module: 'M4',
+        clauseRef: tplClauseRefs[0],
+        standard: tplStandards[0] as 'ISO9001' | 'ISO14001' | 'ISO45001',
+        detailType: 'Security.SodViolationBlocked',
+        source: 'cumplify.forms',
+        entityId: recordId, // blocked events carry the targeted row id
+        payload: {
+          recordId,
+          attemptedBy: actor,
+          openedBy,
+          completedBy,
+          reason: 'approver must differ from opened_by and completed_by',
+        },
+      });
+      throw new Error('SOD_VIOLATION');
+    }
+
+    // Field meta for the phase-3 re-read — fetched here so getFormRecordById
+    // doesn't re-query the same template meta in txn3.
+    fieldsMeta = await fetchTemplateFieldMeta(txn1, templateId);
+
+    if (sealConfigured) {
+      retentionYears = await upsertRetentionPolicy(txn1, tenantId, actor);
+    }
+    await txn1.commit();
+  } catch (err) {
+    if ((err as Error).message !== 'SOD_VIOLATION') {
+      await rollbackQuietly(txn1);
+    }
+    throw err;
+  }
+
+  // ── Phase 2: build + render + vault-copy with NO write txn open. ──────
+  // Throws before the flip → the record stays COMPLETE (retryable); an
+  // approved-but-unsealed state is impossible from this path.
+  const retainUntil = new Date(approvedAt.getTime() + retentionYears * 365.25 * 24 * 3600 * 1000);
+  let artifact: { sealedKey: string; sha256: string } | null = null;
+  if (sealConfigured) {
+    artifact = await renderAndSealRecordPdf(tenantId, recordId, actor, approvedAt, retainUntil);
+  }
+
+  // ── Phase 3: flip + m4 pointer + stamp in one txn. ────────────────────
+  // Unconfigured env (hermetic lane) skips honestly — the audit payload
+  // carries sealed:false + reason.
+  const txn3 = await beginTenantTransaction(tenantId);
+  let sealed: Record<string, unknown> = { sealed: false, reason: 'SEAL_NOT_CONFIGURED' };
+  let refreshed: unknown;
+  try {
+    // Re-verify under the lock — a concurrent reopen could have flipped the
+    // record back while phase 2 rendered.
+    const recheck = await txn3.execute(
+      `SELECT status FROM forms.records WHERE id = :id::uuid FOR UPDATE`,
+      [{ name: 'id', value: { stringValue: recordId } }],
+    );
+    const status = marshalRecordRows(recheck)[0]?.status as string | undefined;
+    if (status !== 'COMPLETE') {
+      throw new Error('APPROVE_INVALID_STATUS');
+    }
+
+    // Approve: stamp approved_by/approved_at, status → approved
+    await txn3.execute(
+      `
+      UPDATE forms.records
+      SET status = 'approved', approved_by = :actor, approved_at = :approvedAt::timestamptz, updated_at = NOW()
+      WHERE id = :id::uuid
+    `,
+      [
+        { name: 'actor', value: { stringValue: actor } },
+        { name: 'approvedAt', value: { stringValue: approvedAt.toISOString() } },
+        { name: 'id', value: { stringValue: recordId } },
+      ],
+    );
+
+    // Task 8 (REC-7): m4.records pointer + m4_record_id stamp in the SAME
+    // txn as the flip — a phase-3 failure rolls the approval back (catch
+    // below): no approved-but-unsealed records.
+    if (artifact) {
+      const m4RecordId = await commitSealToM4(
+        txn3,
+        tenantId,
+        recordId,
+        actor,
+        tplStandards ?? [],
+        retentionYears,
+        artifact,
+        retainUntil,
+      );
+      sealed = {
+        sealed: true,
+        sealedKey: artifact.sealedKey,
+        m4RecordId,
+        retentionYears,
+        lockMode: EVIDENCE_LOCK_MODE,
+        retainUntil: retainUntil.toISOString(),
+      };
+    }
+
+    refreshed = await getFormRecordById(recordId, tenantId, txn3, fieldsMeta);
+    await txn3.commit();
+  } catch (err) {
+    await rollbackQuietly(txn3);
+    throw err;
+  }
+
+  await publishAuditEvent({
+    tenantId,
+    actor,
+    module: 'M4',
+    clauseRef: tplClauseRefs![0],
+    standard: tplStandards![0] as 'ISO9001' | 'ISO14001' | 'ISO45001',
+    detailType: 'FormRecord.Approved',
+    source: 'cumplify.forms',
+    entityId: recordId,
+    payload: { recordId, templateId, approvedBy: actor, ...sealed },
+  });
+
+  return refreshed;
+}
+
+/**
+ * reopenFormRecord — explicit reopen with justification (REC-4, BC-5).
+ * Status complete/approved → reopened. Audit-logged with justification.
+ */
+export async function reopenFormRecord(
+  event: AppSyncEvent,
+  tenantId: string,
+  actor: string,
+): Promise<unknown> {
+  const input = event.arguments.input as { recordId: string; justification: string };
+  const { recordId, justification } = input;
+
+  if (!justification || justification.trim().length === 0) {
+    throw new Error('JUSTIFICATION_REQUIRED');
+  }
+
+  const txn = await beginTenantTransaction(tenantId);
+  try {
+    // Verify record exists and is in a completable state. FOR UPDATE:
+    // serializes a reopen/reopen and reopen/approve race — the loser re-reads
+    // the flipped status and fails REOPEN_INVALID_STATUS.
+    const recResult = await txn.execute(
+      `
+      SELECT r.id, r.template_id, r.status
+      FROM forms.records r WHERE r.id = :id::uuid FOR UPDATE
+    `,
+      [{ name: 'id', value: { stringValue: recordId } }],
+    );
+    const recRows = marshalRecordRows(recResult);
+    if (recRows.length === 0) throw new Error('RECORD_NOT_FOUND');
+
+    const currentStatus = recRows[0].status as string;
+    if (currentStatus !== 'COMPLETE' && currentStatus !== 'APPROVED') {
+      throw new Error('REOPEN_INVALID_STATUS');
+    }
+
+    const templateId = recRows[0].templateId as string;
+
+    // Fetch template metadata for audit event (no literal standards)
+    const tplResult = await txn.execute(
+      `
+      SELECT standards, clause_refs FROM forms.templates WHERE id = :id::uuid
+    `,
+      [{ name: 'id', value: { stringValue: templateId } }],
+    );
+    const tplRows = marshalRecordRows(tplResult);
+    const tplStandards = tplRows[0]?.standards as string[] | null;
+    const tplClauseRefs = tplRows[0]?.clauseRefs as string[] | null;
+
+    // Audit metadata gate rides INSIDE the txn — a template that can't
+    // produce a truthful FormRecord.Reopened event must roll the flip back,
+    // not commit a reopen the ledger never saw (TODO-011: IMS enum).
+    if (!tplStandards?.[0] || !tplClauseRefs?.[0]) {
+      throw new Error('TEMPLATE_METADATA_MISSING');
+    }
+
+    // Transition to reopened — also drop the approval stamp and the M4 sealed
+    // pointer: a reopened record must not keep advertising an approval it no
+    // longer holds. The sealed artifact itself stays in the WORM vault (it is
+    // the record of what WAS approved); the record just stops pointing at it.
+    await txn.execute(
+      `
+      UPDATE forms.records
+      SET status = 'reopened', completed_by = NULL, completed_at = NULL,
+          approved_by = NULL, approved_at = NULL, m4_record_id = NULL,
+          updated_at = NOW()
+      WHERE id = :id::uuid
+    `,
+      [{ name: 'id', value: { stringValue: recordId } }],
+    );
+
+    const refreshed = await getFormRecordById(recordId, tenantId, txn);
+    await txn.commit();
+
+    await publishAuditEvent({
+      tenantId,
+      actor,
+      module: 'M4',
+      clauseRef: tplClauseRefs[0],
+      standard: tplStandards[0] as 'ISO9001' | 'ISO14001' | 'ISO45001',
+      detailType: 'FormRecord.Reopened',
+      source: 'cumplify.forms',
+      entityId: recordId,
+      payload: { recordId, justification },
+    });
+
+    return refreshed;
+  } catch (err) {
+    await rollbackQuietly(txn);
+    throw err;
+  }
+}

@@ -14,6 +14,7 @@ import {
 import { GuidanceBanner } from '@/components/shared/GuidanceBanner';
 import { StatTile } from '@/components/shared/StatTile';
 import { useGraphQL } from '@/lib/api';
+import { errorText } from '@/lib/error-text';
 import { useAuth } from '@/lib/auth-context';
 import { useTenantSubscription } from '@/lib/use-tenant-subscription';
 import { canApprove } from '@/lib/role-matrix';
@@ -127,6 +128,7 @@ type PageState = 'loading' | 'no-profile' | 'no-runs' | 'running' | 'complete';
 
 export default function ManualPage() {
   const t = useTranslations('manual');
+  const tErr = useTranslations('errors');
   const router = useRouter();
   const { query, mutate } = useGraphQL();
   const { user } = useAuth();
@@ -340,7 +342,7 @@ export default function ManualPage() {
       if (msg.includes('UNREVIEWED_SECTIONS')) setSubmitError(t('unreviewedSections'));
       else if (msg.includes('UNRESOLVED_GAPS')) setSubmitError(t('unresolvedGaps'));
       else if (msg.includes('SoD') || msg.includes('SOD')) setSubmitError(t('sodViolation'));
-      else setSubmitError(msg || t('error'));
+      else setSubmitError(errorText(e, tErr, 'generic'));
     }
   }
 
@@ -359,7 +361,7 @@ export default function ManualPage() {
       if (msg.includes('Unknown field') || msg.includes('EXPORT_NOT_AVAILABLE')) {
         setExportError(t('exportBlocked'));
       } else {
-        setExportError(msg || t('error'));
+        setExportError(errorText(e, tErr, 'generic'));
       }
     }
   }
@@ -416,7 +418,10 @@ export default function ManualPage() {
         <Panel title={t('generationProgress')} subtitle={t('generationRunning')}>
           <div className={styles.sectionList}>
             {activeRun.sections.map((section) => (
-              <div key={section.id} className={`${styles.sectionRow} ${styles[`kind${section.kind}`] ?? ''}`}>
+              <div
+                key={section.id}
+                className={`${styles.sectionRow} ${styles[`kind${section.kind}`] ?? ''}`}
+              >
                 <span className={styles.sectionKey}>{section.harmonizationKey}</span>
                 <StatusBadge
                   status={
@@ -444,7 +449,11 @@ export default function ManualPage() {
             <div className={styles.statRow}>
               <StatTile label={t('statTotal')} value={stats.total} />
               <StatTile label={t('statProse')} value={stats.prose} variant="success" />
-              <StatTile label={t('statGaps')} value={stats.gaps} variant={stats.gaps > 0 ? 'warning' : 'success'} />
+              <StatTile
+                label={t('statGaps')}
+                value={stats.gaps}
+                variant={stats.gaps > 0 ? 'warning' : 'success'}
+              />
               <StatTile label={t('statReviewed')} value={`${stats.reviewed}/${stats.total}`} />
             </div>
           )}
@@ -471,7 +480,10 @@ export default function ManualPage() {
           <Panel title={t('sections')} className={styles.sectionPanel}>
             <div className={styles.sectionList}>
               {activeRun.sections.map((section) => (
-                <div key={section.id} className={`${styles.sectionRow} ${styles[`kind${section.kind}`] ?? ''}`}>
+                <div
+                  key={section.id}
+                  className={`${styles.sectionRow} ${styles[`kind${section.kind}`] ?? ''}`}
+                >
                   <span className={styles.sectionKey}>{section.harmonizationKey}</span>
                   <StatusBadge
                     status={
@@ -533,9 +545,7 @@ export default function ManualPage() {
       )}
 
       {/* Loading */}
-      {pageState === 'loading' && (
-        <p className={styles.loading}>{t('loading')}</p>
-      )}
+      {pageState === 'loading' && <p className={styles.loading}>{t('loading')}</p>}
     </>
   );
 }

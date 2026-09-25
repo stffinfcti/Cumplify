@@ -44,10 +44,7 @@ function envGuardrail(prefix: string): GuardrailConfig | undefined {
  * Build the inline Converse guardrailConfig for a seat + feature.
  * This is the guardrail passed to the Converse API call (content + PII + grounding).
  */
-export function buildGuardrailConfig(
-  seat: SeatId,
-  feature?: string,
-): GuardrailConfig | undefined {
+export function buildGuardrailConfig(seat: SeatId, feature?: string): GuardrailConfig | undefined {
   // Priority 1: doc-composer → DocGen guardrail (no grounding, no AR)
   if (seat === 'doc-composer') {
     return envGuardrail('DOCGEN_GUARDRAIL');

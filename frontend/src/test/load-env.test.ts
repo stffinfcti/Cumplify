@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
@@ -16,7 +16,10 @@ describe('load-env.mjs', () => {
   // vitest's test.env injects these into process.env (hermetic lane), which would
   // otherwise be inherited by execSync and trigger the guard. (SMOKE-2 A-2)
   function envWithoutNextPublic() {
-    const { NEXT_PUBLIC_GRAPHQL_URL, NEXT_PUBLIC_USER_POOL_ID, NEXT_PUBLIC_USER_POOL_CLIENT_ID, ...rest } = process.env;
+    const rest = { ...process.env };
+    delete rest.NEXT_PUBLIC_GRAPHQL_URL;
+    delete rest.NEXT_PUBLIC_USER_POOL_ID;
+    delete rest.NEXT_PUBLIC_USER_POOL_CLIENT_ID;
     return rest;
   }
 
@@ -50,11 +53,9 @@ describe('load-env.mjs — early-exit guard (SMOKE-2 §4.3, A-2 REQUIRED)', () =
   const envLocalPath = resolve(frontendDir, '.env.local');
 
   it('exits 0 and does NOT write .env.local when all NEXT_PUBLIC_* vars are set in env', () => {
-    const fs = require('node:fs');
-
     // Delete .env.local if it exists (left over from the test above)
     try {
-      fs.unlinkSync(envLocalPath);
+      unlinkSync(envLocalPath);
     } catch {
       // doesn't exist — fine
     }
@@ -71,6 +72,6 @@ describe('load-env.mjs — early-exit guard (SMOKE-2 §4.3, A-2 REQUIRED)', () =
     });
 
     // Assert .env.local was NOT written
-    expect(fs.existsSync(envLocalPath)).toBe(false);
+    expect(existsSync(envLocalPath)).toBe(false);
   });
 });

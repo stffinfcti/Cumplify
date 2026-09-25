@@ -15,6 +15,7 @@ import type { CumplifyEvent } from '../../eventing/src/types.js';
 import type { SQSEvent, SQSBatchResponse } from 'aws-lambda';
 import { ISO_CANON_TENANT_ID } from '../shared/constants.js';
 import { LEAD_AUDITOR_PROMPT } from './prompt.js';
+import { assertTenantIdSafe } from '../../api/src/resolvers/shared.js';
 import { LEAD_AUDITOR_TOOLS } from './tools.js';
 
 const DLQ_URL = process.env.LEAD_AUDITOR_DLQ_URL!;
@@ -81,7 +82,9 @@ async function processEvent(event: CumplifyEvent, _detailType: string): Promise<
   // S2.1 lesson: event payloads carry tenant-typed text → guardedText; the
   // trusted framing and KB grounding stay out of PROMPT_ATTACK evaluation.
   const content: ContentBlock[] = [
-    { text: `An audit task has been raised. Analyze and take appropriate action.\nEvent payload (tenant data):` },
+    {
+      text: `An audit task has been raised. Analyze and take appropriate action.\nEvent payload (tenant data):`,
+    },
     { guardedText: JSON.stringify(event.payload) },
     ...(groundingContext ? [{ text: `\nRelevant context:\n${groundingContext}` }] : []),
   ];
@@ -134,15 +137,20 @@ export interface RunFindingsResult {
  */
 export async function runAuditFindings(input: RunFindingsInput): Promise<RunFindingsResult> {
   const { tenantId, requestedBy, findingsIntent } = input;
+  assertTenantIdSafe(tenantId);
   const { auditId, audit, checklist, priorFindings } = findingsIntent;
 
   const checklistLines =
     checklist
-      .map((c) => `- [${c.clauseRef ?? '?'}] ${c.question ?? ''} (evidence: ${c.expectedEvidence ?? 'unspecified'})`)
+      .map(
+        (c) =>
+          `- [${c.clauseRef ?? '?'}] ${c.question ?? ''} (evidence: ${c.expectedEvidence ?? 'unspecified'})`,
+      )
       .join('\n') || '(no checklist yet — generate one first for stronger evidence)';
   const priorLines =
-    priorFindings.map((f) => `- ${f.findingType ?? '?'} [${f.clauseRef ?? '?'}]: ${f.description ?? ''}`).join('\n') ||
-    '(none)';
+    priorFindings
+      .map((f) => `- ${f.findingType ?? '?'} [${f.clauseRef ?? '?'}]: ${f.description ?? ''}`)
+      .join('\n') || '(none)';
 
   const groundingContext = await retrieveGrounding(
     tenantId,

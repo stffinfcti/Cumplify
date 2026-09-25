@@ -14,7 +14,12 @@
 
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { Logger } from '@aws-lambda-powertools/logger';
-import { beginTenantTransaction, marshalMany } from '../../api/src/resolvers/shared.js';
+import {
+  assertTenantIdSafe,
+  beginTenantTransaction,
+  marshalMany,
+  rollbackQuietly,
+} from '../../api/src/resolvers/shared.js';
 import { groupSections, type RegistryClause, type Exclusion } from './grouping.js';
 import { sha256Hex } from './facts.js';
 
@@ -38,6 +43,7 @@ export function sectionContentKey(tenantId: string, runId: string, sectionKey: s
 
 export async function handler(event: SeedInput): Promise<SeedOutput> {
   const { runId, tenantId } = event;
+  assertTenantIdSafe(tenantId);
   logger.appendKeys({ runId, tenantId });
 
   const txn = await beginTenantTransaction(tenantId);
@@ -147,11 +153,7 @@ export async function handler(event: SeedInput): Promise<SeedOutput> {
     logger.info('Seeded sections', { planned: plans.length, pending: sections.length });
     return { runId, tenantId, sections };
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }

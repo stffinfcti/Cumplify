@@ -107,10 +107,7 @@ describe('marshalRow / marshalResult with REAL Data API fixtures (AUD-1 e2e shap
   });
 
   it('marshalRow camelCases and converts in one pass', () => {
-    const row = marshalRow(
-      [{ stringValue: '2026-01-02 03:04:05' }],
-      [{ name: 'approved_at' }],
-    );
+    const row = marshalRow([{ stringValue: '2026-01-02 03:04:05' }], [{ name: 'approved_at' }]);
     expect(row.approvedAt).toBe('2026-01-02T03:04:05.000Z');
   });
 });

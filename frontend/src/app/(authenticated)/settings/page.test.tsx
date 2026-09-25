@@ -62,6 +62,7 @@ vi.mock('@/components/shared', () => ({
       <button onClick={onRetry}>retry-action</button>
     </div>
   ),
+  EmptyState: ({ message }: { message: string }) => <div data-testid="empty-state">{message}</div>,
 }));
 
 vi.mock('@/components/shell/LocaleSwitcher', () => ({
@@ -155,24 +156,27 @@ describe('SettingsPage', () => {
     });
   });
 
-  describe('route guard: non-admin role sees nothing', () => {
-    it('renders nothing for employee role', async () => {
+  describe('route guard: non-admin role never sees org settings', () => {
+    it('shows not-authorized for employee role, keeps My Profile', async () => {
       mockRole = 'Employee';
 
-      const { container } = render(<SettingsPage />);
+      render(<SettingsPage />);
 
-      // Should not render any content — returns null immediately
-      expect(container.innerHTML).toBe('');
-      expect(screen.queryByTestId('page-header')).not.toBeInTheDocument();
+      // Org panel renders an explicit not-authorized state — the page header
+      // and per-user My Profile panel remain (never a blank page).
+      const orgPanel = screen.getByTestId('panel-Organization');
+      expect(orgPanel).toContainElement(screen.getByTestId('empty-state'));
+      expect(screen.getByTestId('empty-state')).toHaveTextContent('common.notAuthorized');
       expect(screen.queryByTestId('error-state')).not.toBeInTheDocument();
+      expect(screen.getByTestId('panel-My Profile')).toBeInTheDocument();
     });
 
-    it('renders nothing for contractor role', async () => {
+    it('shows not-authorized for contractor role', async () => {
       mockRole = 'contractor';
 
-      const { container } = render(<SettingsPage />);
+      render(<SettingsPage />);
 
-      expect(container.innerHTML).toBe('');
+      expect(screen.getByTestId('empty-state')).toHaveTextContent('common.notAuthorized');
     });
 
     it('renders content for management-rep role', async () => {

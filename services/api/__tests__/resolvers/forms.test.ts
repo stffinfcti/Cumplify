@@ -46,6 +46,43 @@ import { handler } from '../../src/resolvers/forms.js';
 
 const EMPTY_RESULT = { records: [], columnMetadata: [] };
 
+// Record row for the in-transaction getFormRecordById re-read that follows a
+// write — the returned record is exactly what commits, so a missing row
+// aborts before commit (read-after-commit interleave fix).
+const RECORD_ROW_RESULT = {
+  records: [
+    [
+      { stringValue: 'rec-1' },
+      { stringValue: 'tpl-1' },
+      { stringValue: 'in_progress' },
+      { stringValue: 'user-1' },
+      { isNull: true },
+      { isNull: true },
+      { stringValue: '2026-01-01 00:00:00.000' },
+      { stringValue: '2026-01-01 00:00:00.000' },
+    ],
+  ],
+  columnMetadata: [
+    { name: 'id' },
+    { name: 'template_id' },
+    { name: 'status' },
+    { name: 'opened_by' },
+    { name: 'completed_by' },
+    { name: 'm2_nc_id' },
+    { name: 'created_at' },
+    { name: 'updated_at' },
+  ],
+};
+
+/** Trailing-mock fallback: the re-read's record SELECT gets a row, all other
+ * statements get empty (values {}, field meta []). Queued once-mocks still
+ * take precedence for the earlier writes. */
+function mockRereadFallback() {
+  mockExecute.mockImplementation((sql: string) =>
+    Promise.resolve(sql.includes('FROM forms.records r') ? RECORD_ROW_RESULT : EMPTY_RESULT),
+  );
+}
+
 function makeEvent(fieldName: string, args: Record<string, unknown> = {}) {
   return {
     info: { fieldName },
@@ -116,8 +153,8 @@ describe('listFormTemplates', () => {
     columnMetadata: [{ name: 'id' }, { name: 'key' }, { name: 'standards' }],
   };
   const profileRow = (standards: string[]) => ({
-    records: [[{ stringValue: JSON.stringify({ standardsInScope: standards }) }]],
-    columnMetadata: [{ name: 'payload' }],
+    records: [[{ longValue: 2 }, { stringValue: JSON.stringify({ standardsInScope: standards }) }]],
+    columnMetadata: [{ name: 'current_version' }, { name: 'payload' }],
   });
 
   it('TPL-3: a 9001-only tenant sees zero 14001/45001-only registers', async () => {
@@ -538,12 +575,11 @@ describe('saveFormRecordValues — typed dispatch', () => {
     expect(sql).toContain('INSERT INTO forms.record_values');
     expect(sql).toContain('value_text');
     expect(sql).toContain('ON CONFLICT (record_id, field_id)');
-    // Other columns nulled
-    expect(sql).toContain('value_number = NULL');
-    expect(sql).toContain('value_date = NULL');
-    expect(sql).toContain('value_bool = NULL');
-    expect(sql).toContain('value_uuid = NULL');
-    expect(sql).toContain('value_json = NULL');
+    // Batched row: value lands in the value_text slot, other columns NULL —
+    // the DO UPDATE SET ... EXCLUDED clause clears them on conflict.
+    expect(sql).toContain(':v0, NULL, NULL, NULL, NULL, NULL');
+    expect(sql).toContain('value_number = EXCLUDED.value_number');
+    expect(sql).toContain('value_json = EXCLUDED.value_json');
   });
 
   it('accepts the LIVE wire shape: values arrives as a parsed OBJECT, not a string (found live 2026-07-22)', async () => {
@@ -561,7 +597,7 @@ describe('saveFormRecordValues — typed dispatch', () => {
     const [sql, params] = upsertCall;
     expect(sql).toContain('INSERT INTO forms.record_values');
     expect(sql).toContain('value_text');
-    expect(params).toContainEqual({ name: 'val', value: { stringValue: 'NCR-002' } });
+    expect(params).toContainEqual({ name: 'v0', value: { stringValue: 'NCR-002' } });
   });
 
   it('dispatches number field to value_number column', async () => {
@@ -576,7 +612,8 @@ describe('saveFormRecordValues — typed dispatch', () => {
     const upsertCall = mockExecute.mock.calls[2];
     const [sql] = upsertCall;
     expect(sql).toContain('value_number');
-    expect(sql).toContain('value_text = NULL');
+    // value_number slot (index 1) carries the cast param; rest NULL
+    expect(sql).toContain('NULL, :v0::numeric, NULL, NULL, NULL, NULL');
   });
 
   it('dispatches checkbox field to value_bool column', async () => {
@@ -591,7 +628,8 @@ describe('saveFormRecordValues — typed dispatch', () => {
     const upsertCall = mockExecute.mock.calls[2];
     const [sql] = upsertCall;
     expect(sql).toContain('value_bool');
-    expect(sql).toContain('value_text = NULL');
+    // value_bool slot (index 3)
+    expect(sql).toContain('NULL, NULL, NULL, :v0, NULL, NULL');
   });
 
   it('dispatches relation field to value_uuid column', async () => {
@@ -609,7 +647,8 @@ describe('saveFormRecordValues — typed dispatch', () => {
     const upsertCall = mockExecute.mock.calls[2];
     const [sql] = upsertCall;
     expect(sql).toContain('value_uuid');
-    expect(sql).toContain('value_text = NULL');
+    // value_uuid slot (index 4) with the uuid cast
+    expect(sql).toContain('NULL, NULL, NULL, NULL, :v0::uuid, NULL');
   });
 
   it('dispatches multiselect field to value_json column', async () => {
@@ -627,7 +666,8 @@ describe('saveFormRecordValues — typed dispatch', () => {
     const upsertCall = mockExecute.mock.calls[2];
     const [sql] = upsertCall;
     expect(sql).toContain('value_json');
-    expect(sql).toContain('value_text = NULL');
+    // value_json slot (index 5) with the jsonb cast
+    expect(sql).toContain('NULL, NULL, NULL, NULL, NULL, :v0::jsonb');
   });
 });
 
@@ -869,10 +909,10 @@ describe('UUID type casts in SQL', () => {
     const metaSql = mockExecute.mock.calls[1][0] as string;
     expect(metaSql).toContain(':templateId::uuid');
 
-    // Upsert has :recordId::uuid and :fieldId::uuid
+    // Upsert has :recordId::uuid and per-row field-id params :f0::uuid
     const upsertSql = mockExecute.mock.calls[2][0] as string;
     expect(upsertSql).toContain(':recordId::uuid');
-    expect(upsertSql).toContain(':fieldId::uuid');
+    expect(upsertSql).toContain(':f0::uuid');
   });
 
   it('saveFormRecordValues applies value casts: relation→::uuid, date→::timestamptz, json→::jsonb, number→::numeric', async () => {
@@ -909,11 +949,12 @@ describe('UUID type casts in SQL', () => {
     // Find the upsert calls (starting at index 2)
     const upsertCalls = mockExecute.mock.calls.slice(2);
     const sqls = upsertCalls.map((c) => c[0] as string);
-    // At least one contains ::uuid for the value
-    expect(sqls.some((s) => s.includes(':val::uuid'))).toBe(true);
-    expect(sqls.some((s) => s.includes(':val::timestamptz'))).toBe(true);
-    expect(sqls.some((s) => s.includes(':val::jsonb'))).toBe(true);
-    expect(sqls.some((s) => s.includes(':val::numeric'))).toBe(true);
+    // One batched multi-row INSERT — per-row value params :v0..:v3 in
+    // input order (clause_ref, date_raised, standards, quantity)
+    expect(sqls.some((s) => s.includes(':v0::uuid'))).toBe(true);
+    expect(sqls.some((s) => s.includes(':v1::timestamptz'))).toBe(true);
+    expect(sqls.some((s) => s.includes(':v2::jsonb'))).toBe(true);
+    expect(sqls.some((s) => s.includes(':v3::numeric'))).toBe(true);
   });
 });
 
@@ -945,7 +986,7 @@ describe('saveFormRecordValues — null value clears field (DELETE)', () => {
     const deleteSql = mockExecute.mock.calls[2][0] as string;
     expect(deleteSql).toContain('DELETE FROM forms.record_values');
     expect(deleteSql).toContain(':recordId::uuid');
-    expect(deleteSql).toContain(':fieldId::uuid');
+    expect(deleteSql).toContain(':d0::uuid');
     // Must NOT contain 'INSERT' or the literal string 'null'
     expect(deleteSql).not.toContain('INSERT');
   });
@@ -980,12 +1021,14 @@ describe('BC-2: relation field existence probe', () => {
     });
     // Call 3: existence probe result
     mockExecute.mockResolvedValueOnce(probeResult);
-    // Remaining calls (upsert + timestamp + getFormRecordById)
-    mockExecute.mockResolvedValue({ records: [], columnMetadata: [] });
+    // Remaining calls (upsert + timestamp + getFormRecordById re-read)
+    mockRereadFallback();
   }
 
   it('probes the allowlisted table with :uuid::uuid cast inside the tenant transaction', async () => {
-    setupRelationSave({ records: [[{ longValue: 1 }]] }); // probe returns 1 row = exists
+    setupRelationSave({
+      records: [[{ stringValue: 'a1b2c3d4-0000-4000-8000-000000000001' }]],
+    }); // probe echoes the id = exists
 
     await handler(
       makeEvent('saveFormRecordValues', {
@@ -996,16 +1039,16 @@ describe('BC-2: relation field existence probe', () => {
       }),
     ).catch(() => {});
 
-    // Call 3 is the probe
+    // Call 3 is the batched probe (one ANY() query per target table)
     const [probeSql, probeParams] = mockExecute.mock.calls[2];
     // Must reference the allowlisted table (code constant, not from data)
     expect(probeSql).toContain('qms.clause_registry');
-    // Must cast the UUID param
-    expect(probeSql).toContain(':uuid::uuid');
-    // Param value is the UUID
+    // Must cast the UUID-array param
+    expect(probeSql).toContain(':ids::uuid[]');
+    // Param value carries the UUID as a text-array literal
     expect(probeParams).toContainEqual({
-      name: 'uuid',
-      value: { stringValue: 'a1b2c3d4-0000-4000-8000-000000000001' },
+      name: 'ids',
+      value: { stringValue: '{a1b2c3d4-0000-4000-8000-000000000001}' },
     });
   });
 
@@ -1034,7 +1077,9 @@ describe('BC-2: relation field existence probe', () => {
   });
 
   it('valid target proceeds to upsert without error', async () => {
-    setupRelationSave({ records: [[{ longValue: 1 }]] }); // exists
+    setupRelationSave({
+      records: [[{ stringValue: 'a1b2c3d4-0000-4000-8000-000000000001' }]],
+    }); // probe echoes the id = exists
 
     await handler(
       makeEvent('saveFormRecordValues', {
@@ -1077,7 +1122,7 @@ describe('BC-2: relation field existence probe', () => {
         { name: 'relation_target' },
       ],
     });
-    mockExecute.mockResolvedValueOnce({ records: [[{ longValue: 1 }]] }); // probe hit
+    mockExecute.mockResolvedValueOnce({ records: [[{ stringValue: 'nc-uuid-here' }]] }); // probe hit
     mockExecute.mockResolvedValue({ records: [], columnMetadata: [] });
 
     await handler(
@@ -1088,7 +1133,7 @@ describe('BC-2: relation field existence probe', () => {
 
     const [probeSql] = mockExecute.mock.calls[2];
     expect(probeSql).toContain('m2.nonconformities');
-    expect(probeSql).toContain(':uuid::uuid');
+    expect(probeSql).toContain(':ids::uuid[]');
   });
 
   it('field metadata query includes relation_target column', async () => {
@@ -1605,8 +1650,8 @@ describe('submitFormRecord — POSITIVE PATH (NCR→M2 mapping)', () => {
     mockExecute.mockResolvedValueOnce({ records: [], columnMetadata: [] });
     // Call 8: UPDATE forms.records (stamp m2_nc_id + complete)
     mockExecute.mockResolvedValueOnce({ records: [], columnMetadata: [] });
-    // Remaining: getFormRecordById calls
-    mockExecute.mockResolvedValue({ records: [], columnMetadata: [] });
+    // Remaining: getFormRecordById re-read
+    mockRereadFallback();
   });
 
   it('INSERT m2.nonconformities uses real column names from migration 003 with casts', async () => {
@@ -1726,8 +1771,8 @@ describe('reopenFormRecord', () => {
     });
     // Call 3: UPDATE status = reopened
     mockExecute.mockResolvedValueOnce({ records: [], columnMetadata: [] });
-    // Remaining: getFormRecordById
-    mockExecute.mockResolvedValue({ records: [], columnMetadata: [] });
+    // Remaining: getFormRecordById re-read
+    mockRereadFallback();
 
     await handler(
       makeEvent('reopenFormRecord', {
@@ -2056,8 +2101,8 @@ describe('submitFormRecord — F1: resubmit after reopen UPDATEs existing NC (no
     mockExecute.mockResolvedValueOnce({ records: [], columnMetadata: [] });
     // Call 7: UPDATE forms.records (stamp)
     mockExecute.mockResolvedValueOnce({ records: [], columnMetadata: [] });
-    // Remaining: getFormRecordById
-    mockExecute.mockResolvedValue({ records: [], columnMetadata: [] });
+    // Remaining: getFormRecordById re-read
+    mockRereadFallback();
 
     await handler(makeEvent('submitFormRecord', { input: { recordId: 'rec-1' } })).catch(() => {});
 
@@ -2318,7 +2363,7 @@ describe('submitFormRecord — F2: dynamic audit event params', () => {
     });
     mockExecute.mockResolvedValueOnce({ records: [], columnMetadata: [] }); // CA insert
     mockExecute.mockResolvedValueOnce({ records: [], columnMetadata: [] }); // stamp
-    mockExecute.mockResolvedValue({ records: [], columnMetadata: [] });
+    mockRereadFallback();
 
     await handler(makeEvent('submitFormRecord', { input: { recordId: 'rec-1' } })).catch(() => {});
 
@@ -2599,15 +2644,28 @@ describe('approveFormRecord — SoD enforcement (BC-4)', () => {
         { name: 'clause_refs' },
       ],
     });
+    // Field meta fetch for the phase-3 re-read (txn1)
+    mockExecute.mockResolvedValueOnce({
+      records: [],
+      columnMetadata: [{ name: 'field_key' }, { name: 'required' }],
+    });
+    // Phase-3 status re-check (FOR UPDATE, record still complete)
+    mockExecute.mockResolvedValueOnce({
+      records: [[{ stringValue: 'complete' }]],
+      columnMetadata: [{ name: 'status' }],
+    });
     // UPDATE status = approved
     mockExecute.mockResolvedValueOnce({ records: [], columnMetadata: [] });
-    // getFormRecordById calls
-    mockExecute.mockResolvedValue({ records: [], columnMetadata: [] });
+    // getFormRecordById re-read
+    mockRereadFallback();
 
     await handler(makeEvent('approveFormRecord', { input: { recordId: 'rec-1' } })).catch(() => {});
 
     // Update SQL stamps approved
-    const [approveSql] = mockExecute.mock.calls[2];
+    const approveCall = mockExecute.mock.calls.find((c) =>
+      (c[0] as string).includes("status = 'approved'"),
+    )!;
+    const [approveSql] = approveCall;
     expect(approveSql).toContain("status = 'approved'");
     expect(approveSql).toContain('approved_by');
     expect(approveSql).toContain('approved_at');

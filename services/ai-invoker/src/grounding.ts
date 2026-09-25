@@ -44,7 +44,7 @@ const FALLBACK_CHUNK_SIZE = 4_000;
 
 export interface GroundingContext {
   source: string; // concatenated retrieval chunks (≤100k)
-  query: string;  // user question (≤1,000)
+  query: string; // user question (≤1,000)
 }
 
 export interface GroundingResult {
@@ -99,12 +99,29 @@ export function validateGroundingContext(ctx: GroundingContext): GroundingContex
 export function splitForGroundingCheck(text: string): string[] {
   if (text.length <= MAX_SECTION_CHARS) return [text];
 
-  // Primary: split on ## or ### headers
+  // Primary: split on ## or ### headers — but a single mega-section under one
+  // header still blows past MAX_SECTION_CHARS, so re-chunk any oversized
+  // piece (and hard-split paragraphs that overflow a chunk on their own).
   const headerSections = text.split(/(?=^#{2,3}\s)/m).filter((s) => s.trim());
-  if (headerSections.length > 1) return headerSections;
-
-  // Fallback: chunk at paragraph boundaries
-  return chunkAtParagraphs(text, FALLBACK_CHUNK_SIZE);
+  const pieces = headerSections.length > 1 ? headerSections : [text];
+  const out: string[] = [];
+  for (const piece of pieces) {
+    if (piece.length <= MAX_SECTION_CHARS) {
+      out.push(piece);
+      continue;
+    }
+    for (const chunk of chunkAtParagraphs(piece, FALLBACK_CHUNK_SIZE)) {
+      if (chunk.length <= MAX_SECTION_CHARS) {
+        out.push(chunk);
+      } else {
+        // Last resort: a paragraph longer than the cap — hard char split.
+        for (let i = 0; i < chunk.length; i += MAX_SECTION_CHARS) {
+          out.push(chunk.slice(i, i + MAX_SECTION_CHARS));
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -187,8 +204,7 @@ export function parseGroundingResponse(response: ApplyGuardrailCommandOutput): G
 
   const assessments = response.assessments ?? [];
   for (const assessment of assessments) {
-    const filters =
-      (assessment as any).contextualGroundingPolicy?.filters ?? [];
+    const filters = (assessment as any).contextualGroundingPolicy?.filters ?? [];
     for (const filter of filters) {
       if (filter.type === 'GROUNDING') {
         if (typeof filter.score === 'number') groundingScore = filter.score;
@@ -217,10 +233,7 @@ const CHUNK_PREVIEW_LENGTH = 200;
  * Splits source on delimiter, extracts clauseRef from metadata prefix,
  * assigns scores, returns top-N sorted by score.
  */
-export function buildCitations(
-  groundingSource: string,
-  groundingScore: number,
-): Citation[] {
+export function buildCitations(groundingSource: string, groundingScore: number): Citation[] {
   const chunks = groundingSource.split(CHUNK_DELIMITER).filter((c) => c.trim());
   const citations: Citation[] = [];
 
@@ -236,11 +249,8 @@ export function buildCitations(
   }
 
   // Sort by score descending (for future per-chunk scoring), take top-N
-  return citations
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_CITATIONS);
+  return citations.sort((a, b) => b.score - a.score).slice(0, MAX_CITATIONS);
 }
-
 
 // ─── Retry + Honest-Miss Flow (L1-7, L1-8) ─────────────────────────────────
 

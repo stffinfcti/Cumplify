@@ -16,15 +16,17 @@ const VENDORED = resolve(__dirname, '../lib/controlled-doc/template.ts');
 const AUTHORITY = resolve(__dirname, '../../../services/pdf-export/src/template.ts');
 
 function normalized(path: string): string {
-  return readFileSync(path, 'utf-8')
-    .split('\n')
-    // strip line comments, block-comment lines, and blank lines — the
-    // provenance headers legitimately differ; the CODE may not.
-    .filter((l) => {
-      const t = l.trim();
-      return t !== '' && !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*');
-    })
-    .join('\n');
+  return (
+    readFileSync(path, 'utf-8')
+      .split('\n')
+      // strip line comments, block-comment lines, and blank lines — the
+      // provenance headers legitimately differ; the CODE may not.
+      .filter((l) => {
+        const t = l.trim();
+        return t !== '' && !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*');
+      })
+      .join('\n')
+  );
 }
 
 describe('controlled-doc template parity (vendored ↔ pdf-export authority)', () => {

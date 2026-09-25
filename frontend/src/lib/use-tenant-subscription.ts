@@ -19,7 +19,23 @@ import { useAuth } from './auth-context';
  * All real-time bindings (§3, §5–§9) go through this hook.
  */
 
-const client = generateClient();
+// Lazy client — generateClient() at module scope runs during prerender/import
+// before Amplify is configured; create it on first subscribe instead.
+// Referencing the real `ReturnType<typeof generateClient>` (even inside a
+// cast) trips TS2321 on Amplify v6's deeply-conditional V6Client — keep a
+// minimal structural shape; only `.graphql` is used, at one casted site.
+type ApiClient = {
+  graphql: (options: {
+    query: unknown;
+    variables?: Record<string, unknown>;
+    authToken?: string;
+  }) => unknown;
+};
+let client: ApiClient | null = null;
+function getClient() {
+  client ??= generateClient() as unknown as ApiClient;
+  return client;
+}
 
 const MAX_RETRIES = 5;
 const BASE_DELAY = 1000;
@@ -77,7 +93,7 @@ export function useTenantSubscription<T = unknown>({
 
     if (!token || cancelledRef.current) return;
 
-    const observable = client.graphql({
+    const observable = getClient().graphql({
       query,
       variables: { tenantId: user.tenantId },
       authToken: token,
@@ -94,6 +110,13 @@ export function useTenantSubscription<T = unknown>({
       },
       error: (err) => {
         if (cancelledRef.current) return;
+        // Drop the dead subscription before resubscribing — subRef must only
+        // ever hold a live handle (cleanup else unsubscribes a corpse while
+        // the new socket is unmanaged).
+        if (subRef.current) {
+          subRef.current.unsubscribe();
+          subRef.current = null;
+        }
         retryCount.current += 1;
         if (retryCount.current <= MAX_RETRIES) {
           const delay = BASE_DELAY * Math.pow(2, retryCount.current - 1);

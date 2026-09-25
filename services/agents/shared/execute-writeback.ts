@@ -37,6 +37,8 @@ import { Logger } from '@aws-lambda-powertools/logger';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { publish } from '../../eventing/src/publisher.js';
+import { assertTenantIdSafe, withResumeRetry } from '../../api/src/resolvers/shared.js';
+import type { Context } from 'aws-lambda';
 import { ulid } from 'ulid';
 
 const logger = new Logger({ serviceName: 'execute-writeback' });
@@ -70,33 +72,6 @@ export interface WritebackInput {
 
 // ─── Aurora resume-retry (M-1, ACC-1 pattern) ────────────────────────────────
 // First call after 0-ACU auto-pause throws DatabaseResumingException.
-const MAX_RESUME_RETRIES = 3;
-const RESUME_DELAY_MS = 15_000;
-
-async function withResumeRetry<T>(fn: () => Promise<T>): Promise<T> {
-  for (let attempt = 0; attempt <= MAX_RESUME_RETRIES; attempt++) {
-    try {
-      return await fn();
-    } catch (err: unknown) {
-      const msg = (err as Error).message ?? '';
-      const name = (err as { name?: string }).name ?? '';
-      const isDatabaseResuming =
-        msg.includes('Communications link failure') ||
-        msg.includes('DatabaseResumingException') ||
-        name === 'DatabaseResumingException' ||
-        msg.includes('Timed out');
-
-      if (isDatabaseResuming && attempt < MAX_RESUME_RETRIES) {
-        logger.warn('Aurora resuming from auto-pause — retrying', { attempt });
-        await new Promise((resolve) => setTimeout(resolve, RESUME_DELAY_MS));
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw new Error('Unreachable');
-}
-
 // ─── Finding type mapping (C-3d) ────────────────────────────────────────────
 // The model prompt uses hyphenated values (major-nc, minor-nc) but the DB
 // CHECK constraint requires underscored values (major_nc, minor_nc).
@@ -120,12 +95,16 @@ function mapFindingType(raw: string): string {
 
 export async function handler(
   event: WritebackInput | { Payload: WritebackInput },
+  context?: Context,
 ): Promise<{ status: string; auditEventId?: string }> {
   // Task-11 hotfix: the SFN lambda:invoke integration with `'Payload.$': '$'`
   // delivers the STATE as the event — there is no {Payload:...} wrapper on
   // input (the wrapper exists only in state OUTPUT). Accept both shapes.
   const input: WritebackInput = 'Payload' in event ? event.Payload : event;
   const { tenantId, agentName, proposedAction, approvalResult } = input;
+  // Fail-loud boundary — tenantId arrives via the SFN/DDB chain and feeds
+  // set_config below; reject wildcard/tag-meta characters at the entry.
+  assertTenantIdSafe(tenantId);
 
   if (approvalResult.decision !== 'APPROVE') {
     logger.info('Writeback rejected by human', {
@@ -154,15 +133,18 @@ export async function handler(
     edited: Boolean(approvalResult.editedPayload),
   });
 
-  // M-1: Begin transaction with Aurora resume-retry
-  const txnResult = await withResumeRetry(() =>
-    rds.send(
-      new BeginTransactionCommand({
-        resourceArn: CLUSTER_ARN,
-        secretArn: SECRET_ARN,
-        database: DB_NAME,
-      }),
-    ),
+  // M-1: Begin transaction with Aurora resume-retry (bounded by the
+  // remaining invocation budget so resume cycles cannot burn to hard timeout).
+  const txnResult = await withResumeRetry(
+    () =>
+      rds.send(
+        new BeginTransactionCommand({
+          resourceArn: CLUSTER_ARN,
+          secretArn: SECRET_ARN,
+          database: DB_NAME,
+        }),
+      ),
+    context?.getRemainingTimeInMillis.bind(context),
   );
   const transactionId = txnResult.transactionId!;
 
@@ -464,8 +446,7 @@ async function executeManualSectionDraft(
   const generationRunId = args.generationRunId as string;
   const harmonizationKey = args.harmonizationKey as string;
   const sentences = (args.sentences ?? []) as Array<{ text: string }>;
-  if (!generationRunId || !harmonizationKey)
-    throw new Error('MANUAL_SECTION_DRAFT_MISSING_TARGET');
+  if (!generationRunId || !harmonizationKey) throw new Error('MANUAL_SECTION_DRAFT_MISSING_TARGET');
   if (!Array.isArray(sentences) || sentences.length === 0)
     throw new Error('MANUAL_SECTION_DRAFT_EMPTY');
   if (!REGEN_FN_NAME) throw new Error('REGEN_FN_UNCONFIGURED');
@@ -679,9 +660,15 @@ async function executeAuditFindingWrite(
             RETURNING id`,
         parameters: [
           { name: 'standard', value: { stringValue: standard } },
-          { name: 'description', value: { stringValue: `Audit finding (${findingType}): ${args.description as string}` } },
+          {
+            name: 'description',
+            value: { stringValue: `Audit finding (${findingType}): ${args.description as string}` },
+          },
           { name: 'clauseRef', value: { stringValue: clauseNum } },
-          { name: 'severity', value: { stringValue: findingType === 'major_nc' ? 'high' : 'medium' } },
+          {
+            name: 'severity',
+            value: { stringValue: findingType === 'major_nc' ? 'high' : 'medium' },
+          },
           { name: 'actor', value: { stringValue: actor } },
         ],
       }),

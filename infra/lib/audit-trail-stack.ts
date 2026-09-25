@@ -19,6 +19,8 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as destinations from 'aws-cdk-lib/aws-lambda-destinations';
@@ -38,6 +40,7 @@ export interface AuditTrailStackProps extends cdk.StackProps {
   readonly auditSinkQueueArn: string;
   readonly auditSinkDlqUrl: string;
   readonly auditSinkDlqArn: string;
+  readonly opsAlertTopic: sns.ITopic;
 }
 
 export class AuditTrailStack extends cdk.Stack {
@@ -118,11 +121,20 @@ export class AuditTrailStack extends cdk.Stack {
       },
     });
 
-    // Consumer needs EXACTLY: Query (prevHash lookup) + PutItem (the TransactWriteItems
-    // chain-item + dedup-marker, both conditional Puts). NOT UpdateItem/DeleteItem/
-    // BatchWriteItem — the append path never mutates existing items. (Gate FINDING-1:
-    // grantReadWriteData was over-broad, allowing UpdateItem on non-audit partitions.)
-    table.grant(consumerFn, 'dynamodb:Query', 'dynamodb:PutItem');
+    // Consumer needs EXACTLY: Query (prevHash lookup) + PutItem/TransactWriteItems
+    // (the chain item + dedup marker + AUDITMETA registration go in as
+    // conditional Puts inside TransactWriteItems — IAM evaluates the
+    // transaction action itself, not the inner ops, so the grant name is
+    // TransactWriteItems; without it every append is AccessDenied).
+    // NOT UpdateItem/DeleteItem/BatchWriteItem — the append path never
+    // mutates existing items. (Gate FINDING-1: grantReadWriteData was
+    // over-broad, allowing UpdateItem on non-audit partitions.)
+    //
+    // WORM caveat: IAM cannot inspect the op types inside a transaction —
+    // the DenyAuditLogMutation policy below still blocks direct
+    // UpdateItem/DeleteItem on AUDITLOG partitions; the Puts-only contract
+    // on the transaction path is enforced by the appender code + tests.
+    table.grant(consumerFn, 'dynamodb:Query', 'dynamodb:PutItem', 'dynamodb:TransactWriteItems');
     props.dynamodbKey.grant(
       consumerFn,
       'kms:Encrypt',
@@ -296,19 +308,20 @@ export class AuditTrailStack extends cdk.Stack {
       true,
     );
 
-    // ─── IAM Deny Policy (FIX-2: 5 actions) — REQUIRES-HUMAN ───────────────
+    // ─── IAM Deny Policy (FIX-2) — REQUIRES-HUMAN ─────────────────────────
     const auditLogDenyPolicy = new iam.ManagedPolicy(this, 'AuditLogDenyPolicy', {
       statements: [
         new iam.PolicyStatement({
           sid: 'DenyAuditLogMutation',
           effect: iam.Effect.DENY,
-          actions: [
-            'dynamodb:UpdateItem',
-            'dynamodb:DeleteItem',
-            'dynamodb:BatchWriteItem',
-            'dynamodb:PartiQLUpdate',
-            'dynamodb:PartiQLDelete',
-          ],
+          // Only single-item actions can carry a dynamodb:LeadingKeys
+          // condition — BatchWriteItem/PartiQL*/TransactWriteItems evaluate
+          // the request, not per-item keys, so they can never match a
+          // LeadingKeys deny. Mutations via those paths are a WORM blind
+          // spot: no IAM condition can scope them, so the boundary there is
+          // app-code only (no service code may write AUDITLOG partitions via
+          // batch/partiql/transact). Recorded as an accepted residual.
+          actions: ['dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
           resources: [props.tableArn],
           conditions: {
             'ForAnyValue:StringLike': {
@@ -377,6 +390,10 @@ export class AuditTrailStack extends cdk.Stack {
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
+
+    for (const alarm of [sealerDlqAlarm, tamperAlarm, chainBrokenAlarm]) {
+      alarm.addAlarmAction(new cwActions.SnsAction(props.opsAlertTopic));
+    }
 
     // ─── CfnOutputs ────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, 'AuditArchiveBucketName', { value: auditArchiveBucket.bucketName });

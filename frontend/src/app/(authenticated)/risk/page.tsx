@@ -221,53 +221,50 @@ export default function RiskManagementPage() {
     [t],
   );
 
+  // Drawer handlers propagate mutation errors — FormDrawer keeps the drawer
+  // open and shows the error inline instead of nuking the whole page (FE-3).
   async function handleCreateRisk(values: Record<string, string | boolean>) {
-    try {
-      await mutate(CREATE_RISK_MUTATION, {
-        input: {
-          standard: values.standard,
-          category: values.category,
-          description: values.description,
-          likelihood: Number(values.likelihood),
-          severity: Number(values.severity),
-          treatment: values.treatment || undefined,
-        },
-      });
-      await fetchRisks();
-    } catch {
-      setError(true);
+    // GraphQL Int fields — reject NaN/non-integer before the mutation so the
+    // drawer shows the inline error instead of serializing a broken Int.
+    const likelihood = Number(values.likelihood);
+    const severity = Number(values.severity);
+    if (!Number.isInteger(likelihood) || !Number.isInteger(severity)) {
+      throw new Error(t('likelihoodSeverityInvalid'));
     }
+    await mutate(CREATE_RISK_MUTATION, {
+      input: {
+        standard: values.standard,
+        category: values.category,
+        description: values.description,
+        likelihood,
+        severity,
+        treatment: values.treatment || undefined,
+      },
+    });
+    await fetchRisks();
   }
 
   async function handleAddTreatment(values: Record<string, string | boolean>) {
     if (!selectedRisk) return;
-    try {
-      await mutate(ADD_TREATMENT_MUTATION, {
-        input: {
-          riskId: selectedRisk.id,
-          actionDesc: values.actionDesc,
-          ownerId: values.ownerId,
-          dueDate: values.dueDate,
-        },
-      });
-      await fetchRisks();
-    } catch {
-      setError(true);
-    }
+    await mutate(ADD_TREATMENT_MUTATION, {
+      input: {
+        riskId: selectedRisk.id,
+        actionDesc: values.actionDesc,
+        ownerId: values.ownerId,
+        dueDate: values.dueDate,
+      },
+    });
+    await fetchRisks();
   }
 
   async function handleCreateChangePlan(values: Record<string, string | boolean>) {
-    try {
-      await mutate(CREATE_CHANGE_PLAN_MUTATION, {
-        input: {
-          standard: values.standard,
-          changeDesc: values.changeDesc,
-          impactAssessment: values.impactAssessment || undefined,
-        },
-      });
-    } catch {
-      setError(true);
-    }
+    await mutate(CREATE_CHANGE_PLAN_MUTATION, {
+      input: {
+        standard: values.standard,
+        changeDesc: values.changeDesc,
+        impactAssessment: values.impactAssessment || undefined,
+      },
+    });
   }
 
   // G4: Error state with retry

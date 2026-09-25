@@ -20,7 +20,7 @@ import {
 import { Logger } from '@aws-lambda-powertools/logger';
 import { publish } from '../../eventing/src/publisher.js';
 import { InvokeError } from './types.js';
-import type { GuardrailConfig, } from './guardrail.js';
+import type { GuardrailConfig } from './guardrail.js';
 
 const logger = new Logger({ serviceName: 'ai-invoker-hop-check' });
 
@@ -110,9 +110,7 @@ export async function checkHopPayload(params: HopCheckParams): Promise<HopCheckR
     standard,
   } = params;
 
-  const payloadText = typeof toolInput === 'string'
-    ? toolInput
-    : JSON.stringify(toolInput ?? {});
+  const payloadText = typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput ?? {});
 
   const startMs = Date.now();
 

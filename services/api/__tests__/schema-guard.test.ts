@@ -78,6 +78,13 @@ describe('schema-guard: schema.graphql invariants', () => {
       'AgentTriageNCInput',
       'AgentProposeCorrectiveActionInput',
       'AgentAssessRiskInput',
+      // Same @aws_iam passthrough shape as PublishGenerationEventInput: the
+      // noneDS VTL forwards input verbatim, so tenantId must ride the input
+      // for subscription filters + resolver-side tenant binding.
+      'DocumentEventInput',
+      'CAPAEventInput',
+      'AuditEventTriggerInput',
+      'RiskEventInput',
     ]);
 
     const offenders = inputBlocks()

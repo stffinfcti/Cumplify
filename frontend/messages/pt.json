@@ -40,7 +40,23 @@
     "standardIso9001": "9001",
     "standardIso14001": "14001",
     "standardIso45001": "45001",
-    "standardIms": "SGI"
+    "standardIms": "SGI",
+    "newPasswordHint": "Sua conta requer uma nova senha antes de continuar.",
+    "newPassword": "Nova senha",
+    "confirmPassword": "Confirmar senha",
+    "passwordsDontMatch": "As senhas não coincidem",
+    "mfaSelectHint": "Escolha como você quer verificar sua identidade.",
+    "mfaMethodTotp": "Aplicativo autenticador",
+    "mfaMethodSms": "Mensagem de texto (SMS)",
+    "mfaCode": "Código de verificação",
+    "mfaHintTotp": "Digite o código do seu aplicativo autenticador.",
+    "mfaHintSms": "Digite o código enviado para o seu telefone.",
+    "mfaHintCustom": "Digite seu código de verificação.",
+    "challengeError": "A verificação falhou — verifique o valor e tente novamente.",
+    "unsupportedStep": "Este login requer uma etapa que ainda não está disponível — contate o administrador.",
+    "continue": "Continuar",
+    "backToSignIn": "Voltar para entrar",
+    "verifying": "Verificando..."
   },
   "commandCenter": {
     "title": "Centro de Comando",
@@ -165,7 +181,9 @@
     "HIGH": "Alto",
     "IN_PROGRESS": "Em progresso",
     "MEDIUM": "Médio",
-    "LOW": "Baixo"
+    "LOW": "Baixo",
+    "COMPLETED": "Concluído",
+    "PLANNED": "Planejado"
   },
   "common": {
     "loading": "Carregando...",
@@ -173,7 +191,10 @@
     "retry": "Tentar novamente",
     "submit": "Enviar",
     "cancel": "Cancelar",
-    "close": "Fechar"
+    "close": "Fechar",
+    "notAuthorized": "Você não tem acesso a esta seção",
+    "notFound": "Página não encontrada",
+    "backToDashboard": "Voltar ao painel"
   },
   "m1": {
     "title": "Estúdio de Documentos",
@@ -291,7 +312,8 @@
     "findingMajorNc": "NC maior",
     "findingMinorNc": "NC menor",
     "findingObservation": "Observação",
-    "findingOfi": "OFI"
+    "findingOfi": "OFI",
+    "yearInvalid": "O ano do programa deve ser um ano válido"
   },
   "m4": {
     "title": "Gestão de Registros",
@@ -299,7 +321,6 @@
     "tabCalibrations": "Programação de Calibração",
     "tabAuditTrail": "Trilha de Auditoria",
     "loading": "Carregando...",
-    "recordsBlocked": "A listagem de registros requer a consulta listRecords (bloqueado por superfície de leitura do backend)",
     "registerRecord": "Registrar registro",
     "createRetention": "Criar política de retenção",
     "recordCalibration": "Registrar calibração",
@@ -323,7 +344,14 @@
     "fieldStandardUsed": "Norma utilizada",
     "fieldTraceabilityRef": "Referência de rastreabilidade",
     "fieldResult": "Resultado",
-    "fieldNextDue": "Próximo vencimento"
+    "fieldNextDue": "Próximo vencimento",
+    "retentionYearsInvalid": "Os anos de retenção devem ser um número inteiro positivo",
+    "colTemplate": "Modelo",
+    "colStatus": "Status",
+    "colCompletion": "Conclusão",
+    "colOpenedBy": "Aberto por",
+    "colUpdated": "Atualizado",
+    "emptyRecords": "Ainda não há registros de formulários"
   },
   "m5": {
     "title": "Gestão de Riscos",
@@ -357,7 +385,8 @@
     "fieldOwnerId": "Responsável",
     "fieldDueDate": "Data limite",
     "fieldChangeDesc": "Descrição da mudança",
-    "fieldImpactAssessment": "Avaliação de impacto"
+    "fieldImpactAssessment": "Avaliação de impacto",
+    "likelihoodSeverityInvalid": "A probabilidade e a severidade devem ser números inteiros"
   },
   "forms": {
     "pdf": {
@@ -772,7 +801,8 @@
       "submitInvalidStatus": "O registro não pode ser enviado no status atual",
       "recordImmutable": "O registro está bloqueado",
       "linkTargetNotFound": "Destino vinculado não encontrado",
-      "fieldRequired": "Este campo é obrigatório"
+      "fieldRequired": "Este campo é obrigatório",
+      "autosaveFailed": "Falha no salvamento automático — suas edições foram mantidas e serão reenviadas na próxima alteração"
     }
   },
   "qms": {
@@ -811,7 +841,11 @@
       "siteCountry": "País",
       "siteHeadcount": "Pessoal",
       "addSite": "Adicionar Site",
-      "removeSite": "Remover"
+      "removeSite": "Remover",
+      "employeeCountInvalid": "O número de funcionários deve ser um inteiro positivo",
+      "yearFoundedInvalid": "O ano de fundação está fora do intervalo",
+      "legalNameRequired": "A razão social é obrigatória",
+      "saveError": "Falha ao salvar o perfil"
     },
     "registry": {
       "loading": "Carregando...",
@@ -910,7 +944,8 @@
     "loading": "Carregando...",
     "print": "Imprimir",
     "viewerTitle": "Visualizador de Documento Controlado",
-    "draftSection": "Redigir com DocStudio"
+    "draftSection": "Redigir com DocStudio",
+    "renderFailed": "Falha ao renderizar o conteúdo do documento."
   },
   "documents": {
     "title": "Documentos",
@@ -1002,7 +1037,9 @@
     "failedSection": "Composição da seção falhou — sem conteúdo apresentado",
     "saveVersion": "Salvar versão",
     "saving": "Salvando…",
-    "saveFailed": "Falha ao salvar"
+    "saveFailed": "Falha ao salvar",
+    "mermaidError": "Não foi possível renderizar o diagrama",
+    "mermaidLoading": "Carregando diagrama…"
   },
   "proposal": {
     "rationale": "Justificativa",
@@ -1043,5 +1080,28 @@
     "completeTitle": "Ciclo de vida",
     "completeAudit": "Concluir auditoria",
     "completing": "Concluindo…"
+  },
+  "errors": {
+    "unauthorized": "Você não está autorizado para esta ação",
+    "sessionExpired": "Sua sessão expirou — entre novamente",
+    "pausedForCredits": "Créditos de IA esgotados neste mês",
+    "approvalRequired": "Este documento precisa de uma revisão aprovada primeiro",
+    "invalidState": "Esta ação não é válida no estado atual",
+    "sodViolation": "Você não pode aprovar seu próprio envio",
+    "generationUnavailable": "A geração está temporariamente indisponível",
+    "orgProfileRequired": "Complete primeiro o perfil da sua organização",
+    "submitInvalidStatus": "Este registro não pode mais ser enviado",
+    "mappingIncomplete": "Campos mapeados obrigatórios estão faltando",
+    "validationIncomplete": "Preencha primeiro todos os campos obrigatórios",
+    "linkTargetNotFound": "O registro vinculado não foi encontrado",
+    "recordNotFound": "Registro não encontrado",
+    "versionNotFound": "Versão do documento não encontrada",
+    "sealFailed": "Falha ao selar o documento — tente novamente",
+    "taskExpired": "Esta tarefa de aprovação expirou — atualize a lista",
+    "justificationRequired": "É necessária uma justificação",
+    "invalidInput": "Os dados enviados são inválidos",
+    "notFound": "O item solicitado não foi encontrado",
+    "unavailable": "Este recurso ainda não está configurado",
+    "generic": "Algo deu errado — tente novamente"
   }
 }

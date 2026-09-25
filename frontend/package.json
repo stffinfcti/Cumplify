@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22 <25"
+  },
   "scripts": {
     "predev": "node scripts/load-env.mjs",
     "dev": "next dev",
@@ -10,7 +13,7 @@
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
-    "deploy:bundle": "node scripts/amplify-bundle.mjs",
+    "test:cov": "vitest run --coverage",
     "i18n:check": "node scripts/check-hardcoded-strings.mjs"
   },
   "dependencies": {
@@ -24,18 +27,20 @@
     "@tiptap/starter-kit": "2.27.2",
     "aws-amplify": "^6.18.0",
     "mermaid": "11.16.0",
-    "next": "^14.2.35",
+    "next": "16.3.6",
     "next-intl": "^4.13.2",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^22.0.0",
-    "@types/react": "^18.3.31",
-    "@types/react-dom": "^18.3.7",
+    "@types/react": "^19.2.13",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "@vitest/coverage-v8": "^4.1.10",
     "jsdom": "^29.1.1",
     "sharp": "^0.35.3",
     "typescript": "^5.5.0",

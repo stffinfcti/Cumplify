@@ -72,7 +72,7 @@ function makeEvent(fieldName: string, args: Record<string, unknown> = {}) {
   return {
     info: { fieldName },
     arguments: args,
-    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-9' } },
+    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-9', role: 'IMSLead' } },
   };
 }
 
@@ -113,6 +113,10 @@ describe('saveDocumentSectionEdit — happy path', () => {
         records: [[{ stringValue: 'doc-1' }, { stringValue: 'DRAFT' }, { stringValue: 'v1-key' }]],
         columnMetadata: [{ name: 'document_id' }, { name: 'status' }, { name: 'content_ref' }],
       })
+      .mockResolvedValueOnce({
+        records: [[{ stringValue: 'draft' }]],
+        columnMetadata: [{ name: 'status' }],
+      }) // FOR UPDATE document lock — returns the live status
       .mockResolvedValueOnce({
         records: [[{ longValue: 2 }]],
         columnMetadata: [{ name: 'next' }],
@@ -158,9 +162,10 @@ describe('saveDocumentSectionEdit — happy path', () => {
     expect((result as { id: string }).id).toBe('ver-2');
     expect((result as { versionNo: number }).versionNo).toBe(2);
 
-    // The new version-write INSERT (3rd execute call) must carry a NEW,
-    // incremented version_no and a new S3 key — never the same content_ref.
-    const [insertSql, insertParams] = mockExecute.mock.calls[2];
+    // The new version-write INSERT (4th execute call: meta, lock, next, insert)
+    // must carry a NEW, incremented version_no and a new S3 key — never the
+    // same content_ref.
+    const [insertSql, insertParams] = mockExecute.mock.calls[3];
     expect(insertSql).toContain('INSERT INTO m1.document_versions');
     expect(insertParams).toContainEqual({ name: 'versionNo', value: { longValue: 2 } });
     expect(insertParams).toContainEqual({
@@ -177,11 +182,12 @@ describe('saveDocumentSectionEdit — happy path', () => {
     expect(written.sections[1]).toEqual(ORIGINAL_CONTENT.sections[1]); // untouched section preserved
     expect(putCall.input.Key).toBe('tenants/tenant-test/documents/doc-1/v2.json');
 
-    // Document reset to DRAFT (4th execute call)
-    const [statusSql] = mockExecute.mock.calls[3];
+    // Document reset to DRAFT (5th execute call)
+    const [statusSql] = mockExecute.mock.calls[4];
     expect(statusSql).toContain("SET status = 'draft'");
 
-    expect(mockCommit).toHaveBeenCalledOnce();
+    // Two commits: phase-1 meta txn + phase-3 write txn.
+    expect(mockCommit).toHaveBeenCalledTimes(2);
     expect(mockPublishAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         detailType: 'Document.SectionEdited',
@@ -198,6 +204,10 @@ describe('saveDocumentSectionEdit — happy path', () => {
         records: [[{ stringValue: 'doc-1' }, { stringValue: 'DRAFT' }, { stringValue: 'v1-key' }]],
         columnMetadata: [{ name: 'document_id' }, { name: 'status' }, { name: 'content_ref' }],
       })
+      .mockResolvedValueOnce({
+        records: [[{ stringValue: 'draft' }]],
+        columnMetadata: [{ name: 'status' }],
+      }) // FOR UPDATE document lock — returns the live status
       .mockResolvedValueOnce({
         records: [[{ longValue: 2 }]],
         columnMetadata: [{ name: 'next' }],
@@ -314,6 +324,9 @@ describe('saveDocumentSectionEdit — not-found paths', () => {
         }),
       ),
     ).rejects.toThrow('SECTION_NOT_FOUND');
-    expect(mockRollback).toHaveBeenCalledOnce();
+    // Thrown in phase 2 (S3 merge), AFTER the meta txn committed and before
+    // the write txn opened — nothing is left to roll back.
+    expect(mockRollback).not.toHaveBeenCalled();
+    expect(mockCommit).toHaveBeenCalledOnce(); // phase-1 meta txn
   });
 });

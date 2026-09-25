@@ -65,31 +65,33 @@ describe('handler — idempotent skip (ACC-3)', () => {
     // Since we can't predict the exact hash, we'll capture it on first call.
     let capturedHash: string | null = null;
 
-    signedFetchMock.mockImplementation(
-      (method: string, _endpoint: string, path: string) => {
-        if (method === 'POST' && path.includes('_search')) {
-          if (capturedHash) {
-            return Promise.resolve({
-              status: 200,
-              body: JSON.stringify({ hits: { hits: [{ _source: { contentHash: capturedHash } }] } }),
-            });
-          }
-          // First call: return empty search (no _meta doc exists)
-          return Promise.resolve({ status: 200, body: JSON.stringify({ hits: { hits: [] } }) });
+    signedFetchMock.mockImplementation((method: string, _endpoint: string, path: string) => {
+      if (method === 'POST' && path.includes('_search')) {
+        if (capturedHash) {
+          return Promise.resolve({
+            status: 200,
+            body: JSON.stringify({ hits: { hits: [{ _source: { contentHash: capturedHash } }] } }),
+          });
         }
-        if (method === 'DELETE') {
-          return Promise.resolve({ status: 200, body: '{"acknowledged":true}' });
-        }
-        if (method === 'PUT') {
-          return Promise.resolve({ status: 200, body: '{}' }); // createIndex
-        }
-        // POST /_doc (chunk indexing + _meta write)
-        return Promise.resolve({ status: 201, body: '{"_id":"auto-1"}' });
-      },
-    );
+        // First call: return empty search (no _meta doc exists)
+        return Promise.resolve({ status: 200, body: JSON.stringify({ hits: { hits: [] } }) });
+      }
+      if (method === 'DELETE') {
+        return Promise.resolve({ status: 200, body: '{"acknowledged":true}' });
+      }
+      if (method === 'PUT') {
+        return Promise.resolve({ status: 200, body: '{}' }); // createIndex
+      }
+      // POST /_doc (chunk indexing + _meta write)
+      return Promise.resolve({ status: 201, body: '{"_id":"auto-1"}' });
+    });
 
     // First: do a full seed to capture the real hash
-    verifyTemplateMock.mockResolvedValue({ collection: 'cumplify-iso-kb', dimension: 1024, tenantIdType: 'keyword' });
+    verifyTemplateMock.mockResolvedValue({
+      collection: 'cumplify-iso-kb',
+      dimension: 1024,
+      tenantIdType: 'keyword',
+    });
     lambdaSendMock.mockResolvedValue(mockEmbedResponse());
 
     const firstResult = await seed();
@@ -99,17 +101,15 @@ describe('handler — idempotent skip (ACC-3)', () => {
     // Reset mocks for second call
     signedFetchMock.mockReset();
     lambdaSendMock.mockReset();
-    signedFetchMock.mockImplementation(
-      (method: string, _endpoint: string, path: string) => {
-        if (method === 'POST' && path.includes('_search')) {
-          return Promise.resolve({
-            status: 200,
-            body: JSON.stringify({ hits: { hits: [{ _source: { contentHash: capturedHash } }] } }),
-          });
-        }
-        return Promise.resolve({ status: 201, body: '{}' });
-      },
-    );
+    signedFetchMock.mockImplementation((method: string, _endpoint: string, path: string) => {
+      if (method === 'POST' && path.includes('_search')) {
+        return Promise.resolve({
+          status: 200,
+          body: JSON.stringify({ hits: { hits: [{ _source: { contentHash: capturedHash } }] } }),
+        });
+      }
+      return Promise.resolve({ status: 201, body: '{}' });
+    });
 
     // Second call: should skip
     const secondResult = await seed();
@@ -122,22 +122,24 @@ describe('handler — idempotent skip (ACC-3)', () => {
 
 describe('handler — full seed on mismatch', () => {
   it('seeds all chunks when hash mismatches', async () => {
-    signedFetchMock.mockImplementation(
-      (method: string, _endpoint: string, path: string) => {
-        if (method === 'POST' && path.includes('_search')) {
-          return Promise.resolve({ status: 200, body: JSON.stringify({ hits: { hits: [] } }) });
-        }
-        if (method === 'DELETE') {
-          return Promise.resolve({ status: 200, body: '{"acknowledged":true}' });
-        }
-        if (method === 'PUT') {
-          return Promise.resolve({ status: 200, body: '{}' }); // createIndex
-        }
-        // POST /_doc (chunk indexing + _meta write)
-        return Promise.resolve({ status: 201, body: '{"_id":"auto-1"}' });
-      },
-    );
-    verifyTemplateMock.mockResolvedValue({ collection: 'cumplify-iso-kb', dimension: 1024, tenantIdType: 'keyword' });
+    signedFetchMock.mockImplementation((method: string, _endpoint: string, path: string) => {
+      if (method === 'POST' && path.includes('_search')) {
+        return Promise.resolve({ status: 200, body: JSON.stringify({ hits: { hits: [] } }) });
+      }
+      if (method === 'DELETE') {
+        return Promise.resolve({ status: 200, body: '{"acknowledged":true}' });
+      }
+      if (method === 'PUT') {
+        return Promise.resolve({ status: 200, body: '{}' }); // createIndex
+      }
+      // POST /_doc (chunk indexing + _meta write)
+      return Promise.resolve({ status: 201, body: '{"_id":"auto-1"}' });
+    });
+    verifyTemplateMock.mockResolvedValue({
+      collection: 'cumplify-iso-kb',
+      dimension: 1024,
+      tenantIdType: 'keyword',
+    });
     lambdaSendMock.mockResolvedValue(mockEmbedResponse());
 
     const result = await seed();
@@ -152,24 +154,20 @@ describe('handler — full seed on mismatch', () => {
 
 describe('handler — template fail-closed (ACC-5)', () => {
   it('aborts when verifyTemplate throws', async () => {
-    signedFetchMock.mockImplementation(
-      (method: string, _endpoint: string, path: string) => {
-        if (method === 'POST' && path.includes('_search')) {
-          return Promise.resolve({ status: 200, body: JSON.stringify({ hits: { hits: [] } }) });
-        }
-        if (method === 'DELETE') {
-          return Promise.resolve({ status: 200, body: '{"acknowledged":true}' });
-        }
-        return Promise.resolve({ status: 200, body: '{}' });
-      },
-    );
+    signedFetchMock.mockImplementation((method: string, _endpoint: string, path: string) => {
+      if (method === 'POST' && path.includes('_search')) {
+        return Promise.resolve({ status: 200, body: JSON.stringify({ hits: { hits: [] } }) });
+      }
+      if (method === 'DELETE') {
+        return Promise.resolve({ status: 200, body: '{"acknowledged":true}' });
+      }
+      return Promise.resolve({ status: 200, body: '{}' });
+    });
     verifyTemplateMock.mockRejectedValue(
       new Error('FAIL-CLOSED cumplify-iso-kb: metadata.lang.type=undefined, expected keyword'),
     );
 
-    await expect(seed()).rejects.toThrow(
-      /FAIL-CLOSED/,
-    );
+    await expect(seed()).rejects.toThrow(/FAIL-CLOSED/);
     // No embeds or indexing attempted after template failure
     expect(lambdaSendMock).not.toHaveBeenCalled();
   });
@@ -197,7 +195,11 @@ describe('handler — _meta doc shape (D-2)', () => {
         return Promise.resolve({ status: 201, body: '{"_id":"auto-1"}' });
       },
     );
-    verifyTemplateMock.mockResolvedValue({ collection: 'cumplify-iso-kb', dimension: 1024, tenantIdType: 'keyword' });
+    verifyTemplateMock.mockResolvedValue({
+      collection: 'cumplify-iso-kb',
+      dimension: 1024,
+      tenantIdType: 'keyword',
+    });
     lambdaSendMock.mockResolvedValue(mockEmbedResponse());
 
     await seed();

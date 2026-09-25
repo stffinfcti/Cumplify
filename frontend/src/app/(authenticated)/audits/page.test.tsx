@@ -96,8 +96,7 @@ describe('Audit Studio (S4)', () => {
 
   it('expanded detail does NOT show "Complete audit" when status is completed (B1.1)', async () => {
     mockQuery.mockImplementation(async (q: string) => {
-      if (q.includes('ListAudits'))
-        return { listAudits: [{ ...AUDIT, status: 'completed' }] };
+      if (q.includes('ListAudits')) return { listAudits: [{ ...AUDIT, status: 'completed' }] };
       if (q.includes('ListAuditFindings')) return { listAuditFindings: [] };
       if (q.includes('ListAuditChecklists')) return { listAuditChecklists: [] };
       throw new Error(`unmocked: ${q.slice(0, 40)}`);
@@ -107,7 +106,9 @@ describe('Audit Studio (S4)', () => {
 
     fireEvent.click(screen.getByTestId('audit-row-audit-1'));
     await waitFor(() => expect(screen.getByTestId('arb-propose-finding')).toBeInTheDocument());
-    expect(screen.queryByRole('button', { name: 'auditStudio.completeAudit' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'auditStudio.completeAudit' }),
+    ).not.toBeInTheDocument();
   });
 
   it('expanded detail shows "View readiness scores" action (B1.2)', async () => {
@@ -135,7 +136,8 @@ describe('Audit Studio (S4)', () => {
       expect(screen.getByRole('button', { name: 'auditStudio.viewReadiness' })).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByRole('button', { name: 'auditStudio.viewReadiness' }));
-    await waitFor(() => expect(screen.getByText('Network timeout')).toBeInTheDocument());
+    // Non-code messages route to the localized generic — no English internals
+    await waitFor(() => expect(screen.getByText('errors.generic')).toBeInTheDocument());
   });
 
   it('readiness button renders explicit empty state when scores are empty (amendment 1)', async () => {

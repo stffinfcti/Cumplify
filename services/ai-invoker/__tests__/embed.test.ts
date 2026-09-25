@@ -65,6 +65,7 @@ vi.stubEnv('BUS_NAME', 'cumplify-events');
 vi.stubEnv('AWS_REGION', 'us-east-1');
 
 const { embed, resetEmbedClient } = await import('../src/embed.js');
+const { resetWeightsCache } = await import('../src/metering.js');
 
 describe('embed', () => {
   beforeEach(() => {
@@ -72,30 +73,36 @@ describe('embed', () => {
     mockDdbSend.mockReset();
     mockEbSend.mockReset();
     resetEmbedClient();
+    // weightsCache is module-level — isolate per-call DDB queries between its
+    resetWeightsCache();
 
     // Default: credit pre-check passes (GetItem returns balance > 0)
-    mockDdbSend.mockImplementation((cmd: { input?: { Key?: unknown; KeyConditionExpression?: string } }) => {
-      // Credit pre-check (GetItem on METER)
-      if (cmd.input && 'Key' in cmd.input) {
-        return Promise.resolve({ Item: null }); // No meter row = no usage = passes
-      }
-      // loadWeights (QueryCommand on MODELWEIGHT#)
-      if (cmd.input && 'KeyConditionExpression' in cmd.input) {
-        return Promise.resolve({
-          Items: [{
-            PK: { S: 'MODELWEIGHT#amazon.titan-embed-text-v2:0' },
-            SK: { S: 'VERSION#20260716' },
-            modelId: { S: 'amazon.titan-embed-text-v2:0' },
-            wIn: { N: '20' },
-            wOut: { N: '0' },
-            effectiveFrom: { S: '2026-07-16' },
-            sourceCommit: { S: 'b6f2c39' },
-          }],
-        });
-      }
-      // incrementMeter (UpdateItem)
-      return Promise.resolve({});
-    });
+    mockDdbSend.mockImplementation(
+      (cmd: { input?: { Key?: unknown; KeyConditionExpression?: string } }) => {
+        // Credit pre-check (GetItem on METER)
+        if (cmd.input && 'Key' in cmd.input) {
+          return Promise.resolve({ Item: null }); // No meter row = no usage = passes
+        }
+        // loadWeights (QueryCommand on MODELWEIGHT#)
+        if (cmd.input && 'KeyConditionExpression' in cmd.input) {
+          return Promise.resolve({
+            Items: [
+              {
+                PK: { S: 'MODELWEIGHT#amazon.titan-embed-text-v2:0' },
+                SK: { S: 'VERSION#20260716' },
+                modelId: { S: 'amazon.titan-embed-text-v2:0' },
+                wIn: { N: '20' },
+                wOut: { N: '0' },
+                effectiveFrom: { S: '2026-07-16' },
+                sourceCommit: { S: 'b6f2c39' },
+              },
+            ],
+          });
+        }
+        // incrementMeter (UpdateItem)
+        return Promise.resolve({});
+      },
+    );
 
     // Default: telemetry succeeds
     mockEbSend.mockResolvedValue({});
@@ -103,10 +110,12 @@ describe('embed', () => {
 
   it('calls InvokeModel with correct model and body shape', async () => {
     mockBedrockSend.mockResolvedValueOnce({
-      body: Buffer.from(JSON.stringify({
-        embedding: Array(1024).fill(0.1),
-        inputTextTokenCount: 7,
-      })),
+      body: Buffer.from(
+        JSON.stringify({
+          embedding: Array(1024).fill(0.1),
+          inputTextTokenCount: 7,
+        }),
+      ),
     });
 
     const result = await embed({
@@ -128,15 +137,17 @@ describe('embed', () => {
     // Verify result
     expect(result.embedding).toHaveLength(1024);
     expect(result.tokenCount).toBe(7);
-    expect(result.credits).toBeCloseTo(7 * 20 / 1_000_000, 8); // 0.00014
+    expect(result.credits).toBeCloseTo((7 * 20) / 1_000_000, 8); // 0.00014
   });
 
   it('meters credits correctly (inputTokens × wIn / 1M)', async () => {
     mockBedrockSend.mockResolvedValueOnce({
-      body: Buffer.from(JSON.stringify({
-        embedding: Array(1024).fill(0.5),
-        inputTextTokenCount: 500,
-      })),
+      body: Buffer.from(
+        JSON.stringify({
+          embedding: Array(1024).fill(0.5),
+          inputTextTokenCount: 500,
+        }),
+      ),
     });
 
     const result = await embed({
@@ -154,10 +165,12 @@ describe('embed', () => {
 
   it('emits telemetry with correct attribution fields', async () => {
     mockBedrockSend.mockResolvedValueOnce({
-      body: Buffer.from(JSON.stringify({
-        embedding: Array(1024).fill(0.0),
-        inputTextTokenCount: 10,
-      })),
+      body: Buffer.from(
+        JSON.stringify({
+          embedding: Array(1024).fill(0.0),
+          inputTextTokenCount: 10,
+        }),
+      ),
     });
 
     await embed({
@@ -170,9 +183,11 @@ describe('embed', () => {
 
     // Telemetry event emitted
     expect(mockEbSend).toHaveBeenCalledTimes(1);
-    const entry = (mockEbSend.mock.calls[0][0] as {
-      input: { Entries: Array<{ Detail: string }> };
-    }).input.Entries[0];
+    const entry = (
+      mockEbSend.mock.calls[0][0] as {
+        input: { Entries: Array<{ Detail: string }> };
+      }
+    ).input.Entries[0];
     const detail = JSON.parse(entry.Detail);
     expect(detail.tenantId).toBe('tenant-3');
     expect(detail.agent).toBe('guru-14001');
@@ -188,10 +203,12 @@ describe('embed', () => {
     // The embed function should NOT catch/retry AOSS errors — that's the caller's job.
     // This test verifies embed makes exactly ONE Bedrock call and returns.
     mockBedrockSend.mockResolvedValueOnce({
-      body: Buffer.from(JSON.stringify({
-        embedding: Array(1024).fill(0.0),
-        inputTextTokenCount: 3,
-      })),
+      body: Buffer.from(
+        JSON.stringify({
+          embedding: Array(1024).fill(0.0),
+          inputTextTokenCount: 3,
+        }),
+      ),
     });
 
     await embed({
@@ -212,31 +229,38 @@ describe('embed — systemOp threading (iso-kb-seeding Task 2)', () => {
     mockDdbSend.mockReset();
     mockEbSend.mockReset();
     resetEmbedClient();
+    resetWeightsCache();
 
     // loadWeights returns valid weights
-    mockDdbSend.mockImplementation((cmd: { input?: { Key?: unknown; KeyConditionExpression?: string } }) => {
-      if (cmd.input && 'KeyConditionExpression' in cmd.input) {
-        return Promise.resolve({
-          Items: [{
-            PK: { S: 'MODELWEIGHT#amazon.titan-embed-text-v2:0' },
-            SK: { S: 'VERSION#20260716' },
-            modelId: { S: 'amazon.titan-embed-text-v2:0' },
-            wIn: { N: '20' },
-            wOut: { N: '0' },
-            effectiveFrom: { S: '2026-07-16' },
-            sourceCommit: { S: 'b6f2c39' },
-          }],
-        });
-      }
-      return Promise.resolve({});
-    });
+    mockDdbSend.mockImplementation(
+      (cmd: { input?: { Key?: unknown; KeyConditionExpression?: string } }) => {
+        if (cmd.input && 'KeyConditionExpression' in cmd.input) {
+          return Promise.resolve({
+            Items: [
+              {
+                PK: { S: 'MODELWEIGHT#amazon.titan-embed-text-v2:0' },
+                SK: { S: 'VERSION#20260716' },
+                modelId: { S: 'amazon.titan-embed-text-v2:0' },
+                wIn: { N: '20' },
+                wOut: { N: '0' },
+                effectiveFrom: { S: '2026-07-16' },
+                sourceCommit: { S: 'b6f2c39' },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({});
+      },
+    );
 
     mockEbSend.mockResolvedValue({});
     mockBedrockSend.mockResolvedValue({
-      body: Buffer.from(JSON.stringify({
-        embedding: Array(1024).fill(0.1),
-        inputTextTokenCount: 15,
-      })),
+      body: Buffer.from(
+        JSON.stringify({
+          embedding: Array(1024).fill(0.1),
+          inputTextTokenCount: 15,
+        }),
+      ),
     });
   });
 
@@ -247,15 +271,17 @@ describe('embed — systemOp threading (iso-kb-seeding Task 2)', () => {
       if (cmd.input && 'KeyConditionExpression' in cmd.input) {
         callLog.push('query:loadWeights');
         return Promise.resolve({
-          Items: [{
-            PK: { S: 'MODELWEIGHT#amazon.titan-embed-text-v2:0' },
-            SK: { S: 'VERSION#20260716' },
-            modelId: { S: 'amazon.titan-embed-text-v2:0' },
-            wIn: { N: '20' },
-            wOut: { N: '0' },
-            effectiveFrom: { S: '2026-07-16' },
-            sourceCommit: { S: 'b6f2c39' },
-          }],
+          Items: [
+            {
+              PK: { S: 'MODELWEIGHT#amazon.titan-embed-text-v2:0' },
+              SK: { S: 'VERSION#20260716' },
+              modelId: { S: 'amazon.titan-embed-text-v2:0' },
+              wIn: { N: '20' },
+              wOut: { N: '0' },
+              effectiveFrom: { S: '2026-07-16' },
+              sourceCommit: { S: 'b6f2c39' },
+            },
+          ],
         });
       }
       if (cmd.input && 'UpdateExpression' in cmd.input) {
@@ -300,9 +326,7 @@ describe('embed — systemOp threading (iso-kb-seeding Task 2)', () => {
     });
 
     // incrementMeter is an UpdateItem call
-    const updateCalls = mockDdbSend.mock.calls.filter(
-      (call) => call[0]?.input?.UpdateExpression,
-    );
+    const updateCalls = mockDdbSend.mock.calls.filter((call) => call[0]?.input?.UpdateExpression);
     expect(updateCalls.length).toBeGreaterThan(0);
   });
 
@@ -317,9 +341,11 @@ describe('embed — systemOp threading (iso-kb-seeding Task 2)', () => {
     });
 
     expect(mockEbSend).toHaveBeenCalledTimes(1);
-    const entry = (mockEbSend.mock.calls[0][0] as {
-      input: { Entries: Array<{ Detail: string }> };
-    }).input.Entries[0];
+    const entry = (
+      mockEbSend.mock.calls[0][0] as {
+        input: { Entries: Array<{ Detail: string }> };
+      }
+    ).input.Entries[0];
     const detail = JSON.parse(entry.Detail);
     expect(detail.systemOp).toBe(true);
     expect(detail.tenantId).toBe('__ISO_CANON__');
@@ -336,9 +362,11 @@ describe('embed — systemOp threading (iso-kb-seeding Task 2)', () => {
     });
 
     expect(mockEbSend).toHaveBeenCalledTimes(1);
-    const entry = (mockEbSend.mock.calls[0][0] as {
-      input: { Entries: Array<{ Detail: string }> };
-    }).input.Entries[0];
+    const entry = (
+      mockEbSend.mock.calls[0][0] as {
+        input: { Entries: Array<{ Detail: string }> };
+      }
+    ).input.Entries[0];
     const detail = JSON.parse(entry.Detail);
     expect(detail.systemOp).toBe(false);
   });

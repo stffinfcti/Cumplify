@@ -149,7 +149,7 @@ export class AiStack extends cdk.Stack {
       },
       contextualGroundingPolicyConfig: {
         filtersConfig: [
-          { type: 'GROUNDING', threshold: 0.90 },
+          { type: 'GROUNDING', threshold: 0.9 },
           { type: 'RELEVANCE', threshold: 0.75 },
         ],
       },
@@ -178,10 +178,7 @@ export class AiStack extends cdk.Stack {
     // ─── AR Policies (spec-35 Task 25: L2 Automated Reasoning) ─────────────
     // Read pre-authored PolicyDefinition from exported JSON files at synth time.
     // These JSONs were built via headless CLI in Tasks 22-24 and exported verbatim.
-    const arPoliciesDir = resolve(
-      dirname(fileURLToPath(import.meta.url)),
-      '../data/ar-policies',
-    );
+    const arPoliciesDir = resolve(dirname(fileURLToPath(import.meta.url)), '../data/ar-policies');
     const clauseCanonDef = JSON.parse(
       readFileSync(resolve(arPoliciesDir, 'clause-canon.json'), 'utf-8'),
     ).policyDefinition;
@@ -194,21 +191,31 @@ export class AiStack extends cdk.Stack {
 
     const clauseCanonPolicy = new bedrock.CfnAutomatedReasoningPolicy(this, 'ClauseCanonPolicy', {
       name: `cumplify-clause-canon-${envConfig.envName}`,
-      description: 'Clause-canon AR policy: validates ISO clause references (152 tuples: 9001/14001/45001)',
+      description:
+        'Clause-canon AR policy: validates ISO clause references (152 tuples: 9001/14001/45001)',
       policyDefinition: clauseCanonDef,
     });
 
-    const rolePermissionsPolicy = new bedrock.CfnAutomatedReasoningPolicy(this, 'RolePermissionsPolicy', {
-      name: `cumplify-role-permissions-${envConfig.envName}`,
-      description: 'Role-permissions AR policy: validates Part 13 v2 12-role RBAC + SoD assertions',
-      policyDefinition: rolePermissionsDef,
-    });
+    const rolePermissionsPolicy = new bedrock.CfnAutomatedReasoningPolicy(
+      this,
+      'RolePermissionsPolicy',
+      {
+        name: `cumplify-role-permissions-${envConfig.envName}`,
+        description:
+          'Role-permissions AR policy: validates Part 13 v2 12-role RBAC + SoD assertions',
+        policyDefinition: rolePermissionsDef,
+      },
+    );
 
-    const planEntitlementsPolicy = new bedrock.CfnAutomatedReasoningPolicy(this, 'PlanEntitlementsPolicy', {
-      name: `cumplify-plan-entitlements-${envConfig.envName}`,
-      description: 'Plan-entitlements AR policy: validates Part 17.2 pricing tier feature gates',
-      policyDefinition: planEntitlementsDef,
-    });
+    const planEntitlementsPolicy = new bedrock.CfnAutomatedReasoningPolicy(
+      this,
+      'PlanEntitlementsPolicy',
+      {
+        name: `cumplify-plan-entitlements-${envConfig.envName}`,
+        description: 'Plan-entitlements AR policy: validates Part 17.2 pricing tier feature gates',
+        policyDefinition: planEntitlementsDef,
+      },
+    );
 
     // ─── AR-clause CfnGuardrail (spec-35 §1.1: clause-canon only) ──────────
     // One AR policy (clause-canon). CrossRegionConfig required for AR.
@@ -218,8 +225,7 @@ export class AiStack extends cdk.Stack {
       blockedInputMessaging: 'Response contains invalid clause citation.',
       blockedOutputsMessaging: 'Response contains invalid clause citation.',
       crossRegionConfig: {
-        guardrailProfileArn:
-          `arn:aws:bedrock:us-east-1:${this.account}:guardrail-profile/us.guardrail.v1:0`,
+        guardrailProfileArn: `arn:aws:bedrock:us-east-1:${this.account}:guardrail-profile/us.guardrail.v1:0`,
       },
       automatedReasoningPolicyConfig: {
         policies: [clauseCanonPolicy.attrPolicyArn],
@@ -235,8 +241,7 @@ export class AiStack extends cdk.Stack {
       blockedInputMessaging: 'Response contains invalid advisory claim.',
       blockedOutputsMessaging: 'Response contains invalid advisory claim.',
       crossRegionConfig: {
-        guardrailProfileArn:
-          `arn:aws:bedrock:us-east-1:${this.account}:guardrail-profile/us.guardrail.v1:0`,
+        guardrailProfileArn: `arn:aws:bedrock:us-east-1:${this.account}:guardrail-profile/us.guardrail.v1:0`,
       },
       automatedReasoningPolicyConfig: {
         policies: [rolePermissionsPolicy.attrPolicyArn, planEntitlementsPolicy.attrPolicyArn],
@@ -287,9 +292,7 @@ export class AiStack extends cdk.Stack {
         sid: 'AutomatedReasoningChecks',
         effect: iam.Effect.ALLOW,
         actions: ['bedrock:InvokeAutomatedReasoningPolicy'],
-        resources: [
-          `arn:aws:bedrock:us-east-1:${this.account}:automated-reasoning-policy/*`,
-        ],
+        resources: [`arn:aws:bedrock:us-east-1:${this.account}:automated-reasoning-policy/*`],
       }),
     );
 
@@ -329,6 +332,21 @@ export class AiStack extends cdk.Stack {
       environment: {
         TABLE_NAME: props.tableName,
         POWERTOOLS_SERVICE_NAME: 'store-token',
+      },
+    });
+
+    // ─── ExpireHitlItem Lambda (SFN timeout catch — shared resolveHitlItem)
+    const expireHitlItemFn = new NodejsFunction(this, 'ExpireHitlItemFn', {
+      entry: 'services/agents/shared/expire-hitl-item.ts',
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      bundling: { externalModules: [], target: 'node22' },
+      environment: {
+        TABLE_NAME: props.tableName,
+        POWERTOOLS_SERVICE_NAME: 'expire-hitl-item',
       },
     });
 
@@ -448,8 +466,28 @@ export class AiStack extends cdk.Stack {
       },
     });
 
-    // Timeout handled by WaitForApproval's TimeoutSeconds (7 days)
-    // On timeout, SFN execution fails — CloudWatch alarm detects failed executions.
+    // Timeout: a 7d unanswered approval previously failed the execution and
+    // left the DDB item PENDING forever — the approval queue card stayed
+    // clickable but the task token was dead, so APPROVE 404'd. Catch
+    // States.Timeout → ExpireHitlItem flips the item through the shared
+    // resolveHitlItem path (TIMED_OUT + 30-day ttl + GSI9 removal — same
+    // vocabulary the resolver-side timeout path uses; a second hand-rolled
+    // UpdateItem would drift vocabulary and never TTL-expire).
+    const expireHitlItem = new tasks.LambdaInvoke(this, 'ExpireHitlItem', {
+      lambdaFunction: expireHitlItemFn,
+      // resultPath (not outputPath) keeps $.timeoutError visible downstream.
+      resultPath: '$.expireResult',
+    });
+    // End the execution FAILED after expiring the item — an approval that
+    // timed out is a failed execution, not a successful one.
+    const hitlTimedOut = new sfn.Fail(this, 'HitlTimedOut', {
+      error: 'HITL_TIMEOUT',
+      cause: 'Approval item expired after 7 days without a decision.',
+    });
+    waitForApproval.addCatch(expireHitlItem.next(hitlTimedOut), {
+      errors: ['States.Timeout'],
+      resultPath: '$.timeoutError',
+    });
 
     // HITL-10: SENT_BACK (SendTaskFailure from the approval Lambda) → terminal Pass.
     // Must be wired via addCatch, not a raw stateJson Catch: CDK renders only states
@@ -477,6 +515,21 @@ export class AiStack extends cdk.Stack {
     // No wildcard addPermission. No other principal may invoke ExecuteWriteback.
     storeTokenLambda.grantInvoke(hitlStateMachine.role);
     executeWritebackLambda.grantInvoke(hitlStateMachine.role);
+    expireHitlItemFn.grantInvoke(hitlStateMachine.role);
+    // ExpireHitlItem writes the HITL item via the shared resolveHitlItem path.
+    expireHitlItemFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:UpdateItem'],
+        resources: [props.tableArn],
+        conditions: {
+          // Can only ever touch HITL-prefixed partitions.
+          'ForAllValues:StringLike': {
+            'dynamodb:LeadingKeys': ['TENANT#*#HITL'],
+          },
+        },
+      }),
+    );
+    props.dynamodbKey.grantEncryptDecrypt(expireHitlItemFn);
 
     // ─── New SQS Queues + DLQs (DocStudio, LeadAuditor, ControlTower) ──────
     const docStudioDlq = this.createStdDlq('DocStudioDlq');
@@ -1147,6 +1200,17 @@ export class AiStack extends cdk.Stack {
       },
     });
 
+    const markRunFailedFn = new NodejsFunction(this, 'MarkRunFailedFn', {
+      entry: 'services/qms-generation/src/mark-run-failed.ts',
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(60),
+      bundling: { externalModules: [], target: 'node22' },
+      environment: { ...genEnv, POWERTOOLS_SERVICE_NAME: 'qms-mark-run-failed' },
+    });
+
     const finalizeManualFn = new NodejsFunction(this, 'FinalizeManualFn', {
       entry: 'services/qms-generation/src/finalize-manual.ts',
       handler: 'handler',
@@ -1188,7 +1252,13 @@ export class AiStack extends cdk.Stack {
       resourceName: `${graphqlApiId}/types/Mutation/fields/publishGenerationEvent`,
     });
 
-    for (const fn of [seedSectionsFn, composeSectionFn, finalizeManualFn, regenerateSectionFn]) {
+    for (const fn of [
+      seedSectionsFn,
+      composeSectionFn,
+      finalizeManualFn,
+      regenerateSectionFn,
+      markRunFailedFn,
+    ]) {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           effect: iam.Effect.ALLOW,
@@ -1208,6 +1278,16 @@ export class AiStack extends cdk.Stack {
           resources: [appRoleSecretArn],
         }),
       );
+      // The app-role secret is encrypted with the dynamodb/secrets CMK
+      // (api-stack.ts AppRoleSecret encryptionKey) — NOT the master-secret
+      // key. Live-proven 2026-07-15: dbSecretKey grant alone → KMS denial.
+      props.dynamodbKey.grantDecrypt(fn);
+    }
+
+    // PutEvents only for the functions that emit progress events —
+    // markRunFailed skips PutEvents (its run_complete publish rides the
+    // @aws_iam AppSync field granted below, not the event bus).
+    for (const fn of [seedSectionsFn, composeSectionFn, finalizeManualFn, regenerateSectionFn]) {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           effect: iam.Effect.ALLOW,
@@ -1215,10 +1295,6 @@ export class AiStack extends cdk.Stack {
           resources: [props.busArn],
         }),
       );
-      // The app-role secret is encrypted with the dynamodb/secrets CMK
-      // (api-stack.ts AppRoleSecret encryptionKey) — NOT the master-secret
-      // key. Live-proven 2026-07-15: dbSecretKey grant alone → KMS denial.
-      props.dynamodbKey.grantDecrypt(fn);
     }
 
     // Working content lives under tenants/* only — no bucket-wide access.
@@ -1235,7 +1311,7 @@ export class AiStack extends cdk.Stack {
     }
 
     // GEN-5 progress events: compose + finalize publish the @aws_iam mutation
-    for (const fn of [composeSectionFn, finalizeManualFn, regenerateSectionFn]) {
+    for (const fn of [composeSectionFn, finalizeManualFn, regenerateSectionFn, markRunFailedFn]) {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           effect: iam.Effect.ALLOW,
@@ -1295,6 +1371,37 @@ export class AiStack extends cdk.Stack {
       backoffRate: 2,
     });
 
+    // Any stage dying post-retry previously stranded the run at 'running'
+    // forever (the SFN failed but nobody touched qms.generation_runs).
+    // Catch-all on every stage → MarkRunFailed flips the row 'failed'.
+    const markRunFailed = new tasks.LambdaInvoke(this, 'MarkRunFailed', {
+      lambdaFunction: markRunFailedFn,
+      // resultPath (not outputPath '$.Payload') so $.stageError survives for
+      // the RunFailed state's causePath.
+      resultPath: '$.markResult',
+    });
+    // MarkRunFailed is a catch target — without a terminal Fail it would
+    // swallow the error and report the execution SUCCEEDED. errorPath/
+    // causePath re-raise the stage's own {Error, Cause} — a static literal
+    // would hide which stage and why in the execution's failure record.
+    const runFailed = new sfn.Fail(this, 'RunFailed', {
+      errorPath: sfn.JsonPath.stringAt('$.stageError.Error'),
+      causePath: sfn.JsonPath.stringAt('$.stageError.Cause'),
+    });
+    const markRunFailedThenFail = markRunFailed.next(runFailed);
+    seedTask.addCatch(markRunFailedThenFail, {
+      errors: ['States.ALL'],
+      resultPath: '$.stageError',
+    });
+    composeMap.addCatch(markRunFailedThenFail, {
+      errors: ['States.ALL'],
+      resultPath: '$.stageError',
+    });
+    finalizeTask.addCatch(markRunFailedThenFail, {
+      errors: ['States.ALL'],
+      resultPath: '$.stageError',
+    });
+
     const docGenStateMachine = new sfn.StateMachine(this, 'DocGenStateMachine', {
       stateMachineName: `cumplify-docgen-${envConfig.envName}`,
       definitionBody: sfn.DefinitionBody.fromChainable(
@@ -1305,8 +1412,12 @@ export class AiStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'DocGenStateMachineArn', { value: docGenStateMachine.stateMachineArn });
-    new cdk.CfnOutput(this, 'RecordWriteGuardrailId', { value: recordWriteGuardrail.attrGuardrailId });
-    new cdk.CfnOutput(this, 'RecordWriteGuardrailVersion', { value: recordWriteGuardrail.attrVersion });
+    new cdk.CfnOutput(this, 'RecordWriteGuardrailId', {
+      value: recordWriteGuardrail.attrGuardrailId,
+    });
+    new cdk.CfnOutput(this, 'RecordWriteGuardrailVersion', {
+      value: recordWriteGuardrail.attrVersion,
+    });
     new cdk.CfnOutput(this, 'SeedSectionsFnArn', { value: seedSectionsFn.functionArn });
     new cdk.CfnOutput(this, 'ComposeSectionFnArn', { value: composeSectionFn.functionArn });
     new cdk.CfnOutput(this, 'FinalizeManualFnArn', { value: finalizeManualFn.functionArn });
@@ -1519,38 +1630,42 @@ export class AiStack extends cdk.Stack {
 
     // AOSS data-access policy for seeder (ACCESS-1b) — additive union with
     // the main policy below (D-4: no priority, AOSS policies are additive).
-    const isoKbSeederAccessPolicy = new opensearchserverless.CfnAccessPolicy(this, 'IsoKbSeederAccessPolicy', {
-      name: `iso-kb-seeder-access`,
-      type: 'data',
-      policy: JSON.stringify([
-        {
-          Rules: [
-            {
-              ResourceType: 'collection',
-              Resource: ['collection/cumplify-iso-kb'],
-              Permission: [
-                'aoss:CreateCollectionItems',
-                'aoss:UpdateCollectionItems',
-                'aoss:DescribeCollectionItems',
-              ],
-            },
-            {
-              ResourceType: 'index',
-              Resource: ['index/cumplify-iso-kb/*'],
-              Permission: [
-                'aoss:CreateIndex',
-                'aoss:DeleteIndex',
-                'aoss:UpdateIndex',
-                'aoss:DescribeIndex',
-                'aoss:ReadDocument',
-                'aoss:WriteDocument',
-              ],
-            },
-          ],
-          Principal: [isoKbSeederFn.role!.roleArn],
-        },
-      ]),
-    });
+    const isoKbSeederAccessPolicy = new opensearchserverless.CfnAccessPolicy(
+      this,
+      'IsoKbSeederAccessPolicy',
+      {
+        name: `iso-kb-seeder-access`,
+        type: 'data',
+        policy: JSON.stringify([
+          {
+            Rules: [
+              {
+                ResourceType: 'collection',
+                Resource: ['collection/cumplify-iso-kb'],
+                Permission: [
+                  'aoss:CreateCollectionItems',
+                  'aoss:UpdateCollectionItems',
+                  'aoss:DescribeCollectionItems',
+                ],
+              },
+              {
+                ResourceType: 'index',
+                Resource: ['index/cumplify-iso-kb/*'],
+                Permission: [
+                  'aoss:CreateIndex',
+                  'aoss:DeleteIndex',
+                  'aoss:UpdateIndex',
+                  'aoss:DescribeIndex',
+                  'aoss:ReadDocument',
+                  'aoss:WriteDocument',
+                ],
+              },
+            ],
+            Principal: [isoKbSeederFn.role!.roleArn],
+          },
+        ]),
+      },
+    );
 
     // FIX-P12-3: CFN-direct CustomResource — serviceToken invokes Lambda directly.
     // No provider Lambda, no invoke policy, no IAM propagation race.
@@ -1734,8 +1849,12 @@ export class AiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DocGenGuardrailVersion', { value: docGenGuardrail.attrVersion });
     new cdk.CfnOutput(this, 'ArClauseGuardrailId', { value: arClauseGuardrail.attrGuardrailId });
     new cdk.CfnOutput(this, 'ArClauseGuardrailVersion', { value: arClauseGuardrail.attrVersion });
-    new cdk.CfnOutput(this, 'ArAdvisoryGuardrailId', { value: arAdvisoryGuardrail.attrGuardrailId });
-    new cdk.CfnOutput(this, 'ArAdvisoryGuardrailVersion', { value: arAdvisoryGuardrail.attrVersion });
+    new cdk.CfnOutput(this, 'ArAdvisoryGuardrailId', {
+      value: arAdvisoryGuardrail.attrGuardrailId,
+    });
+    new cdk.CfnOutput(this, 'ArAdvisoryGuardrailVersion', {
+      value: arAdvisoryGuardrail.attrVersion,
+    });
     new cdk.CfnOutput(this, 'HitlStateMachineArn', { value: hitlStateMachine.stateMachineArn });
 
     new cdk.CfnOutput(this, 'DocStudioQueueUrl', { value: docStudioQueue.queueUrl });

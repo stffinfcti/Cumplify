@@ -14,6 +14,13 @@ import { retrieve, type RetrievalRequest } from '../shared/retrieval.js';
 // Skip in CI — requires live AOSS (architect-executed in Task 12)
 const LIVE_AOSS = process.env.LIVE_AOSS_ENDPOINT;
 
+// LOUD-SKIP (TEST-4): an int-lane run that silently skips every cross-tenant
+// assertion is indistinguishable from a pass. Fails loudly when the lane
+// isn't provisioned instead of reporting green.
+it('int lane provisioned: LIVE_AOSS_ENDPOINT is set', () => {
+  expect(LIVE_AOSS).toBeTruthy();
+});
+
 describe.skipIf(!LIVE_AOSS)('cross-tenant isolation (REQ-RET-2, live AOSS)', () => {
   const endpoint = LIVE_AOSS!;
   const indexName = 'tenant-docs-kb';

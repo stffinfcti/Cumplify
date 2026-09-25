@@ -15,8 +15,12 @@ import {
   extractAgentContext,
   beginTenantTransaction,
   publishAuditEvent,
+  requireModuleRole,
   marshalOne,
   marshalMany,
+  LIST_QUERY_LIMIT,
+  type AppSyncEvent,
+  rollbackQuietly,
 } from './shared.js';
 import { mapEnum, RISK_CATEGORY_MAP } from './enum-mappings.js';
 
@@ -24,36 +28,45 @@ const logger = new Logger({ serviceName: 'resolver-m5' });
 const lambdaClient = new LambdaClient({});
 const RISK_SENTINEL_FN_ARN = process.env.RISK_SENTINEL_FN_ARN ?? '';
 
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
+type IsoStandard = 'ISO9001' | 'ISO14001' | 'ISO45001';
+const ISO_STANDARDS = new Set<IsoStandard>(['ISO9001', 'ISO14001', 'ISO45001']);
+function toIsoStandard(raw: unknown): IsoStandard {
+  if (!ISO_STANDARDS.has(raw as IsoStandard)) {
+    throw new Error(`RISK_STANDARD_UNKNOWN: ${String(raw)}`);
+  }
+  return raw as IsoStandard;
 }
 
 export async function handler(event: AppSyncEvent): Promise<unknown> {
   // RS-7: agent* (@aws_iam) fields never carry resolverContext — branch
   // BEFORE extractContext, which would throw for them.
   if (event.info.fieldName === 'agentAssessRisk') {
-    const { tenantId, actor } = extractAgentContext(event.arguments, 'RiskSentinel');
+    const { tenantId, actor } = extractAgentContext(
+      event.arguments,
+      'RiskSentinel',
+      event.identity,
+    );
     logger.appendKeys({ tenantId, requestField: event.info.fieldName });
     return agentAssessRisk(event, tenantId, actor);
   }
 
   const ctx = extractContext(event);
-  const { tenantId, sub } = ctx;
+  const { tenantId, sub, role } = ctx;
   logger.appendKeys({ tenantId, requestField: event.info.fieldName });
 
   const fieldName = event.info.fieldName;
 
+  // M-effort: M5 write mutations are role-gated at entry (Part 13 matrix);
+  // queries stay at the authenticated floor.
   switch (fieldName) {
     case 'createRisk':
-      return createRisk(event, tenantId, sub);
+      return requireModuleRole(role, 'M5', () => createRisk(event, tenantId, sub));
     case 'addRiskTreatment':
-      return addRiskTreatment(event, tenantId, sub);
+      return requireModuleRole(role, 'M5', () => addRiskTreatment(event, tenantId, sub));
     case 'createChangePlan':
-      return createChangePlan(event, tenantId, sub);
+      return requireModuleRole(role, 'M5', () => createChangePlan(event, tenantId, sub));
     case 'runRiskAssessment':
-      return runRiskAssessment(event, tenantId, sub);
+      return requireModuleRole(role, 'M5', () => runRiskAssessment(event, tenantId, sub));
     case 'getRisk':
       return getRisk(event, tenantId);
     case 'getCrossRegisterRiskView':
@@ -87,17 +100,13 @@ async function createRisk(event: AppSyncEvent, tenantId: string, actor: string) 
       ],
     );
 
-    // Architect fix 2026-07-14 (migration 010): risk_register_view was refreshed
-    // once at migration-008 time WITH NO DATA and never again — app_role can't
-    // REFRESH the view directly (REVOKE-ALL'd in migration 009, SECURITY DEFINER
-    // isolation design), so this goes through the same narrow SECURITY DEFINER
-    // accessor pattern already used for reads (get_risk_register_view()). Same
-    // transaction as the INSERT — the register reflects the write atomically.
-    await txn.execute(`SELECT m5_views.refresh_risk_register_view()`);
-
     await txn.commit();
 
     const risk = marshalOne(result);
+
+    // M-effort: the register view refresh moved to AFTER commit (see
+    // refreshRiskRegisterView) — it no longer rides the write's transaction.
+    await refreshRiskRegisterView(tenantId);
 
     // Publish audit event with REAL id from INSERT result (BUG-B fix)
     await publishAuditEvent({
@@ -105,7 +114,7 @@ async function createRisk(event: AppSyncEvent, tenantId: string, actor: string) 
       actor,
       module: 'M5',
       clauseRef: 'ISO 9001 6.1',
-      standard: 'ISO9001',
+      standard: toIsoStandard(risk?.standard),
       detailType: 'Risk.Created',
       source: 'cumplify.m5.risk',
       entityId: String(risk?.id ?? ''),
@@ -115,7 +124,7 @@ async function createRisk(event: AppSyncEvent, tenantId: string, actor: string) 
     logger.info('Risk created', { tenantId, riskId: risk?.id });
     return risk;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -153,20 +162,18 @@ async function agentAssessRisk(event: AppSyncEvent, tenantId: string, actor: str
       throw new Error('RISK_NOT_FOUND');
     }
 
-    // Same SECURITY DEFINER accessor as createRisk — app_role cannot REFRESH
-    // the view directly; same transaction so the register reflects the
-    // updated rating atomically.
-    await txn.execute(`SELECT m5_views.refresh_risk_register_view()`);
-
     await txn.commit();
     const risk = marshalOne(result);
+
+    // Same post-commit refresh as createRisk (see refreshRiskRegisterView).
+    await refreshRiskRegisterView(tenantId);
 
     await publishAuditEvent({
       tenantId,
       actor,
       module: 'M5',
       clauseRef: 'ISO 9001 6.1',
-      standard: (risk?.standard as 'ISO9001' | 'ISO14001' | 'ISO45001') ?? 'ISO9001',
+      standard: toIsoStandard(risk?.standard),
       detailType: 'Risk.Assessed',
       source: 'cumplify.m5.risk',
       entityId: String(risk?.id ?? ''),
@@ -181,7 +188,7 @@ async function agentAssessRisk(event: AppSyncEvent, tenantId: string, actor: str
     logger.info('Agent-assessed risk updated', { tenantId, riskId: risk?.id });
     return risk;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -207,7 +214,7 @@ async function runRiskAssessment(event: AppSyncEvent, tenantId: string, actor: s
     if (!risk) throw new Error('RISK_NOT_FOUND');
     await txn.commit();
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 
@@ -273,7 +280,7 @@ async function addRiskTreatment(event: AppSyncEvent, tenantId: string, actor: st
 
     return treatment;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -312,7 +319,7 @@ async function createChangePlan(event: AppSyncEvent, tenantId: string, actor: st
 
     return plan;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -327,7 +334,7 @@ async function getRisk(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -357,13 +364,44 @@ async function getCrossRegisterRiskView(event: AppSyncEvent, tenantId: string) {
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(
-      `SELECT * FROM m5_views.get_risk_register_view() ${where}`,
+      `SELECT * FROM m5_views.get_risk_register_view() ${where} LIMIT ${LIST_QUERY_LIMIT}`,
       params,
     );
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
+  }
+}
+
+/**
+ * Refresh the register materialized view AFTER the domain write's transaction
+ * commits (M-effort, spec 2026-09 audit).
+ *
+ * Why post-commit: m5_views.refresh_risk_register_view() is a SECURITY DEFINER
+ * accessor that REFRESHes the MV — a heavyweight, view-locking statement that
+ * used to run INSIDE the write transaction. In-transaction it (a) serializes
+ * concurrent writers on the MV lock for the whole txn, and (b) lets a refresh
+ * failure roll back an otherwise-good domain write. Post-commit keeps the
+ * write durable regardless; the register converges once the refresh finishes.
+ * A failed refresh is logged loudly and swallowed — the next write re-runs it,
+ * and get_risk_register_view() readers are never worse than one refresh stale.
+ */
+async function refreshRiskRegisterView(tenantId: string): Promise<void> {
+  try {
+    const txn = await beginTenantTransaction(tenantId);
+    try {
+      await txn.execute(`SELECT m5_views.refresh_risk_register_view()`);
+      await txn.commit();
+    } catch (err) {
+      await rollbackQuietly(txn);
+      throw err;
+    }
+  } catch (err) {
+    logger.error('Post-commit risk-register refresh failed', {
+      tenantId,
+      error: (err as Error).message,
+    });
   }
 }

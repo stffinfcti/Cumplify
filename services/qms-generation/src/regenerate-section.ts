@@ -34,9 +34,12 @@
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { Logger } from '@aws-lambda-powertools/logger';
 import {
+  assertTenantIdSafe,
   beginTenantTransaction,
   marshalMany,
   publishAuditEvent,
+  versionContentKey,
+  rollbackQuietly,
 } from '../../api/src/resolvers/shared.js';
 import { handler as composeSection } from './compose-section.js';
 import { sectionContentKey } from './seed-sections.js';
@@ -51,6 +54,7 @@ import {
   type SectionState,
   type MasterListEntry,
 } from './derive.js';
+import { loadRun, loadSectionSkeletons } from './run-state.js';
 
 const logger = new Logger({ serviceName: 'qms-regenerate-section' });
 const s3 = new S3Client({});
@@ -73,21 +77,9 @@ export interface RegenerateInput {
 
 type Txn = Awaited<ReturnType<typeof beginTenantTransaction>>;
 
-function versionContentKey(tenantId: string, documentId: string, versionNo: number): string {
-  return `tenants/${tenantId}/documents/${documentId}/v${versionNo}.json`;
-}
-
 async function getJson(key: string): Promise<Record<string, unknown>> {
   const obj = await s3.send(new GetObjectCommand({ Bucket: GENERAL_BUCKET, Key: key }));
   return JSON.parse(await obj.Body!.transformToString()) as Record<string, unknown>;
-}
-
-async function nextVersionNo(txn: Txn, documentId: string): Promise<number> {
-  const res = await txn.execute(
-    `SELECT COALESCE(MAX(version_no), 0) + 1 FROM m1.document_versions WHERE document_id = :docId::uuid`,
-    [{ name: 'docId', value: { stringValue: documentId } }],
-  );
-  return Number((res.records![0][0] as { longValue?: number }).longValue ?? 1);
 }
 
 async function writeNewVersion(
@@ -127,84 +119,6 @@ async function writeNewVersion(
   return { contentRef, contentSha };
 }
 
-/** Load all section states of a run (finalize-manual loader shape). */
-async function loadSectionStates(txn: Txn, runId: string): Promise<SectionState[]> {
-  const sectionsResult = await txn.execute(
-    `SELECT id, harmonization_key, status, content_s3_key, clause_registry_ids
-     FROM qms.generation_sections WHERE run_id = :runId::uuid ORDER BY harmonization_key`,
-    [{ name: 'runId', value: { stringValue: runId } }],
-  );
-  const sectionRows: Record<string, unknown>[] = marshalMany(sectionsResult).map((r) => ({
-    ...r,
-    status: (r.status as string).toLowerCase(),
-  }));
-
-  const registryResult = await txn.execute(
-    `SELECT id, standard, clause_no, clause_title, annex_sl_mode, doc_type, sort_order
-     FROM qms.clause_registry`,
-  );
-  const registryById = new Map(marshalMany(registryResult).map((r) => [r.id as string, r]));
-
-  const sections: SectionState[] = [];
-  for (const row of sectionRows) {
-    const clauseIds = (row.clauseRegistryIds as string[]) ?? [];
-    const clauses = clauseIds
-      .map((id) => registryById.get(id))
-      .filter((c): c is NonNullable<typeof c> => !!c)
-      .map((c) => ({
-        standard: c.standard as string,
-        clauseNo: c.clauseNo as string,
-        clauseTitle: c.clauseTitle as string,
-        annexSlMode: c.annexSlMode as string,
-        docType: (c.docType as string).toLowerCase(),
-      }));
-    const sortOrder = Math.min(
-      ...clauseIds.map((id) => (registryById.get(id)?.sortOrder as number) ?? 9999),
-    );
-    let content: Record<string, unknown> | null = null;
-    const key = row.contentS3Key as string | null;
-    if (key) content = await getJson(key);
-    sections.push({
-      sectionKey: row.harmonizationKey as string,
-      kind: row.status as SectionState['kind'],
-      clauses,
-      content,
-      sortOrder,
-    });
-  }
-  return sections;
-}
-
-interface RunRow {
-  standards: string[];
-  manualDocumentId: string | null;
-  status: string;
-  profile: Record<string, unknown>;
-}
-
-async function loadRun(txn: Txn, runId: string): Promise<RunRow | null> {
-  const runResult = await txn.execute(
-    `SELECT gr.standards, gr.manual_document_id, gr.status, opv.payload
-     FROM qms.generation_runs gr
-     JOIN qms.org_profiles op ON op.tenant_id = gr.tenant_id
-     JOIN qms.org_profile_versions opv ON opv.profile_id = op.id AND opv.version_no = gr.profile_version
-     WHERE gr.id = :runId::uuid`,
-    [{ name: 'runId', value: { stringValue: runId } }],
-  );
-  if (!runResult.records?.length) return null;
-  const rec = runResult.records[0];
-  return {
-    standards:
-      (rec[0] as { arrayValue?: { stringValues?: string[] } }).arrayValue?.stringValues ?? [],
-    manualDocumentId: (rec[1] as { stringValue?: string; isNull?: boolean }).stringValue ?? null,
-    status: ((rec[2] as { stringValue?: string }).stringValue ?? '').toLowerCase(),
-    profile: JSON.parse((rec[3] as { stringValue?: string }).stringValue ?? '{}') as Record<
-      string,
-      unknown
-    >,
-  };
-}
-
 /**
  * S3 (Manual Studio): write a HITL-approved section draft in the EXACT shape
  * compose-section ships prose — content JSON {schemaVersion, harmonizationKey,
@@ -225,8 +139,9 @@ async function applyApprovedDraft(
       `SELECT clause_registry_ids FROM qms.generation_sections WHERE id = :id::uuid`,
       [{ name: 'id', value: { stringValue: sectionId } }],
     );
-    const clauseIds =
-      ((marshalMany(secResult)[0]?.clauseRegistryIds as string[] | undefined) ?? []).filter(Boolean);
+    const clauseIds = (
+      (marshalMany(secResult)[0]?.clauseRegistryIds as string[] | undefined) ?? []
+    ).filter(Boolean);
     let clauseRefs: Array<{ standard: string; clauseNo: string }> = [];
     if (clauseIds.length) {
       const clausesResult = await txn.execute(
@@ -269,17 +184,14 @@ async function applyApprovedDraft(
     await txn.commit();
     return 'prose';
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
 
 export async function handler(event: RegenerateInput): Promise<Record<string, unknown>> {
   const { tenantId, runId, harmonizationKey, actor } = event;
+  assertTenantIdSafe(tenantId);
   logger.appendKeys({ tenantId, runId, harmonizationKey });
 
   // ── 1. Guards + reset to pending (review state cleared — APR-1) ───────────
@@ -313,11 +225,7 @@ export async function handler(event: RegenerateInput): Promise<Record<string, un
     );
     await txn1.commit();
   } catch (err) {
-    try {
-      await txn1.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn1);
     throw err;
   }
 
@@ -342,7 +250,8 @@ export async function handler(event: RegenerateInput): Promise<Record<string, un
     newKind = composed.status; // prose | gap | failed
   }
 
-  // ── 3. Version writeback ──────────────────────────────────────────────────
+  // ── 3. Version writeback — one txn, serialized on the run row ───────────
+
   const txn2 = await beginTenantTransaction(tenantId);
   const audit: Record<string, unknown> = {
     runId,
@@ -353,14 +262,87 @@ export async function handler(event: RegenerateInput): Promise<Record<string, un
   };
   let sectionRow: Record<string, unknown>;
   try {
+    // Lock the run row FIRST: every concurrent regeneration of this run
+    // serializes here, so the second observes the first's committed docs,
+    // sections and contents instead of a prefetch snapshot taken before the
+    // lock. Everything downstream — skeletons, content JSONs, doc ids, the
+    // master list, the run-status flip — is read live inside this txn.
+    const runLock = await txn2.execute(
+      `SELECT id FROM qms.generation_runs WHERE id = :runId::uuid FOR UPDATE`,
+      [{ name: 'runId', value: { stringValue: runId } }],
+    );
+    if (!runLock.records?.length) throw new Error('RUN_NOT_FOUND');
+
     const run = (await loadRun(txn2, runId))!;
     const manualId = run.manualDocumentId!;
     const locale = (run.profile.documentLocale as string) ?? 'en';
-    const sections = await loadSectionStates(txn2, runId);
-    const section = sections.find((s) => s.sectionKey === harmonizationKey)!;
 
-    // 3a. New MANUAL version — assembled from ALL current sections
-    const manualVersionNo = await nextVersionNo(txn2, manualId);
+    const skeletons = await loadSectionSkeletons(txn2, runId);
+    const contents = await Promise.all(
+      skeletons.map((sk) => (sk.contentS3Key ? getJson(sk.contentS3Key) : null)),
+    );
+    const sections: SectionState[] = skeletons.map((sk, i) => ({
+      sectionKey: sk.sectionKey,
+      kind: sk.kind,
+      clauses: sk.clauses,
+      sortOrder: sk.sortOrder,
+      content: contents[i],
+    }));
+    const section = sections.find((s) => s.sectionKey === harmonizationKey);
+    if (!section) throw new Error('SECTION_NOT_FOUND');
+
+    // Generated docs are uniquely keyed by harmonization_key (migration 019
+    // partial unique index) — sentinel lookups, not DISTINCT-ON scans.
+    let masterDocId: string | null = null;
+    let matrixDocId: string | null = null;
+    let clauseDocId: string | null = null;
+    const docResult = await txn2.execute(
+      `SELECT d.harmonization_key, d.id, d.doc_type
+       FROM m1.documents d
+       WHERE d.harmonization_key IN ('__MASTER_LIST__', '__CORRELATION_MATRIX__', :hkey)`,
+      [{ name: 'hkey', value: { stringValue: harmonizationKey } }],
+    );
+    for (const row of marshalMany(docResult)) {
+      if (row.harmonizationKey === '__MASTER_LIST__') {
+        masterDocId = row.id as string;
+      } else if (row.harmonizationKey === '__CORRELATION_MATRIX__') {
+        matrixDocId = row.id as string;
+      } else if (row.harmonizationKey === harmonizationKey) {
+        clauseDocId = row.id as string;
+      }
+    }
+    if (!masterDocId) throw new Error('MASTER_LIST_NOT_FOUND');
+
+    // One batched MAX(version_no)+1 for every doc being versioned — the
+    // document rows lock FOR UPDATE in id order (deterministic lock order
+    // across concurrent regenerations) so a racing version writer lands on
+    // migration 022's UNIQUE(document_id, version_no) instead of colliding
+    // silently.
+    const versionedDocIds = [
+      ...new Set(
+        [manualId, clauseDocId, newKind !== priorKind ? matrixDocId : null, masterDocId].filter(
+          (id): id is string => !!id,
+        ),
+      ),
+    ];
+    const versionResult = await txn2.execute(
+      `WITH lock AS (
+         SELECT id FROM m1.documents WHERE id = ANY(:ids::uuid[]) ORDER BY id FOR UPDATE
+       )
+       SELECT l.id AS document_id, COALESCE(MAX(v.version_no), 0) + 1 AS next
+       FROM lock l LEFT JOIN m1.document_versions v ON v.document_id = l.id
+       GROUP BY l.id`,
+      [{ name: 'ids', value: { stringValue: `{${versionedDocIds.join(',')}}` } }],
+    );
+    // LEFT JOIN FROM the lock set: the CTE is referenced (an unreferenced
+    // SELECT CTE is planner-dropped — zero locks taken) and every locked doc
+    // yields a row even with zero version rows (next = 1).
+    const nextByDoc = new Map(
+      marshalMany(versionResult).map((r) => [r.documentId as string, Number(r.next)]),
+    );
+
+    // 3c. New MANUAL version — assembled from ALL current sections
+    const manualVersionNo = nextByDoc.get(manualId)!;
     const manualContent = assembleManualContent(
       manualId,
       locale,
@@ -379,50 +361,6 @@ export async function handler(event: RegenerateInput): Promise<Record<string, un
     );
     audit.manualDocumentId = manualId;
     audit.manualVersionNo = manualVersionNo;
-
-    // 3b. Locate this run's master list + entries (the linkage lives in the
-    // master-list content — same resolution ExportFn performs).
-    const mlResult = await txn2.execute(
-      `SELECT DISTINCT ON (d.id) d.id, v.content_ref
-       FROM m1.documents d JOIN m1.document_versions v ON v.document_id = d.id
-       WHERE d.doc_type = 'master_list'
-       ORDER BY d.id, v.version_no DESC`,
-    );
-    let masterDocId: string | null = null;
-    let entries: MasterListEntry[] = [];
-    for (const row of marshalMany(mlResult)) {
-      const content = await getJson(row.contentRef as string);
-      const candidate = (content.entries ?? []) as MasterListEntry[];
-      if (candidate.some((e) => e.documentId === manualId)) {
-        masterDocId = row.id as string;
-        entries = candidate;
-        break;
-      }
-    }
-    if (!masterDocId) throw new Error('MASTER_LIST_NOT_FOUND');
-
-    // 3c. Clause document for this section — matched by harmonizationKey in
-    // the candidate's CURRENT content (clauseRefs overlap narrows the fetches).
-    const sectionClauseNos = new Set(section.clauses.map((c) => c.clauseNo));
-    let clauseDocId: string | null = null;
-    for (const entry of entries) {
-      if (entry.docType === 'manual' || entry.docType === 'correlation_matrix') continue;
-      if (!entry.clauseRefs.some((c) => sectionClauseNos.has(c))) continue;
-      const latestRef = await txn2.execute(
-        `SELECT content_ref FROM m1.document_versions
-         WHERE document_id = :docId::uuid ORDER BY version_no DESC LIMIT 1`,
-        [{ name: 'docId', value: { stringValue: entry.documentId } }],
-      );
-      const ref = (latestRef.records?.[0]?.[0] as { stringValue?: string })?.stringValue;
-      if (!ref) continue;
-      const content = await getJson(ref);
-      const hkey = (content.sections as Array<{ harmonizationKey?: string }> | undefined)?.[0]
-        ?.harmonizationKey;
-      if (hkey === harmonizationKey) {
-        clauseDocId = entry.documentId;
-        break;
-      }
-    }
 
     const clauseDocContent = (docId: string, versionNo: number) => ({
       schemaVersion: 1,
@@ -448,7 +386,7 @@ export async function handler(event: RegenerateInput): Promise<Record<string, un
 
     if (newKind !== 'failed') {
       if (clauseDocId) {
-        const vNo = await nextVersionNo(txn2, clauseDocId);
+        const vNo = nextByDoc.get(clauseDocId)!;
         await writeNewVersion(
           txn2,
           tenantId,
@@ -470,8 +408,9 @@ export async function handler(event: RegenerateInput): Promise<Record<string, un
         const title = clauseDocTitle(section);
         const clauseNos = [...new Set(section.clauses.map((c) => c.clauseNo))];
         const insertRes = await txn2.execute(
-          `INSERT INTO m1.documents (tenant_id, standard, doc_type, title, clause_refs, owner_id, status, created_by)
-           VALUES (:tenantId, :standard, :docType, :title, :clauseRefs::text[], :owner, 'draft', :owner)
+          `INSERT INTO m1.documents
+             (tenant_id, standard, doc_type, title, clause_refs, harmonization_key, owner_id, status, created_by)
+           VALUES (:tenantId, :standard, :docType, :title, :clauseRefs::text[], :hkey, :owner, 'draft', :owner)
            RETURNING id`,
           [
             { name: 'tenantId', value: { stringValue: tenantId } },
@@ -479,6 +418,7 @@ export async function handler(event: RegenerateInput): Promise<Record<string, un
             { name: 'docType', value: { stringValue: docType } },
             { name: 'title', value: { stringValue: title } },
             { name: 'clauseRefs', value: { stringValue: `{${clauseNos.join(',')}}` } },
+            { name: 'hkey', value: { stringValue: harmonizationKey } },
             { name: 'owner', value: { stringValue: actor } },
           ],
         );
@@ -492,16 +432,6 @@ export async function handler(event: RegenerateInput): Promise<Record<string, un
           `Section ${harmonizationKey} regenerated (document created)`,
           clauseDocContent(clauseDocId, 1),
         );
-        entries.push({
-          documentId: clauseDocId,
-          title,
-          docType,
-          standard: sectionStandard,
-          clauseRefs: clauseNos,
-          status: 'draft',
-          versionNo: 1,
-          contentRef: versionContentKey(tenantId, clauseDocId, 1),
-        });
         audit.clauseDocumentId = clauseDocId;
         audit.clauseVersionNo = 1;
         audit.clauseDocumentCreated = true;
@@ -510,46 +440,61 @@ export async function handler(event: RegenerateInput): Promise<Record<string, un
     // still-failed: no clause version — failed prose never ships (design §4.3)
 
     // 3d. Correlation matrix — only when the section kind changed
-    if (newKind !== priorKind) {
-      const matrixEntry = entries.find((e) => e.docType === 'correlation_matrix');
-      if (matrixEntry) {
-        const vNo = await nextVersionNo(txn2, matrixEntry.documentId);
-        await writeNewVersion(
-          txn2,
-          tenantId,
-          matrixEntry.documentId,
-          vNo,
-          actor,
-          `Section ${harmonizationKey} regenerated (${priorKind} → ${newKind})`,
-          deriveCorrelationMatrix(matrixEntry.documentId, locale, run.standards, sections),
-        );
-        audit.matrixVersionNo = vNo;
-      }
+    if (newKind !== priorKind && matrixDocId) {
+      const vNo = nextByDoc.get(matrixDocId)!;
+      await writeNewVersion(
+        txn2,
+        tenantId,
+        matrixDocId,
+        vNo,
+        actor,
+        `Section ${harmonizationKey} regenerated (${priorKind} → ${newKind})`,
+        deriveCorrelationMatrix(matrixDocId, locale, run.standards, sections),
+      );
+      audit.matrixVersionNo = vNo;
     }
 
-    // 3e. Master list REFRESH — every entry re-pointed at its latest version
-    // (closes the Task-9 carry-forward: exports no longer pin clause docs at v1).
-    const entryIds = entries.map((e) => e.documentId);
-    const latestResult = await txn2.execute(
-      `SELECT DISTINCT ON (v.document_id) v.document_id, v.version_no, v.content_ref, d.status
-       FROM m1.document_versions v JOIN m1.documents d ON d.id = v.document_id
-       WHERE v.document_id = ANY(:ids::uuid[])
-       ORDER BY v.document_id, v.version_no DESC`,
-      [{ name: 'ids', value: { stringValue: `{${entryIds.join(',')}}` } }],
+    // 3e. Master list REFRESH — rebuilt from live documents inside the run
+    // lock, not carried forward from the prior S3 master JSON: a concurrent
+    // regen's newly-created clause doc or bumped version lands in this
+    // rewrite instead of being dropped by a stale snapshot. Order: manual,
+    // clause docs in section order, matrix — same as finalize-manual.
+    const hkeys = ['__MANUAL__', '__CORRELATION_MATRIX__', ...sections.map((s) => s.sectionKey)];
+    const entryResult = await txn2.execute(
+      `SELECT d.id, d.harmonization_key, d.title, d.doc_type, d.standard,
+              d.clause_refs, d.status, v.version_no, v.content_ref
+       FROM m1.documents d
+       JOIN LATERAL (
+         SELECT version_no, content_ref FROM m1.document_versions
+         WHERE document_id = d.id ORDER BY version_no DESC LIMIT 1
+       ) v ON true
+       WHERE d.harmonization_key = ANY(:hkeys::text[])`,
+      [{ name: 'hkeys', value: { stringValue: `{${hkeys.join(',')}}` } }],
     );
-    const latestByDoc = new Map(marshalMany(latestResult).map((r) => [r.documentId as string, r]));
-    const refreshed: MasterListEntry[] = entries.map((e) => {
-      const latest = latestByDoc.get(e.documentId);
-      return latest
-        ? {
-            ...e,
-            versionNo: latest.versionNo as number,
-            contentRef: latest.contentRef as string,
-            status: ((latest.status as string) ?? e.status).toLowerCase(),
-          }
-        : e;
+    const docByHkey = new Map(
+      marshalMany(entryResult).map((r) => [r.harmonizationKey as string, r]),
+    );
+    const toEntry = (r: Record<string, unknown>): MasterListEntry => ({
+      documentId: r.id as string,
+      title: r.title as string,
+      docType: r.docType as string,
+      standard: r.standard as string,
+      clauseRefs: (r.clauseRefs as string[]) ?? [],
+      status: ((r.status as string) ?? 'draft').toLowerCase(),
+      versionNo: r.versionNo as number,
+      contentRef: r.contentRef as string,
     });
-    const masterVersionNo = await nextVersionNo(txn2, masterDocId);
+    const refreshed: MasterListEntry[] = [
+      ...(docByHkey.get('__MANUAL__') ? [toEntry(docByHkey.get('__MANUAL__')!)] : []),
+      ...sections
+        .map((s) => docByHkey.get(s.sectionKey))
+        .filter((r): r is Record<string, unknown> => !!r)
+        .map(toEntry),
+      ...(docByHkey.get('__CORRELATION_MATRIX__')
+        ? [toEntry(docByHkey.get('__CORRELATION_MATRIX__')!)]
+        : []),
+    ];
+    const masterVersionNo = nextByDoc.get(masterDocId)!;
     await writeNewVersion(
       txn2,
       tenantId,
@@ -587,11 +532,7 @@ export async function handler(event: RegenerateInput): Promise<Record<string, un
 
     await txn2.commit();
   } catch (err) {
-    try {
-      await txn2.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn2);
     throw err;
   }
 

@@ -1,9 +1,10 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { PrimaryButton } from '@/components/shared';
 import { useGraphQL } from '@/lib/api';
+import { errorText } from '@/lib/error-text';
 import { useAuth } from '@/lib/auth-context';
 import { HitlCard } from './HitlCard';
 import { type HitlItem, LIST_PENDING_HITL_QUERY } from './hitl';
@@ -48,6 +49,7 @@ export function AgentRunButton({
   onResolved,
 }: AgentRunButtonProps) {
   const t = useTranslations('studio');
+  const tErr = useTranslations('errors');
   const { query, mutate } = useGraphQL();
   const { user } = useAuth();
   const role = user?.role ?? 'employee';
@@ -57,6 +59,15 @@ export function AgentRunButton({
   const [dispatchError, setDispatchError] = useState('');
   const pollCount = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // The poll timer must not fire after unmount (setState on a dead component
+  // and a live network client on a ghost page).
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
 
   async function listPendingIds(): Promise<{ ids: Set<string>; items: HitlItem[] }> {
     const data = await query<{
@@ -74,7 +85,7 @@ export function AgentRunButton({
       baseline = (await listPendingIds()).ids;
       await mutate(mutation, variables ?? {});
     } catch (err) {
-      setDispatchError((err as Error).message || t('dispatchError'));
+      setDispatchError(errorText(err, tErr, 'generic'));
       setPhase('dispatchError');
       return;
     }
@@ -85,9 +96,7 @@ export function AgentRunButton({
       pollCount.current += 1;
       try {
         const { items } = await listPendingIds();
-        const fresh = items.find(
-          (i) => i.agentName === agentName && !baseline.has(i.hitlItemId),
-        );
+        const fresh = items.find((i) => i.agentName === agentName && !baseline.has(i.hitlItemId));
         if (fresh) {
           setCard(fresh);
           setPhase('card');

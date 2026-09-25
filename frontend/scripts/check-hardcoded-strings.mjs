@@ -32,8 +32,38 @@ const SAFE_PATTERNS = [
 ];
 
 // Regex to find JSX string literals: text between > and < (children),
-// or prop values that look like user-facing text (not attributes)
-const JSX_STRING_CHILD = />\s*([A-Z][a-z][\w\s,.!?:;'"-]{3,})\s*</g;
+// or quoted-expression children like >{'Some text'}<
+const JSX_STRING_CHILD =
+  />\s*(?:['"]([A-Z][a-z][\w\s,.!?:;"-]{3,})['"]|([A-Z][a-z][\w\s,.!?:;'"-]{3,}))\s*</g;
+
+// User-facing attribute literals — FE-11: aria-*/placeholder/alt/title must
+// also route through next-intl, in both attr="text" and attr={'text'} forms.
+const USER_FACING_ATTRS = [
+  'aria-label',
+  'aria-description',
+  'aria-valuetext',
+  'aria-placeholder',
+  'placeholder',
+  'alt',
+  'title',
+];
+const ATTR_LITERAL = new RegExp(
+  `(?:${USER_FACING_ATTRS.join('|')})\\s*=\\s*(?:"([^"]*)"|'([^']*)'|\\{\\s*['"]([^'"]*)['"]\\s*\\})`,
+  'g',
+);
+
+// Values that are genuinely technical, not UI copy — the brand mark itself
+// does not translate (1 known exception), nor do symbols/numbers/ids.
+const ALLOWED_ATTR_VALUES = new Set(['Cumplify']);
+
+function looksLikeCopy(text) {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (trimmed.length < 4 || ALLOWED_ATTR_VALUES.has(trimmed)) return false;
+  if (/^[A-Z_]+$/.test(trimmed) || /^\d/.test(trimmed)) return false;
+  if (!/[a-zA-Z]/.test(trimmed)) return false;
+  return true;
+}
 
 function getAllFiles(dir) {
   const results = [];
@@ -74,17 +104,29 @@ for (const file of getAllFiles(SRC_DIR)) {
     let match;
     JSX_STRING_CHILD.lastIndex = 0;
     while ((match = JSX_STRING_CHILD.exec(line)) !== null) {
-      const text = match[1].trim();
+      const text = (match[1] ?? match[2]).trim();
       // Skip if it's in a safe attribute context
       const isSafe = SAFE_PATTERNS.some((p) => p.test(line.slice(0, match.index + 1)));
       if (isSafe) continue;
-      // Skip very short strings or code-like strings
-      if (text.length < 4 || /^[A-Z_]+$/.test(text) || /^\d/.test(text)) continue;
+      if (!looksLikeCopy(text)) continue;
 
       violations.push({
         file: file.replace(process.cwd() + '/', ''),
         line: i + 1,
         text,
+      });
+    }
+
+    // Check for hardcoded user-facing attribute literals (FE-11)
+    ATTR_LITERAL.lastIndex = 0;
+    while ((match = ATTR_LITERAL.exec(line)) !== null) {
+      const text = (match[1] ?? match[2] ?? match[3] ?? '').trim();
+      if (!looksLikeCopy(text)) continue;
+
+      violations.push({
+        file: file.replace(process.cwd() + '/', ''),
+        line: i + 1,
+        text: `${match[0].split('=')[0].trim()}="${text}"`,
       });
     }
   }

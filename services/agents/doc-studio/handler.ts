@@ -20,6 +20,7 @@ import type { ContentBlock } from '../../ai-invoker/src/types.js';
 import type { SQSEvent, SQSBatchResponse } from 'aws-lambda';
 import { ISO_CANON_TENANT_ID } from '../shared/constants.js';
 import { DOC_STUDIO_PROMPT } from './prompt.js';
+import { assertTenantIdSafe } from '../../api/src/resolvers/shared.js';
 import { DOC_STUDIO_TOOLS } from './tools.js';
 
 const DLQ_URL = process.env.DOC_STUDIO_DLQ_URL!;
@@ -139,6 +140,7 @@ export interface RunDocDraftResult {
 
 export async function runDocDraft(input: RunDocDraftInput): Promise<RunDocDraftResult> {
   const { tenantId, requestedBy, draftIntent } = input;
+  assertTenantIdSafe(tenantId);
 
   const groundingContext = await retrieveGrounding(tenantId, draftIntent.intent);
 
@@ -222,6 +224,7 @@ export interface RunSectionDraftInput {
  */
 export async function runSectionDraft(input: RunSectionDraftInput): Promise<RunDocDraftResult> {
   const { tenantId, requestedBy, sectionDraftIntent } = input;
+  assertTenantIdSafe(tenantId);
   const { generationRunId, harmonizationKey, sectionKind, clauses, orgProfile } =
     sectionDraftIntent;
 

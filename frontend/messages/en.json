@@ -40,7 +40,23 @@
     "standardIso9001": "9001",
     "standardIso14001": "14001",
     "standardIso45001": "45001",
-    "standardIms": "IMS"
+    "standardIms": "IMS",
+    "newPasswordHint": "Your account requires a new password before you can continue.",
+    "newPassword": "New password",
+    "confirmPassword": "Confirm password",
+    "passwordsDontMatch": "Passwords do not match",
+    "mfaSelectHint": "Choose how to verify your identity.",
+    "mfaMethodTotp": "Authenticator app",
+    "mfaMethodSms": "Text message (SMS)",
+    "mfaCode": "Verification code",
+    "mfaHintTotp": "Enter the code from your authenticator app.",
+    "mfaHintSms": "Enter the code sent to your phone.",
+    "mfaHintCustom": "Enter your verification code.",
+    "challengeError": "Verification failed — check the value and try again.",
+    "unsupportedStep": "This sign-in requires a step that is not available yet — contact your administrator.",
+    "continue": "Continue",
+    "backToSignIn": "Back to sign in",
+    "verifying": "Verifying..."
   },
   "commandCenter": {
     "title": "Command Center",
@@ -165,7 +181,9 @@
     "HIGH": "High",
     "IN_PROGRESS": "In progress",
     "MEDIUM": "Medium",
-    "LOW": "Low"
+    "LOW": "Low",
+    "COMPLETED": "Completed",
+    "PLANNED": "Planned"
   },
   "common": {
     "loading": "Loading...",
@@ -173,7 +191,10 @@
     "retry": "Retry",
     "submit": "Submit",
     "cancel": "Cancel",
-    "close": "Close"
+    "close": "Close",
+    "notAuthorized": "You do not have access to this section",
+    "notFound": "Page not found",
+    "backToDashboard": "Back to dashboard"
   },
   "m1": {
     "title": "Document Studio",
@@ -291,7 +312,8 @@
     "findingMajorNc": "Major NC",
     "findingMinorNc": "Minor NC",
     "findingObservation": "Observation",
-    "findingOfi": "OFI"
+    "findingOfi": "OFI",
+    "yearInvalid": "Programme year must be a valid year"
   },
   "m4": {
     "title": "Records Management",
@@ -299,7 +321,6 @@
     "tabCalibrations": "Calibration Schedule",
     "tabAuditTrail": "Audit Trail",
     "loading": "Loading...",
-    "recordsBlocked": "Record listing requires listRecords query (blocked on backend read surface)",
     "registerRecord": "Register record",
     "createRetention": "Create retention policy",
     "recordCalibration": "Record calibration",
@@ -323,7 +344,14 @@
     "fieldStandardUsed": "Standard used",
     "fieldTraceabilityRef": "Traceability reference",
     "fieldResult": "Result",
-    "fieldNextDue": "Next due"
+    "fieldNextDue": "Next due",
+    "retentionYearsInvalid": "Retention years must be a positive whole number",
+    "colTemplate": "Template",
+    "colStatus": "Status",
+    "colCompletion": "Completion",
+    "colOpenedBy": "Opened by",
+    "colUpdated": "Updated",
+    "emptyRecords": "No form records yet"
   },
   "m5": {
     "title": "Risk Management",
@@ -357,7 +385,8 @@
     "fieldOwnerId": "Owner",
     "fieldDueDate": "Due date",
     "fieldChangeDesc": "Change description",
-    "fieldImpactAssessment": "Impact assessment"
+    "fieldImpactAssessment": "Impact assessment",
+    "likelihoodSeverityInvalid": "Likelihood and severity must be whole numbers"
   },
   "forms": {
     "pdf": {
@@ -772,7 +801,8 @@
       "submitInvalidStatus": "Record cannot be submitted in current status",
       "recordImmutable": "Record is locked",
       "linkTargetNotFound": "Linked target not found",
-      "fieldRequired": "This field is required"
+      "fieldRequired": "This field is required",
+      "autosaveFailed": "Autosave failed — your edits were kept, they will retry on the next change"
     }
   },
   "qms": {
@@ -811,7 +841,11 @@
       "siteCountry": "Country",
       "siteHeadcount": "Headcount",
       "addSite": "Add Site",
-      "removeSite": "Remove"
+      "removeSite": "Remove",
+      "employeeCountInvalid": "Employee count must be a positive whole number",
+      "yearFoundedInvalid": "Year founded is out of range",
+      "legalNameRequired": "Legal name is required",
+      "saveError": "Failed to save profile"
     },
     "registry": {
       "loading": "Loading...",
@@ -910,7 +944,8 @@
     "loading": "Loading...",
     "print": "Print",
     "viewerTitle": "Controlled Document Viewer",
-    "draftSection": "Draft with DocStudio"
+    "draftSection": "Draft with DocStudio",
+    "renderFailed": "Failed to render document content."
   },
   "documents": {
     "title": "Documents",
@@ -1002,7 +1037,9 @@
     "failedSection": "Section composition failed — no content presented",
     "saveVersion": "Save version",
     "saving": "Saving…",
-    "saveFailed": "Save failed"
+    "saveFailed": "Save failed",
+    "mermaidError": "Diagram could not be rendered",
+    "mermaidLoading": "Loading diagram…"
   },
   "proposal": {
     "rationale": "Why",
@@ -1043,5 +1080,28 @@
     "completeTitle": "Lifecycle",
     "completeAudit": "Complete audit",
     "completing": "Completing…"
+  },
+  "errors": {
+    "unauthorized": "You are not authorized for this action",
+    "sessionExpired": "Your session expired — sign in again",
+    "pausedForCredits": "AI credits exhausted for this month",
+    "approvalRequired": "This document needs an approved review first",
+    "invalidState": "This action is not valid in the current state",
+    "sodViolation": "You cannot approve your own submission",
+    "generationUnavailable": "Generation is temporarily unavailable",
+    "orgProfileRequired": "Complete your organization profile first",
+    "submitInvalidStatus": "This record can no longer be submitted",
+    "mappingIncomplete": "Required mapped fields are missing",
+    "validationIncomplete": "Fill in all required fields first",
+    "linkTargetNotFound": "The linked record was not found",
+    "recordNotFound": "Record not found",
+    "versionNotFound": "Document version not found",
+    "sealFailed": "Sealing the document failed — try again",
+    "taskExpired": "This approval task expired — refresh the list",
+    "justificationRequired": "A justification is required",
+    "invalidInput": "The submitted data is invalid",
+    "notFound": "The requested item was not found",
+    "unavailable": "This feature is not configured yet",
+    "generic": "Something went wrong — please try again"
   }
 }

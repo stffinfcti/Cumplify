@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useTranslations } from 'next-intl';
-import { PageHeader, Panel, ErrorState } from '@/components/shared';
+import { PageHeader, Panel, EmptyState, ErrorState } from '@/components/shared';
 import { useGraphQL } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { canSeeAdmin, normalizeRole } from '@/lib/role-matrix';
@@ -27,6 +27,7 @@ const GET_TENANT_SETTINGS = `query GetTenantSettings {
 
 export default function SettingsPage() {
   const t = useTranslations('settings');
+  const tCommon = useTranslations('common');
   const { user } = useAuth();
   const { query } = useGraphQL();
 
@@ -57,11 +58,7 @@ export default function SettingsPage() {
     }
   }, [fetchSettings, canSeeSettings]);
 
-  if (!canSeeSettings) {
-    return null;
-  }
-
-  if (error && !loading) {
+  if (error && !loading && canSeeSettings) {
     return <ErrorState onRetry={fetchSettings} />;
   }
 
@@ -69,29 +66,37 @@ export default function SettingsPage() {
     <>
       <PageHeader title={t('title')} />
 
-      {loading ? (
-        <p className={styles.loading}>{t('loading')}</p>
-      ) : (
-        <div className={styles.panels}>
-          {/* Organization panel — read-only */}
+      <div className={styles.panels}>
+        {/* Organization panel — admin-only; non-admins get an explicit
+            not-authorized state, never a blank page */}
+        {canSeeSettings ? (
+          loading ? (
+            <p className={styles.loading}>{t('loading')}</p>
+          ) : (
+            <Panel title={t('organizationTitle')}>
+              <div className={styles.field}>
+                <span className={styles.fieldLabel}>{t('tenantName')}</span>
+                <span className={styles.fieldValue}>{settings?.tenantName}</span>
+              </div>
+              <div className={styles.field}>
+                <span className={styles.fieldLabel}>{t('tenantLocale')}</span>
+                <span className={styles.fieldValue}>{settings?.documentLocale.toUpperCase()}</span>
+              </div>
+              <p className={styles.readOnlyNote}>{t('tenantLocaleReadOnly')}</p>
+            </Panel>
+          )
+        ) : (
           <Panel title={t('organizationTitle')}>
-            <div className={styles.field}>
-              <span className={styles.fieldLabel}>{t('tenantName')}</span>
-              <span className={styles.fieldValue}>{settings?.tenantName}</span>
-            </div>
-            <div className={styles.field}>
-              <span className={styles.fieldLabel}>{t('tenantLocale')}</span>
-              <span className={styles.fieldValue}>{settings?.documentLocale.toUpperCase()}</span>
-            </div>
-            <p className={styles.readOnlyNote}>{t('tenantLocaleReadOnly')}</p>
+            <EmptyState message={tCommon('notAuthorized')} />
           </Panel>
+        )}
 
-          {/* My Profile panel — per-user locale via LocaleSwitcher */}
-          <Panel title={t('myProfileTitle')}>
-            <LocaleSwitcher />
-          </Panel>
-        </div>
-      )}
+        {/* My Profile panel — per-user locale via LocaleSwitcher; every
+            signed-in user owns a locale, so this stays visible for all roles */}
+        <Panel title={t('myProfileTitle')}>
+          <LocaleSwitcher />
+        </Panel>
+      </div>
     </>
   );
 }

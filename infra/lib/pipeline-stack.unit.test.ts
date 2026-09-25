@@ -159,9 +159,10 @@ describe('PipelineStack — DeployFrontendContent step (SMOKE-2 §4.1)', () => {
     expect(staging).toBeDefined();
     const deploy = staging!.Actions.find((a: any) => a.Name === 'DeployFrontendContent');
     expect(deploy).toBeDefined();
-    const envVars = JSON.parse(
-      deploy!.Configuration.EnvironmentVariables as string,
-    ) as Array<{ name: string; value: string }>;
+    const envVars = JSON.parse(deploy!.Configuration.EnvironmentVariables as string) as Array<{
+      name: string;
+      value: string;
+    }>;
     const varNames = envVars.map((v) => v.name);
     expect(varNames).toContain('NEXT_PUBLIC_GRAPHQL_URL');
     expect(varNames).toContain('NEXT_PUBLIC_USER_POOL_ID');

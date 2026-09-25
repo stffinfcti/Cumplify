@@ -17,7 +17,13 @@ const REPO_ROOT = resolve(__dirname, '../../..');
 // no .git directory (CodePipeline zip export), so git-based discovery aborts
 // with status 128 there. Walking the tree keeps BC-8 enforced in EVERY lane.
 const SKIP_DIRS = new Set([
-  'node_modules', '.git', 'cdk.out', 'dist', 'build', 'coverage', '.next',
+  'node_modules',
+  '.git',
+  'cdk.out',
+  'dist',
+  'build',
+  'coverage',
+  '.next',
 ]);
 
 function walkTsFiles(dir: string): string[] {
