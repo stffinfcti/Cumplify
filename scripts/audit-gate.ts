@@ -2,11 +2,15 @@
  * audit-gate — npm audit with an explicit, expiring allowlist.
  *
  * Replaces the raw `npm audit --audit-level=high` Synth gate. The gate stays
- * hard: any high/critical advisory NOT allowlisted fails the build, and an
- * allowlist entry past its expiry fails the build (forcing periodic revisit).
- * Allowlisting exists solely for advisories that dependency management cannot
- * fix — e.g. deps BUNDLED inside another package's tarball (npm overrides and
- * lockfile edits cannot reach those; see aws-cdk-lib bundleDependencies).
+ * hard: any high/critical advisory NOT allowlisted fails the build, an
+ * allowlist entry past its expiry fails the build (forcing periodic revisit),
+ * and an entry with a missing/unparseable `expires` fails the build outright
+ * — `expires` is REQUIRED, not advisory. (Pre-hardening, a missing expiry
+ * produced `new Date(undefined)` → NaN → the entry waived the advisory
+ * forever.) Allowlisting exists solely for advisories that dependency
+ * management cannot fix — e.g. deps BUNDLED inside another package's tarball
+ * (npm overrides and lockfile edits cannot reach those; see aws-cdk-lib
+ * bundleDependencies).
  */
 
 import { execSync } from 'node:child_process';
@@ -18,7 +22,7 @@ export interface AllowlistEntry {
   advisory: string; // GHSA id
   module: string; // package the advisory is against
   reason: string;
-  expires: string; // ISO date; entry is INVALID from this date on
+  expires: string; // REQUIRED ISO date; entry is INVALID from this date on
 }
 
 export interface Finding {
@@ -32,27 +36,43 @@ export interface Decision {
   blocked: Finding[];
   waived: Finding[];
   expired: AllowlistEntry[];
+  /** Entries whose `expires` is missing, empty, or unparseable — they can never waive. */
+  invalid: AllowlistEntry[];
 }
 
 const GATED = new Set(['high', 'critical']);
+
+/** True when `expires` is a non-empty string that parses to a real date. */
+export function hasValidExpiry(entry: AllowlistEntry): boolean {
+  const raw = (entry as { expires?: unknown }).expires;
+  return typeof raw === 'string' && raw.trim() !== '' && !Number.isNaN(Date.parse(raw));
+}
 
 export function decide(findings: Finding[], allowlist: AllowlistEntry[], today: Date): Decision {
   const blocked: Finding[] = [];
   const waived: Finding[] = [];
   const expired: AllowlistEntry[] = [];
+  const invalid: AllowlistEntry[] = [];
+  // Expiry is enforced on EVERY entry — matched or not — so a stale or
+  // malformed entry can never sit in the file silently (REQUIRED, not advisory).
+  for (const e of allowlist) {
+    if (!hasValidExpiry(e)) {
+      invalid.push(e);
+    } else if (today >= new Date(e.expires)) {
+      expired.push(e);
+    }
+  }
   for (const f of findings) {
     if (!GATED.has(f.severity)) continue;
     const entry = allowlist.find((a) => a.advisory === f.advisory && a.module === f.module);
-    if (!entry) {
-      blocked.push(f);
-    } else if (today >= new Date(entry.expires)) {
-      expired.push(entry);
+    // An entry only waives when it exists AND carries a valid future expiry.
+    if (!entry || !hasValidExpiry(entry) || today >= new Date(entry.expires)) {
       blocked.push(f);
     } else {
       waived.push(f);
     }
   }
-  return { blocked, waived, expired };
+  return { blocked, waived, expired, invalid };
 }
 
 /** Extract direct advisories (via-objects) from `npm audit --json` output. */
@@ -101,25 +121,37 @@ function main(): void {
     raw = (e as { stdout?: string }).stdout ?? '';
   }
   const findings = extractFindings(JSON.parse(raw));
-  const { blocked, waived, expired } = decide(findings, allowlist, new Date());
+  const { blocked, waived, expired, invalid } = decide(findings, allowlist, new Date());
 
   for (const w of waived) {
     console.log(`WAIVED  ${w.advisory} (${w.module}) — allowlisted, see ${allowlistPath}`);
   }
+  for (const x of invalid) {
+    console.error(
+      `INVALID allowlist entry ${x.advisory} (${x.module}) — missing or unparseable \`expires\`; ` +
+        `every allowlist entry REQUIRES a valid ISO expiry date (see ${allowlistPath})`,
+    );
+  }
   for (const x of expired) {
-    console.error(`EXPIRED allowlist entry ${x.advisory} (${x.module}) — expired ${x.expires}; revisit or renew with justification`);
+    console.error(
+      `EXPIRED allowlist entry ${x.advisory} (${x.module}) — expired ${x.expires}; revisit or renew with justification`,
+    );
   }
   for (const b of blocked) {
     console.error(`BLOCKED ${b.advisory} (${b.module}) [${b.severity}] ${b.title}`);
   }
-  if (blocked.length > 0) {
-    console.error(`audit-gate: FAIL — ${blocked.length} high/critical advisory(ies) not covered by a valid allowlist entry`);
+  if (blocked.length > 0 || invalid.length > 0 || expired.length > 0) {
+    console.error(
+      `audit-gate: FAIL — ${blocked.length} high/critical advisory(ies) not covered by a valid ` +
+        `allowlist entry; ${invalid.length} invalid + ${expired.length} expired allowlist entr(ies)`,
+    );
     process.exit(1);
   }
-  console.log(`audit-gate: PASS — ${findings.length} finding(s) inspected, ${waived.length} waived, 0 blocked`);
+  console.log(
+    `audit-gate: PASS — ${findings.length} finding(s) inspected, ${waived.length} waived, 0 blocked`,
+  );
 }
 
 const isDirectRun =
-  process.argv[1] !== undefined &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) main();

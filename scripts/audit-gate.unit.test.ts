@@ -35,6 +35,42 @@ describe('audit-gate decide()', () => {
     expect(d.expired).toHaveLength(1);
   });
 
+  it('expires is REQUIRED: missing expiry is invalid and cannot waive', () => {
+    const noExpiry = { ...ALLOW } as unknown as AllowlistEntry;
+    delete (noExpiry as { expires?: string }).expires;
+    const d = decide([BRACE], [noExpiry], BEFORE_EXPIRY);
+    expect(d.blocked).toHaveLength(1);
+    expect(d.waived).toHaveLength(0);
+    expect(d.invalid).toHaveLength(1);
+  });
+
+  it('expires is REQUIRED: empty string is invalid and cannot waive', () => {
+    const d = decide([BRACE], [{ ...ALLOW, expires: '' }], BEFORE_EXPIRY);
+    expect(d.blocked).toHaveLength(1);
+    expect(d.invalid).toHaveLength(1);
+  });
+
+  it('expires is REQUIRED: unparseable date is invalid and cannot waive', () => {
+    const d = decide([BRACE], [{ ...ALLOW, expires: 'not-a-date' }], BEFORE_EXPIRY);
+    expect(d.blocked).toHaveLength(1);
+    expect(d.invalid).toHaveLength(1);
+  });
+
+  it('flags expired/missing-expiry entries even with no matching finding (enforced globally)', () => {
+    const stale = [{ ...ALLOW }, { ...ALLOW, advisory: 'GHSA-xxxx-xxxx-xxxx', expires: '' }];
+    const d = decide([], stale, AFTER_EXPIRY);
+    expect(d.blocked).toHaveLength(0);
+    expect(d.expired).toHaveLength(1);
+    expect(d.invalid).toHaveLength(1);
+  });
+
+  it('a valid unmatched entry is inert (no findings → no flags)', () => {
+    const d = decide([], [ALLOW], BEFORE_EXPIRY);
+    expect(d.blocked).toHaveLength(0);
+    expect(d.expired).toHaveLength(0);
+    expect(d.invalid).toHaveLength(0);
+  });
+
   it('entry must match BOTH advisory and module', () => {
     const wrongModule = { ...ALLOW, module: 'minimatch' };
     const d = decide([BRACE], [wrongModule], BEFORE_EXPIRY);

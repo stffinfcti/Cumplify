@@ -203,8 +203,13 @@ function main() {
     return;
   }
 
-  // Step 3: eslint + prettier
-  const s3 = runStep(3, 'eslint + prettier', 'npm run lint && npm run format:check');
+  // Step 3: eslint + prettier + codegen drift (role-matrix single-source check —
+  // hand-edits to frontend/src/lib/role-matrix.ts fail here)
+  const s3 = runStep(
+    3,
+    'eslint + prettier + codegen drift',
+    'npm run lint && npm run format:check && npm run check:role-matrix',
+  );
   if (s3 === 'FAIL') {
     computeResult();
     return;

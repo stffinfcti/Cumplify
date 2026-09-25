@@ -634,7 +634,11 @@ export class ApiStack extends cdk.Stack {
     // AWS-managed KMS key (no CMK), so no extra kms grant is needed. It is
     // provisioned out-of-band per env (cumplify/<env>/stripe); if absent in
     // an env the resolver throws STRIPE_NOT_CONFIGURED (billing stays inert).
-    const stripeSecret = secretsmanager.Secret.fromSecretNameV2(this, 'StripeSecret', stripeSecretName);
+    const stripeSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'StripeSecret',
+      stripeSecretName,
+    );
     stripeSecret.grantRead(billingFn);
     // persistCustomerMapping needs only PutSecretValue — grantWrite would also
     // allow RotateSecret/UpdateSecret/CancelRotation on the shared Stripe key.
@@ -846,10 +850,13 @@ export class ApiStack extends cdk.Stack {
     });
 
     // Billing — new field, needs the schema node dependency below (9d9c90a1 lesson).
-    const createBillingPortalSessionResolver = billingDS.createResolver('CreateBillingPortalSession', {
-      typeName: 'Mutation',
-      fieldName: 'createBillingPortalSession',
-    });
+    const createBillingPortalSessionResolver = billingDS.createResolver(
+      'CreateBillingPortalSession',
+      {
+        typeName: 'Mutation',
+        fieldName: 'createBillingPortalSession',
+      },
+    );
 
     // ─── Mutation resolvers (agent-path, @aws_iam) ───────────────────────────
     m1DS.createResolver('AgentDraftDocument', {
@@ -1017,10 +1024,25 @@ export class ApiStack extends cdk.Stack {
     // the loop over [hitlApprovalFn, hitlQueryFn, profileFn] above.
 
     // SFN task-callback permissions for the approval Lambda (design §2.3).
-    // Authorization rides on the task token (an unguessable capability). These
-    // actions DO support execution-ARN scoping, but the HITL state machine has
-    // no deterministic name today; scoping needs `execution:<name>:*` and is
-    // deferred until the machine is explicitly named.
+    //
+    // Resource '*' is MANDATORY here, not deferred debt: per the AWS Service
+    // Authorization Reference, states:SendTaskSuccess/SendTaskFailure (and
+    // SendTaskHeartbeat) have NO resource types — the IAM policy editor flags
+    // any stateMachine:/execution: ARN in these statements as "does not provide
+    // permissions", and AWS's own samples (aws-samples human-in-the-loop) use
+    // '*' for the same reason. Scoping to the concrete machines the resolver
+    // calls back (the HITL machine — the only waitForTaskToken consumer;
+    // DocGenStateMachine has no task-token state) would silently break every
+    // approval. If AWS ever adds resource support for SendTask*, the intended
+    // scope is stateMachine:cumplify-hitl-<env> + execution:cumplify-hitl-<env>:*
+    // (the execution-name suffix stays '*' — execution names are dynamic:
+    // `hitl-<agent>-<ulid>`).
+    //
+    // Effective authorization rides on the task token (an unguessable
+    // capability): the Lambda obtains it exclusively from the tenant-scoped
+    // DDB HITL item behind the conditional UpdateItem RESOLVING guard (BC-8,
+    // AM-1). Actions are already minimal — SendTaskSuccess/Failure only, no
+    // SendTaskHeartbeat (the 7-day approval window needs no heartbeat).
     hitlApprovalFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['states:SendTaskSuccess', 'states:SendTaskFailure'],
@@ -1033,7 +1055,7 @@ export class ApiStack extends cdk.Stack {
         {
           id: 'AwsSolutions-IAM5',
           reason:
-            'states:SendTaskSuccess/SendTaskFailure support resource-level permissions only for activities; callback-pattern authorization is scoped by the task token, which the Lambda obtains exclusively from the tenant-scoped HITL item (BC-8).',
+            'states:SendTaskSuccess/SendTaskFailure support NO resource-level permissions (AWS Service Authorization Reference) — Resource:* is required; callback authorization is scoped by the task token, which the Lambda obtains exclusively from the tenant-scoped HITL item (BC-8).',
           appliesTo: ['Resource::*'],
         },
       ],
@@ -1494,7 +1516,9 @@ export class ApiStack extends cdk.Stack {
     }
 
     // ─── CfnOutputs ─────────────────────────────────────────────────────────
-    this.graphqlApiUrlOutput = new cdk.CfnOutput(this, 'GraphqlApiUrl', { value: this.graphqlApiUrl });
+    this.graphqlApiUrlOutput = new cdk.CfnOutput(this, 'GraphqlApiUrl', {
+      value: this.graphqlApiUrl,
+    });
     new cdk.CfnOutput(this, 'GraphqlApiId', { value: this.graphqlApiId });
     new cdk.CfnOutput(this, 'AuthorizerArn', { value: this.authorizerArn });
     new cdk.CfnOutput(this, 'TenantDataRoleArn', { value: this.tenantDataRoleArn });

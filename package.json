@@ -11,7 +11,9 @@
     "readback": "vitest run --config infra/readback/vitest.config.ts --reporter=verbose",
     "test": "vitest run && cd frontend && npx vitest run",
     "test:cov": "vitest run --coverage && cd frontend && npx vitest run --coverage",
-    "test:int": "vitest run --config vitest.int.config.ts",
+    "test:int": "tsx scripts/test-int.ts",
+    "gen:role-matrix": "tsx scripts/gen-role-matrix.ts",
+    "check:role-matrix": "tsx scripts/gen-role-matrix.ts --check",
     "lint": "eslint . --ext .ts,.tsx",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit"
