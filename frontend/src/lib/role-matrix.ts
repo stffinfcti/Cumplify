@@ -18,6 +18,12 @@ const COGNITO_GROUP_ROLES: Record<string, string> = {
   EHSManager: 'ehs-manager',
   DocumentController: 'document-controller',
   Employee: 'employee',
+  InternalAuditor: 'internal-auditor',
+  ExternalAuditor: 'external-auditor',
+  Supervisor: 'supervisor',
+  ProcessOwner: 'process-owner',
+  Contractor: 'contractor',
+  PartnerConsultant: 'partner-consultant',
 };
 
 /** Map a raw custom:role claim to a matrix key. */

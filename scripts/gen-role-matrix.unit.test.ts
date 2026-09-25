@@ -44,10 +44,10 @@ describe('gen-role-matrix extractMatrix()', () => {
     ]);
   });
 
-  it('extracts the live services source (12 roles + 6 group aliases)', () => {
+  it('extracts the live services source (12 roles + 12 group aliases)', () => {
     const m = extractMatrix(SERVICES_SOURCE, 'services/api/src/permissions/role-matrix.ts');
     expect(m.roleEntries).toHaveLength(12);
-    expect(m.roleMap).toHaveLength(6);
+    expect(m.roleMap).toHaveLength(12);
     expect(m.roleMap).toContainEqual(['IMSLead', 'management-rep']);
     const mgmt = m.roleEntries.find((r) => r.role === 'management-rep');
     expect(mgmt?.modules).toHaveLength(13);
