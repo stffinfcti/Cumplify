@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import { AppShell } from '@/components/shell';
 import { AskOverlay } from '@/components/ask';
+import { ErrorBoundary } from '@/components/shared';
 import { StandardScopeProvider } from '@/lib/standard-scope';
 
 /**
@@ -36,7 +37,11 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
 
   return (
     <StandardScopeProvider>
-      <AppShell>{children}</AppShell>
+      <AppShell>
+        {/* FE-1: a page fault degrades to the localized ErrorState inside the
+            shell instead of unmounting the whole app */}
+        <ErrorBoundary>{children}</ErrorBoundary>
+      </AppShell>
       <AskOverlay />
     </StandardScopeProvider>
   );

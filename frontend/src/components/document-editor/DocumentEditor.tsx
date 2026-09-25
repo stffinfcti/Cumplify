@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useTranslations } from 'next-intl';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -94,6 +94,58 @@ export function DocumentEditor({ sections, runId, documentId: _documentId, versi
   const [saving, setSaving] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // Server content is the single state owner: when the parent refetches and a
+  // section's text moves (a regenerate wrote a new version, or a newer save
+  // landed), re-baseline the draft and record the REAL new text as an agent
+  // proposal — never synthetic content. Pending human edits are preserved.
+  const sectionsSig = sections
+    .map(
+      (s) =>
+        `${s.harmonizationKey}:${s.humanEditedBody ?? s.sentences?.map((x) => x.text).join(' ') ?? ''}`,
+    )
+    .join('|');
+  useEffect(() => {
+    setDrafts((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const section of sections) {
+        if (section.kind !== 'prose' && section.kind !== 'PROSE') continue;
+        const text =
+          section.humanEditedBody ?? section.sentences?.map((x) => x.text).join(' ') ?? '';
+        const draft = next.get(section.harmonizationKey);
+        if (!draft) {
+          next.set(section.harmonizationKey, createSectionDraft(section.harmonizationKey, text));
+          changed = true;
+          continue;
+        }
+        if (text === draft.baseContent || text === draft.editorContent) continue;
+        next.set(
+          section.harmonizationKey,
+          addAgentProposal({ ...draft, baseContent: text }, text),
+        );
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line -- rebaseline is keyed on section text, not array identity
+  }, [sectionsSig]);
+
+  // FE-5: onConverge fires from an effect over draft state — never inside a
+  // setState updater (React may invoke updaters more than once). Each distinct
+  // convergence fires exactly once; a section that drifts and re-converges
+  // fires again because its signature changed.
+  const convergeFiredRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!onConverge) return;
+    for (const draft of drafts.values()) {
+      if (!isConverged(draft)) continue;
+      const sig = `${draft.harmonizationKey}:${draft.changes.length}`;
+      if (convergeFiredRef.current.has(sig)) continue;
+      convergeFiredRef.current.add(sig);
+      onConverge(draft.harmonizationKey, getConvergedContent(draft));
+    }
+  }, [drafts, onConverge]);
+
   // RS-9 save: persist the section's current text + tracked-changes payload
   // as a NEW document version; syncStatus returns to 'local' on success.
   const handleSaveSection = useCallback(
@@ -150,74 +202,48 @@ export function DocumentEditor({ sections, runId, documentId: _documentId, versi
     [user],
   );
 
-  // Iterate with agent: regenerateSection
+  // Iterate with agent: regenerateSection. The worker writes a NEW document
+  // version (regenerateSection returns no section content), so the real text
+  // arrives through the parent's refetch — the sections-prop effect above
+  // records it as the agent proposal. Never write synthetic proposal text.
   const handleRegenerate = useCallback(
     async (harmonizationKey: string) => {
       setRegenerating(harmonizationKey);
       try {
-        const result = await mutate<{
-          regenerateSection: { harmonizationKey: string; kind: string };
-        }>(REGENERATE_MUTATION, {
+        await mutate(REGENERATE_MUTATION, {
           input: { runId, harmonizationKey },
         });
-        // Agent response lands as a tracked PROPOSAL, never silently replacing
-        setDrafts((prev) => {
-          const draft = prev.get(harmonizationKey);
-          if (!draft) return prev;
-          const updated = addAgentProposal(
-            draft,
-            `[Agent revision for ${result.regenerateSection.harmonizationKey}]`,
-          );
-          const next = new Map(prev);
-          next.set(harmonizationKey, updated);
-          return next;
-        });
+        onSaved?.();
       } catch {
         // Error handling — the section remains unchanged
       } finally {
         setRegenerating(null);
       }
     },
-    [mutate, runId],
+    [mutate, runId, onSaved],
   );
 
-  // Accept/reject a tracked change. §13.2 point 4: the CONVERGED state (all
-  // changes resolved) is what flows to submitDocumentForApproval — fire
-  // onConverge the moment resolving THIS change brings the section to
-  // convergence, so a consumer can act on it without polling draft state.
-  const handleAccept = useCallback(
-    (harmonizationKey: string, changeId: string) => {
-      setDrafts((prev) => {
-        const draft = prev.get(harmonizationKey);
-        if (!draft) return prev;
-        const resolved = acceptChange(draft, changeId);
-        const next = new Map(prev);
-        next.set(harmonizationKey, resolved);
-        if (isConverged(resolved)) {
-          onConverge?.(harmonizationKey, getConvergedContent(resolved));
-        }
-        return next;
-      });
-    },
-    [onConverge],
-  );
+  // Accept/reject a tracked change — pure state updates; the convergence
+  // effect above owns the onConverge callback.
+  const handleAccept = useCallback((harmonizationKey: string, changeId: string) => {
+    setDrafts((prev) => {
+      const draft = prev.get(harmonizationKey);
+      if (!draft) return prev;
+      const next = new Map(prev);
+      next.set(harmonizationKey, acceptChange(draft, changeId));
+      return next;
+    });
+  }, []);
 
-  const handleReject = useCallback(
-    (harmonizationKey: string, changeId: string) => {
-      setDrafts((prev) => {
-        const draft = prev.get(harmonizationKey);
-        if (!draft) return prev;
-        const resolved = rejectChange(draft, changeId);
-        const next = new Map(prev);
-        next.set(harmonizationKey, resolved);
-        if (isConverged(resolved)) {
-          onConverge?.(harmonizationKey, getConvergedContent(resolved));
-        }
-        return next;
-      });
-    },
-    [onConverge],
-  );
+  const handleReject = useCallback((harmonizationKey: string, changeId: string) => {
+    setDrafts((prev) => {
+      const draft = prev.get(harmonizationKey);
+      if (!draft) return prev;
+      const next = new Map(prev);
+      next.set(harmonizationKey, rejectChange(draft, changeId));
+      return next;
+    });
+  }, []);
 
   // Check if any section has pending RS-9 sync
   const hasPendingSync = useMemo(

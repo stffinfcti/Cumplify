@@ -295,7 +295,6 @@ export function NCDetail({ id, onBack }: { id: string; onBack: () => void }) {
         rootCauseSummary: values.rootCauseSummary,
       },
     });
-    setActiveDrawer(null);
     await fetchNC();
     await fetchCAs();
   }
@@ -311,7 +310,6 @@ export function NCDetail({ id, onBack }: { id: string; onBack: () => void }) {
         containmentFlag: values.containmentFlag === true,
       },
     });
-    setActiveDrawer(null);
     await fetchCAs();
   }
 
@@ -325,7 +323,6 @@ export function NCDetail({ id, onBack }: { id: string; onBack: () => void }) {
         effective: values.effective === 'true',
       },
     });
-    setVerifyCAId(null);
     await fetchNC();
     await fetchCAs();
   }
@@ -336,7 +333,6 @@ export function NCDetail({ id, onBack }: { id: string; onBack: () => void }) {
     await mutate(CLOSE_CAPA, {
       input: { id: closeCAId, closureNotes: (values.closureNotes as string) || undefined },
     });
-    setCloseCAId(null);
     await fetchNC();
     await fetchCAs();
   }

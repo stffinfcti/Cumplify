@@ -285,23 +285,21 @@ export default function CapaStudioPage() {
     [t, chipDesc, chipStandard],
   );
 
+  // Mutation errors propagate to FormDrawer's submit handler — it keeps the
+  // drawer open and renders the error inline (FE-3: the drawer owns the
+  // close-on-success contract, callers never re-implement it).
   async function handleRaiseNC(values: Record<string, string | boolean>) {
-    try {
-      await mutate(RAISE_NC_MUTATION, {
-        input: {
-          standard: values.standard,
-          source: values.source,
-          ncType: values.ncType,
-          description: values.description,
-          clauseRef: values.clauseRef,
-          severity: values.severity,
-        },
-      });
-      setDrawerOpen(false);
-      fetchAll();
-    } catch {
-      /* drawer stays open; FormDrawer shows its own error state */
-    }
+    await mutate(RAISE_NC_MUTATION, {
+      input: {
+        standard: values.standard,
+        source: values.source,
+        ncType: values.ncType,
+        description: values.description,
+        clauseRef: values.clauseRef,
+        severity: values.severity,
+      },
+    });
+    fetchAll();
   }
 
   function handleSelectNC(nc: Nonconformity) {

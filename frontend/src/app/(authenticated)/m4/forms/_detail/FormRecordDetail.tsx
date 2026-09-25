@@ -292,6 +292,8 @@ export function FormRecordDetail({
 
   // ─── Reopen ────────────────────────────────────────────────────────────────
 
+  // FE-3: errors propagate — FormDrawer keeps the drawer open and shows the
+  // error inline (previously a swallowed failure still closed the drawer).
   async function handleReopen(formValues: Record<string, string | boolean>) {
     setActionLoading(true);
     try {
@@ -300,8 +302,6 @@ export function FormRecordDetail({
       });
       setRecord(result.reopenFormRecord);
       setValues(JSON.parse(result.reopenFormRecord.values || '{}'));
-    } catch (err) {
-      setSubmitError((err as Error).message);
     } finally {
       setActionLoading(false);
     }

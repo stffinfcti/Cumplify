@@ -40,7 +40,23 @@
     "standardIso9001": "9001",
     "standardIso14001": "14001",
     "standardIso45001": "45001",
-    "standardIms": "IMS"
+    "standardIms": "IMS",
+    "newPasswordHint": "Your account requires a new password before you can continue.",
+    "newPassword": "New password",
+    "confirmPassword": "Confirm password",
+    "passwordsDontMatch": "Passwords do not match",
+    "mfaSelectHint": "Choose how to verify your identity.",
+    "mfaMethodTotp": "Authenticator app",
+    "mfaMethodSms": "Text message (SMS)",
+    "mfaCode": "Verification code",
+    "mfaHintTotp": "Enter the code from your authenticator app.",
+    "mfaHintSms": "Enter the code sent to your phone.",
+    "mfaHintCustom": "Enter your verification code.",
+    "challengeError": "Verification failed — check the value and try again.",
+    "unsupportedStep": "This sign-in requires a step that is not available yet — contact your administrator.",
+    "continue": "Continue",
+    "backToSignIn": "Back to sign in",
+    "verifying": "Verifying..."
   },
   "commandCenter": {
     "title": "Command Center",
@@ -176,7 +192,9 @@
     "submit": "Submit",
     "cancel": "Cancel",
     "close": "Close",
-    "notAuthorized": "You do not have access to this section"
+    "notAuthorized": "You do not have access to this section",
+    "notFound": "Page not found",
+    "backToDashboard": "Back to dashboard"
   },
   "m1": {
     "title": "Document Studio",
@@ -303,7 +321,6 @@
     "tabCalibrations": "Calibration Schedule",
     "tabAuditTrail": "Audit Trail",
     "loading": "Loading...",
-    "recordsBlocked": "Record listing requires listRecords query (blocked on backend read surface)",
     "registerRecord": "Register record",
     "createRetention": "Create retention policy",
     "recordCalibration": "Record calibration",
@@ -328,7 +345,13 @@
     "fieldTraceabilityRef": "Traceability reference",
     "fieldResult": "Result",
     "fieldNextDue": "Next due",
-    "retentionYearsInvalid": "Retention years must be a positive whole number"
+    "retentionYearsInvalid": "Retention years must be a positive whole number",
+    "colTemplate": "Template",
+    "colStatus": "Status",
+    "colCompletion": "Completion",
+    "colOpenedBy": "Opened by",
+    "colUpdated": "Updated",
+    "emptyRecords": "No form records yet"
   },
   "m5": {
     "title": "Risk Management",

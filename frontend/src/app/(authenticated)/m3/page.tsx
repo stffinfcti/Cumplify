@@ -169,52 +169,41 @@ export default function M3AuditStudioPage() {
     if (!Number.isInteger(year) || year < now - 10 || year > now + 10) {
       throw new Error(t('yearInvalid'));
     }
-    try {
-      await mutate(CREATE_PROGRAMME_MUTATION, {
-        input: {
-          standard: values.standard,
-          // CreateAuditProgrammeInput.year is Int! — text fields yield strings
-          year,
-          frequencyPlan: values.frequencyPlan || undefined,
-        },
-      });
-    } catch {
-      setError(true);
-    }
+    // Mutation errors propagate to the drawer — inline error, stays open (FE-3)
+    await mutate(CREATE_PROGRAMME_MUTATION, {
+      input: {
+        standard: values.standard,
+        // CreateAuditProgrammeInput.year is Int! — text fields yield strings
+        year,
+        frequencyPlan: values.frequencyPlan || undefined,
+      },
+    });
   }
 
   async function handleScheduleAudit(values: Record<string, string | boolean>) {
-    try {
-      await mutate(SCHEDULE_AUDIT_MUTATION, {
-        input: {
-          programmeId: values.programmeId,
-          // ScheduleAuditInput.standard is Standard! — required, never undefined
-          standard: values.standard,
-          scope: values.scope,
-          leadAuditorId: values.leadAuditorId,
-          plannedDate: values.plannedDate,
-        },
-      });
-    } catch {
-      setError(true);
-    }
+    await mutate(SCHEDULE_AUDIT_MUTATION, {
+      input: {
+        programmeId: values.programmeId,
+        // ScheduleAuditInput.standard is Standard! — required, never undefined
+        standard: values.standard,
+        scope: values.scope,
+        leadAuditorId: values.leadAuditorId,
+        plannedDate: values.plannedDate,
+      },
+    });
   }
 
   async function handleRecordFinding(values: Record<string, string | boolean>) {
-    try {
-      await mutate(RECORD_FINDING_MUTATION, {
-        input: {
-          auditId: values.auditId,
-          findingType: values.findingType,
-          clauseRef: values.clauseRef,
-          description: values.description,
-          evidenceRef: values.evidenceRef || undefined,
-        },
-      });
-      await fetchReadiness();
-    } catch {
-      setError(true);
-    }
+    await mutate(RECORD_FINDING_MUTATION, {
+      input: {
+        auditId: values.auditId,
+        findingType: values.findingType,
+        clauseRef: values.clauseRef,
+        description: values.description,
+        evidenceRef: values.evidenceRef || undefined,
+      },
+    });
+    await fetchReadiness();
   }
 
   // G4: Error state with retry

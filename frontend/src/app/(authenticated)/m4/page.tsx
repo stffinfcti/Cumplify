@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useTranslations } from 'next-intl';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import {
   PageHeader,
   DataTable,
@@ -10,6 +10,7 @@ import {
   ErrorState,
   PrimaryButton,
   SecondaryButton,
+  StatusBadge,
   type Column,
 } from '@/components/shared';
 import { FormDrawer, type FieldDef } from '@/components/shared';
@@ -19,7 +20,8 @@ import styles from './page.module.css';
 /**
  * M4 Records Management — view-designs.md §8.
  * Three tabs: (1) Record register (2) Calibration schedule (3) Audit-trail viewer.
- * Tab 1: BLOCKED-ON-OWNER — listRecords query needed.
+ * Tab 1 (FE-8): the record register IS the forms/records surface —
+ * listFormTemplates + listFormRecords per template aggregated into one table.
  * Tab 2: listCalibrationsDue(windowDays: 90).
  * Tab 3: getAuditTrail(entityId) — ProvenanceLink target for the whole app.
  * No subscription (MOD-10 excludes onCalibrationDue by design).
@@ -38,6 +40,27 @@ interface AuditEvent {
   timestamp: string;
   actor: string;
   payload: string;
+}
+
+interface FormTemplate {
+  id: string;
+  key: string;
+  titleKey: string;
+}
+
+interface FormRecord {
+  id: string;
+  templateId: string;
+  status: string;
+  completion: { fieldsFilled: number; fieldsTotal: number };
+  openedBy: string;
+  updatedAt: string;
+}
+
+/** One register row: a form record plus its parent template for display. */
+interface RegisterRow {
+  record: FormRecord;
+  template: FormTemplate;
 }
 
 const STANDARDS = ['ISO9001', 'ISO14001', 'ISO45001'] as const;
@@ -62,12 +85,23 @@ const RECORD_CALIBRATION_MUTATION = `mutation RecordCalibration($input: RecordCa
   recordCalibration(input: $input) { measuringResourceId standardUsed result nextDue }
 }`;
 
+const LIST_TEMPLATES = `query ListFormTemplates {
+  listFormTemplates { id key titleKey }
+}`;
+
+const LIST_RECORDS = `query ListFormRecords($templateId: ID!) {
+  listFormRecords(templateId: $templateId) { id templateId status completion { fieldsFilled fieldsTotal } openedBy updatedAt }
+}`;
+
 export default function M4RecordsPage() {
   const t = useTranslations('m4');
+  const tForms = useTranslations('forms');
   const searchParams = useSearchParams();
+  const router = useRouter();
   const { query, mutate } = useGraphQL();
 
   const [tab, setTab] = useState<'records' | 'calibrations' | 'trail'>('records');
+  const [registerRows, setRegisterRows] = useState<RegisterRow[]>([]);
   const [calibrations, setCalibrations] = useState<CalibrationRecord[]>([]);
   const [trailEvents, setTrailEvents] = useState<AuditEvent[]>([]);
   const [trailEntityId, setTrailEntityId] = useState('');
@@ -90,13 +124,30 @@ export default function M4RecordsPage() {
     }
   }, [searchParams]);
 
+  const fetchTrail = useCallback(
+    async (entityId: string) => {
+      try {
+        setError(false);
+        setLoading(true);
+        const data = await query<{ getAuditTrail: AuditEvent[] }>(GET_AUDIT_TRAIL_QUERY, {
+          entityId,
+        });
+        setTrailEvents(data.getAuditTrail);
+      } catch {
+        setError(true);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [query],
+  );
+
   // Auto-fetch trail when trailEntityId is set from URL
   useEffect(() => {
     if (trailEntityId && tab === 'trail') {
       fetchTrail(trailEntityId);
     }
-    // eslint-disable-next-line -- fetchTrail reference stable via useCallback pattern
-  }, [trailEntityId, tab]);
+  }, [trailEntityId, tab, fetchTrail]);
 
   const fetchCalibrations = useCallback(async () => {
     try {
@@ -114,25 +165,36 @@ export default function M4RecordsPage() {
     }
   }, [query]);
 
-  async function fetchTrail(entityId: string) {
+  // FE-8: the register aggregates every template's form records into one
+  // table — a record only exists under its template in the API surface.
+  const fetchRegister = useCallback(async () => {
     try {
       setError(false);
       setLoading(true);
-      const data = await query<{ getAuditTrail: AuditEvent[] }>(GET_AUDIT_TRAIL_QUERY, {
-        entityId,
-      });
-      setTrailEvents(data.getAuditTrail);
+      const { listFormTemplates: templates } = await query<{
+        listFormTemplates: FormTemplate[];
+      }>(LIST_TEMPLATES);
+      const rows = await Promise.all(
+        templates.map(async (tpl) => {
+          const data = await query<{ listFormRecords: FormRecord[] }>(LIST_RECORDS, {
+            templateId: tpl.id,
+          });
+          return data.listFormRecords.map((record) => ({ record, template: tpl }));
+        }),
+      );
+      setRegisterRows(rows.flat());
     } catch {
       setError(true);
     } finally {
       setLoading(false);
     }
-  }
+  }, [query]);
 
   // Fetch calibrations when tab switches to calibrations
   useEffect(() => {
     if (tab === 'calibrations') fetchCalibrations();
-  }, [tab, fetchCalibrations]);
+    if (tab === 'records') fetchRegister();
+  }, [tab, fetchCalibrations, fetchRegister]);
 
   const calibrationColumns: Column<CalibrationRecord>[] = useMemo(
     () => [
@@ -149,6 +211,38 @@ export default function M4RecordsPage() {
         render: (c) => new Date(c.nextDue).toLocaleDateString(),
       },
     ],
+    [t],
+  );
+
+  function tplTitle(tpl: FormTemplate): string {
+    try {
+      return tForms(tpl.titleKey.replace('forms.', ''));
+    } catch {
+      return tpl.key;
+    }
+  }
+
+  const registerColumns: Column<RegisterRow>[] = useMemo(
+    () => [
+      { key: 'template', header: t('colTemplate'), render: (r) => tplTitle(r.template) },
+      {
+        key: 'status',
+        header: t('colStatus'),
+        render: (r) => <StatusBadge status={r.record.status} />,
+      },
+      {
+        key: 'completion',
+        header: t('colCompletion'),
+        render: (r) => `${r.record.completion.fieldsFilled}/${r.record.completion.fieldsTotal}`,
+      },
+      { key: 'openedBy', header: t('colOpenedBy'), render: (r) => r.record.openedBy },
+      {
+        key: 'updatedAt',
+        header: t('colUpdated'),
+        render: (r) => new Date(r.record.updatedAt).toLocaleDateString(),
+      },
+    ],
+    // eslint-disable-next-line -- tplTitle closes over tForms, only t varies
     [t],
   );
 
@@ -190,21 +284,19 @@ export default function M4RecordsPage() {
     [t],
   );
 
+  // Drawer handlers propagate mutation errors — the drawer stays open with
+  // the inline error (FE-3: FormDrawer owns close-on-success).
   async function handleRegisterRecord(values: Record<string, string | boolean>) {
-    try {
-      await mutate(REGISTER_RECORD_MUTATION, {
-        input: {
-          // RegisterRecordInput.standard is Standard! — required, never undefined
-          standard: values.standard,
-          recordType: values.recordType,
-          sourceModule: values.sourceModule,
-          retentionClass: values.retentionClass || undefined,
-          s3ObjectRef: values.s3ObjectRef || undefined,
-        },
-      });
-    } catch {
-      setError(true);
-    }
+    await mutate(REGISTER_RECORD_MUTATION, {
+      input: {
+        // RegisterRecordInput.standard is Standard! — required, never undefined
+        standard: values.standard,
+        recordType: values.recordType,
+        sourceModule: values.sourceModule,
+        retentionClass: values.retentionClass || undefined,
+        s3ObjectRef: values.s3ObjectRef || undefined,
+      },
+    });
   }
 
   async function handleCreateRetention(values: Record<string, string | boolean>) {
@@ -215,34 +307,26 @@ export default function M4RecordsPage() {
     if (!Number.isInteger(retentionYears) || retentionYears <= 0) {
       throw new Error(t('retentionYearsInvalid'));
     }
-    try {
-      await mutate(CREATE_RETENTION_MUTATION, {
-        input: {
-          recordType: values.recordType,
-          retentionYears,
-          dispositionRule: values.dispositionRule,
-        },
-      });
-    } catch {
-      setError(true);
-    }
+    await mutate(CREATE_RETENTION_MUTATION, {
+      input: {
+        recordType: values.recordType,
+        retentionYears,
+        dispositionRule: values.dispositionRule,
+      },
+    });
   }
 
   async function handleRecordCalibration(values: Record<string, string | boolean>) {
-    try {
-      await mutate(RECORD_CALIBRATION_MUTATION, {
-        input: {
-          measuringResourceId: values.measuringResourceId,
-          standardUsed: values.standardUsed,
-          traceabilityRef: values.traceabilityRef || undefined,
-          result: values.result,
-          nextDue: values.nextDue,
-        },
-      });
-      await fetchCalibrations();
-    } catch {
-      setError(true);
-    }
+    await mutate(RECORD_CALIBRATION_MUTATION, {
+      input: {
+        measuringResourceId: values.measuringResourceId,
+        standardUsed: values.standardUsed,
+        traceabilityRef: values.traceabilityRef || undefined,
+        result: values.result,
+        nextDue: values.nextDue,
+      },
+    });
+    await fetchCalibrations();
   }
 
   function handleTrailSearch() {
@@ -253,7 +337,12 @@ export default function M4RecordsPage() {
 
   // G4: Error state with retry
   if (error && !loading) {
-    const retryFn = tab === 'calibrations' ? fetchCalibrations : () => fetchTrail(trailEntityId);
+    const retryFn =
+      tab === 'records'
+        ? fetchRegister
+        : tab === 'calibrations'
+          ? fetchCalibrations
+          : () => fetchTrail(trailEntityId);
     return <ErrorState onRetry={retryFn} />;
   }
 
@@ -286,11 +375,23 @@ export default function M4RecordsPage() {
         </button>
       </div>
 
-      {/* Tab 1: Record register — BLOCKED-ON-OWNER: listRecords query needed */}
+      {/* Tab 1: Record register — every template's form records; a row
+          deep-links into the forms surface (?tpl=&rec=) for editing */}
       {tab === 'records' && (
         <>
-          {/* BLOCKED-ON-OWNER — listRecords query not in schema */}
-          <EmptyState message={t('recordsBlocked')} />
+          {loading ? (
+            <p className={styles.loading}>{t('loading')}</p>
+          ) : (
+            <DataTable
+              columns={registerColumns}
+              data={registerRows}
+              rowKey={(r) => r.record.id}
+              onRowClick={(r) =>
+                router.push(`/m4/forms?tpl=${r.template.id}&rec=${r.record.id}`)
+              }
+              emptyMessage={t('emptyRecords')}
+            />
+          )}
           <div className={styles.drawerActions}>
             <PrimaryButton onClick={() => setRegisterDrawerOpen(true)}>
               {t('registerRecord')}
