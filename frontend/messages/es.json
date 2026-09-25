@@ -40,7 +40,23 @@
     "standardIso9001": "9001",
     "standardIso14001": "14001",
     "standardIso45001": "45001",
-    "standardIms": "SGI"
+    "standardIms": "SGI",
+    "newPasswordHint": "Tu cuenta requiere una nueva contraseña antes de continuar.",
+    "newPassword": "Nueva contraseña",
+    "confirmPassword": "Confirmar contraseña",
+    "passwordsDontMatch": "Las contraseñas no coinciden",
+    "mfaSelectHint": "Elige cómo quieres verificar tu identidad.",
+    "mfaMethodTotp": "Aplicación de autenticación",
+    "mfaMethodSms": "Mensaje de texto (SMS)",
+    "mfaCode": "Código de verificación",
+    "mfaHintTotp": "Ingresa el código de tu aplicación de autenticación.",
+    "mfaHintSms": "Ingresa el código enviado a tu teléfono.",
+    "mfaHintCustom": "Ingresa tu código de verificación.",
+    "challengeError": "La verificación falló — comprueba el valor e inténtalo de nuevo.",
+    "unsupportedStep": "Este inicio de sesión requiere un paso que aún no está disponible — contacta a tu administrador.",
+    "continue": "Continuar",
+    "backToSignIn": "Volver a iniciar sesión",
+    "verifying": "Verificando..."
   },
   "commandCenter": {
     "title": "Centro de Mando",
@@ -176,7 +192,9 @@
     "submit": "Enviar",
     "cancel": "Cancelar",
     "close": "Cerrar",
-    "notAuthorized": "No tienes acceso a esta sección"
+    "notAuthorized": "No tienes acceso a esta sección",
+    "notFound": "Página no encontrada",
+    "backToDashboard": "Volver al panel"
   },
   "m1": {
     "title": "Estudio de Documentos",
@@ -303,7 +321,6 @@
     "tabCalibrations": "Programa de Calibración",
     "tabAuditTrail": "Pista de Auditoría",
     "loading": "Cargando...",
-    "recordsBlocked": "La lista de registros requiere la consulta listRecords (bloqueado por superficie de lectura del backend)",
     "registerRecord": "Registrar registro",
     "createRetention": "Crear política de retención",
     "recordCalibration": "Registrar calibración",
@@ -328,7 +345,13 @@
     "fieldTraceabilityRef": "Referencia de trazabilidad",
     "fieldResult": "Resultado",
     "fieldNextDue": "Próximo vencimiento",
-    "retentionYearsInvalid": "Los años de retención deben ser un número entero positivo"
+    "retentionYearsInvalid": "Los años de retención deben ser un número entero positivo",
+    "colTemplate": "Plantilla",
+    "colStatus": "Estado",
+    "colCompletion": "Completado",
+    "colOpenedBy": "Abierto por",
+    "colUpdated": "Actualizado",
+    "emptyRecords": "Aún no hay registros de formularios"
   },
   "m5": {
     "title": "Gestión de Riesgos",

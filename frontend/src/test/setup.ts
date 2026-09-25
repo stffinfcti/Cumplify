@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom/vitest';
+import { jsx } from 'react/jsx-runtime';
 
 // Mock next/navigation
 vi.mock('next/navigation', () => ({
@@ -14,33 +15,24 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
-// Mock next/image
+// Mock next/image — elements go through the real jsx-runtime so React 19's
+// transitional-element check accepts them (hand-built react.element objects
+// are rejected as "older version" elements)
 vi.mock('next/image', () => ({
-  default: (props: Record<string, unknown>) => ({
-    $$typeof: Symbol.for('react.element'),
-    type: 'img',
-    props,
-    key: null,
-    ref: null,
-  }),
+  default: (props: Record<string, unknown>) => jsx('img', props),
 }));
 
 // Mock next/link
 vi.mock('next/link', () => ({
   default: ({ children, ...props }: { children: React.ReactNode; href: string }) => {
-    return {
-      $$typeof: Symbol.for('react.element'),
-      type: 'a',
-      props: { ...props, children },
-      key: null,
-      ref: null,
-    };
+    return jsx('a', { ...props, children });
   },
 }));
 
 // Mock aws-amplify/auth — HERMETIC: any unmocked call throws
 vi.mock('aws-amplify/auth', () => ({
   signIn: vi.fn().mockRejectedValue(new Error('UNMOCKED signIn')),
+  confirmSignIn: vi.fn().mockRejectedValue(new Error('UNMOCKED confirmSignIn')),
   signOut: vi.fn().mockResolvedValue(undefined),
   getCurrentUser: vi.fn().mockRejectedValue(new Error('Not authenticated')),
   fetchAuthSession: vi.fn().mockResolvedValue({

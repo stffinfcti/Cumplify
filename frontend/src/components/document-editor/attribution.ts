@@ -136,17 +136,26 @@ export function rejectChange(draft: SectionDraft, changeId: string): SectionDraf
 }
 
 /**
- * Get the converged content — base + accepted insertions - accepted deletions.
+ * Get the converged content — base + accepted changes folded in order.
  * Pending changes are NOT included (they must be resolved first).
+ * A 'replace' change carries the full new content (human edits record the
+ * whole editor HTML); 'insert' appends; 'delete' removes its matched text.
  */
 export function getConvergedContent(draft: SectionDraft): string {
-  // For now, return editorContent — real merge logic wires to Tiptap state
-  return draft.editorContent;
+  let content = draft.baseContent;
+  for (const change of draft.changes) {
+    if (change.status !== 'accepted') continue;
+    if (change.type === 'replace') content = change.content;
+    else if (change.type === 'insert') content += change.content;
+    else content = content.replace(change.content, '');
+  }
+  return content;
 }
 
 /**
- * Check if all changes are resolved (no pending).
+ * A section is converged once at least one tracked change exists and every
+ * change is resolved — an untouched draft has nothing to converge.
  */
 export function isConverged(draft: SectionDraft): boolean {
-  return draft.changes.every((c) => c.status !== 'pending');
+  return draft.changes.length > 0 && draft.changes.every((c) => c.status !== 'pending');
 }

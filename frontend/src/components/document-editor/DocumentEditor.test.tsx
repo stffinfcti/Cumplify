@@ -131,9 +131,17 @@ describe('DocumentEditor — human edit attribution', () => {
 });
 
 describe('DocumentEditor — iterate with agent (regenerateSection)', () => {
-  it('calls regenerateSection with runId + harmonizationKey and adds an agent proposal', async () => {
+  it('calls regenerateSection + onSaved (worker writes the new version; no synthetic proposal)', async () => {
     mockMutate.mockResolvedValue({ regenerateSection: { harmonizationKey: '4.1', kind: 'PROSE' } });
-    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" documentId="doc-1" />);
+    const onSaved = vi.fn();
+    render(
+      <DocumentEditor
+        sections={[PROSE_SECTION]}
+        runId="run-1"
+        documentId="doc-1"
+        onSaved={onSaved}
+      />,
+    );
 
     fireEvent.click(screen.getByText('editor.iterateWithAgent'));
 
@@ -141,8 +149,32 @@ describe('DocumentEditor — iterate with agent (regenerateSection)', () => {
     const [statement, variables] = mockMutate.mock.calls[0];
     expect(statement).toContain('regenerateSection');
     expect(variables).toEqual({ input: { runId: 'run-1', harmonizationKey: '4.1' } });
-    // Agent proposal lands as a tracked change → sync-pending banner appears
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    // No proposal yet — the real text only arrives when the parent's refetch
+    // delivers new section content (never a synthetic placeholder)
+    expect(screen.queryByText('editor.accept')).not.toBeInTheDocument();
+  });
+
+  it('re-baselines when the server content moves: real text becomes the agent proposal', async () => {
+    mockMutate.mockResolvedValue({ regenerateSection: { harmonizationKey: '4.1', kind: 'PROSE' } });
+    const { rerender } = render(
+      <DocumentEditor sections={[PROSE_SECTION]} runId="run-1" documentId="doc-1" />,
+    );
+
+    fireEvent.click(screen.getByText('editor.iterateWithAgent'));
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+
+    // Parent refetch returns the regenerated text — lands as a tracked
+    // proposal attributed to the agent → sync-pending banner appears
+    rerender(
+      <DocumentEditor
+        sections={[{ ...PROSE_SECTION, sentences: [{ text: 'Regenerated content.' }] }]}
+        runId="run-1"
+        documentId="doc-1"
+      />,
+    );
     await waitFor(() => expect(screen.getByTestId('guidance-banner')).toBeInTheDocument());
+    expect(screen.getByText(/Regenerated content\./)).toBeInTheDocument();
   });
 });
 
@@ -157,7 +189,7 @@ describe('DocumentEditor — Mermaid insertion (P2S3 gap closure)', () => {
 });
 
 describe('DocumentEditor — accept/reject + onConverge', () => {
-  it('accepting the only pending change fires onConverge with the converged content', () => {
+  it('accepting the only pending change fires onConverge with the converged content', async () => {
     const onConverge = vi.fn();
     render(
       <DocumentEditor
@@ -173,10 +205,15 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
 
     fireEvent.click(screen.getByText('editor.accept'));
 
-    expect(onConverge).toHaveBeenCalledWith('4.1', expect.any(String));
+    // Effect-driven: converged content = accepted human edit (a 'replace'
+    // carries the full editor HTML)
+    await waitFor(() =>
+      expect(onConverge).toHaveBeenCalledWith('4.1', '<p>Edited content.</p>'),
+    );
+    expect(onConverge).toHaveBeenCalledTimes(1);
   });
 
-  it('rejecting the only pending change also fires onConverge (nothing left pending)', () => {
+  it('rejecting the only pending change also fires onConverge (base content stands)', async () => {
     const onConverge = vi.fn();
     render(
       <DocumentEditor
@@ -192,17 +229,18 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
 
     fireEvent.click(screen.getByText('editor.reject'));
 
-    expect(onConverge).toHaveBeenCalledWith('4.1', expect.any(String));
+    await waitFor(() => expect(onConverge).toHaveBeenCalledWith('4.1', 'Original content.'));
   });
 
   it('does NOT fire onConverge while a second change is still pending', async () => {
     // A typing burst COALESCES into one change (2026-07-22 fix) — the real
-    // two-pending scenario is human edit + agent proposal.
+    // two-pending scenario is human edit + agent proposal (which arrives via
+    // the server refetch, never inline from the regenerate call).
     mockMutate.mockResolvedValue({
       regenerateSection: { harmonizationKey: '4.1', kind: 'PROSE' },
     });
     const onConverge = vi.fn();
-    render(
+    const { rerender } = render(
       <DocumentEditor
         sections={[PROSE_SECTION]}
         runId="run-1"
@@ -214,10 +252,20 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
       capturedOnUpdate!({ editor: { getHTML: () => '<p>Edit 1.</p>' } });
     });
     fireEvent.click(screen.getByText('editor.iterateWithAgent'));
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+    rerender(
+      <DocumentEditor
+        sections={[{ ...PROSE_SECTION, sentences: [{ text: 'Regenerated.' }] }]}
+        runId="run-1"
+        documentId="doc-1"
+        onConverge={onConverge}
+      />,
+    );
     await waitFor(() => expect(screen.getAllByText('editor.accept').length).toBe(2));
 
     fireEvent.click(screen.getAllByText('editor.accept')[0]);
 
+    await act(async () => {});
     expect(onConverge).not.toHaveBeenCalled();
   });
 

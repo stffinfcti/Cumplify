@@ -4,6 +4,7 @@ export { ClauseChip } from './ClauseChip';
 export { ProvenanceLink } from './ProvenanceLink';
 export { EmptyState } from './EmptyState';
 export { ErrorState } from './ErrorState';
+export { ErrorBoundary } from './ErrorBoundary';
 export { PageHeader } from './PageHeader';
 export { PrimaryButton, SecondaryButton, DestructiveButton } from './Buttons';
 export { DataTable, type Column } from './DataTable';

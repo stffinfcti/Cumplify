@@ -40,7 +40,23 @@
     "standardIso9001": "9001",
     "standardIso14001": "14001",
     "standardIso45001": "45001",
-    "standardIms": "SGI"
+    "standardIms": "SGI",
+    "newPasswordHint": "Sua conta requer uma nova senha antes de continuar.",
+    "newPassword": "Nova senha",
+    "confirmPassword": "Confirmar senha",
+    "passwordsDontMatch": "As senhas não coincidem",
+    "mfaSelectHint": "Escolha como você quer verificar sua identidade.",
+    "mfaMethodTotp": "Aplicativo autenticador",
+    "mfaMethodSms": "Mensagem de texto (SMS)",
+    "mfaCode": "Código de verificação",
+    "mfaHintTotp": "Digite o código do seu aplicativo autenticador.",
+    "mfaHintSms": "Digite o código enviado para o seu telefone.",
+    "mfaHintCustom": "Digite seu código de verificação.",
+    "challengeError": "A verificação falhou — verifique o valor e tente novamente.",
+    "unsupportedStep": "Este login requer uma etapa que ainda não está disponível — contate o administrador.",
+    "continue": "Continuar",
+    "backToSignIn": "Voltar para entrar",
+    "verifying": "Verificando..."
   },
   "commandCenter": {
     "title": "Centro de Comando",
@@ -176,7 +192,9 @@
     "submit": "Enviar",
     "cancel": "Cancelar",
     "close": "Fechar",
-    "notAuthorized": "Você não tem acesso a esta seção"
+    "notAuthorized": "Você não tem acesso a esta seção",
+    "notFound": "Página não encontrada",
+    "backToDashboard": "Voltar ao painel"
   },
   "m1": {
     "title": "Estúdio de Documentos",
@@ -303,7 +321,6 @@
     "tabCalibrations": "Programação de Calibração",
     "tabAuditTrail": "Trilha de Auditoria",
     "loading": "Carregando...",
-    "recordsBlocked": "A listagem de registros requer a consulta listRecords (bloqueado por superfície de leitura do backend)",
     "registerRecord": "Registrar registro",
     "createRetention": "Criar política de retenção",
     "recordCalibration": "Registrar calibração",
@@ -328,7 +345,13 @@
     "fieldTraceabilityRef": "Referência de rastreabilidade",
     "fieldResult": "Resultado",
     "fieldNextDue": "Próximo vencimento",
-    "retentionYearsInvalid": "Os anos de retenção devem ser um número inteiro positivo"
+    "retentionYearsInvalid": "Os anos de retenção devem ser um número inteiro positivo",
+    "colTemplate": "Modelo",
+    "colStatus": "Status",
+    "colCompletion": "Conclusão",
+    "colOpenedBy": "Aberto por",
+    "colUpdated": "Atualizado",
+    "emptyRecords": "Ainda não há registros de formulários"
   },
   "m5": {
     "title": "Gestão de Riscos",

@@ -6,6 +6,7 @@ import {
   acceptChange,
   rejectChange,
   isConverged,
+  getConvergedContent,
 } from '@/components/document-editor/attribution';
 
 /**
@@ -93,15 +94,43 @@ describe('Document editor attribution model (Collaboration Law)', () => {
     expect(rejected.changes[0].status).toBe('rejected');
   });
 
-  it('isConverged returns true when no pending changes remain', () => {
+  it('isConverged requires at least one change, all resolved', () => {
     let draft = createSectionDraft('context_of_org', baseContent);
-    expect(isConverged(draft)).toBe(true); // no changes = converged
+    expect(isConverged(draft)).toBe(false); // nothing to converge on a fresh draft
 
     draft = addHumanChange(draft, 'user-1', 'user@example.com', 'insert', 'Edit.');
     expect(isConverged(draft)).toBe(false); // pending change
 
     draft = acceptChange(draft, draft.changes[0].id);
     expect(isConverged(draft)).toBe(true); // all resolved
+  });
+
+  it('getConvergedContent folds accepted changes over the base in order', () => {
+    let draft = createSectionDraft('context_of_org', baseContent);
+    draft = addHumanChange(draft, 'user-1', 'user@example.com', 'replace', 'Human rewrite.');
+    draft = addAgentProposal(draft, 'Agent revision.');
+
+    // Only the human change accepted → converged content is the human text
+    let resolved = acceptChange(draft, draft.changes[0].id);
+    expect(getConvergedContent(resolved)).toBe('Human rewrite.');
+
+    // Agent proposal accepted too → the LAST accepted replace wins
+    resolved = acceptChange(resolved, resolved.changes[1].id);
+    expect(getConvergedContent(resolved)).toBe('Agent revision.');
+  });
+
+  it('getConvergedContent ignores pending + rejected changes', () => {
+    let draft = createSectionDraft('context_of_org', baseContent);
+    draft = addHumanChange(draft, 'user-1', 'user@example.com', 'insert', 'Extra.');
+    draft = addAgentProposal(draft, 'Agent rewrite.');
+
+    // Nothing resolved → base content stands
+    expect(getConvergedContent(draft)).toBe(baseContent);
+
+    // Insert accepted, proposal rejected → base + accepted insert
+    let resolved = acceptChange(draft, draft.changes[0].id);
+    resolved = rejectChange(resolved, resolved.changes[1].id);
+    expect(getConvergedContent(resolved)).toBe(`${baseContent}Extra.`);
   });
 
   it('multiple changes from different actors maintain order and attribution', () => {
