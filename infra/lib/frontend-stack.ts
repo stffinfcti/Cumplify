@@ -22,6 +22,7 @@ import { MGMT_ACCOUNT } from './env-config.js';
 export interface FrontendStackProps extends cdk.StackProps {
   readonly envConfig: EnvConfig;
   readonly apiUrl: string;
+  readonly cloudfrontWafArn: string;
 }
 
 /**
@@ -72,12 +73,59 @@ export class FrontendStack extends cdk.Stack {
       comment: 'Map extensionless routes to static-export .html objects',
     });
 
+    // Security headers for the SPA surface. CSP allows the AppSync endpoint,
+    // AppSync realtime (subscriptions over wss), and Cognito; everything else
+    // stays 'self'. 'unsafe-inline' on script/style is required by the Next.js
+    // static export (inlined bootstraps) — tighten when the app moves to
+    // external-only scripts.
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      `connect-src 'self' https://*.appsync-api.${envConfig.region}.amazonaws.com wss://*.appsync-realtime-api.${envConfig.region}.amazonaws.com https://*.amazoncognito.com https://cognito-identity.${envConfig.region}.amazonaws.com`,
+      "object-src 'none'",
+      "base-uri 'self'",
+      "frame-ancestors 'none'",
+      "form-action 'self'",
+      'upgrade-insecure-requests',
+    ].join('; ');
+
+    const securityHeaders = new cloudfront.ResponseHeadersPolicy(this, 'SecurityHeadersPolicy', {
+      securityHeadersBehavior: {
+        contentSecurityPolicy: { contentSecurityPolicy: csp, override: true },
+        contentTypeOptions: { override: true },
+        frameOptions: { frameOption: cloudfront.HeadersFrameOption.DENY, override: true },
+        referrerPolicy: {
+          referrerPolicy: cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+          override: true,
+        },
+        strictTransportSecurity: {
+          accessControlMaxAge: cdk.Duration.days(730),
+          includeSubdomains: true,
+          preload: true,
+          override: true,
+        },
+      },
+      customHeadersBehavior: {
+        customHeaders: [
+          {
+            header: 'Permissions-Policy',
+            value: 'camera=(), microphone=(), geolocation=(), interest-cohort=()',
+            override: true,
+          },
+        ],
+      },
+    });
+
     // CloudFront distribution with OAC origin
     const distribution = new cloudfront.Distribution(this, 'FrontendDistribution', {
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(bucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        responseHeadersPolicy: securityHeaders,
         functionAssociations: [
           {
             function: urlRewriteFn,
@@ -85,6 +133,7 @@ export class FrontendStack extends cdk.Stack {
           },
         ],
       },
+      webAclId: props.cloudfrontWafArn,
       defaultRootObject: 'index.html',
       // Unknown routes (post-rewrite .html miss): 403/404 from S3 → index.html
       errorResponses: [
@@ -157,11 +206,6 @@ export class FrontendStack extends cdk.Stack {
           id: 'AwsSolutions-CFR1',
           reason:
             'Geo restrictions not required for P1 (global SaaS, no data-residency constraint yet).',
-        },
-        {
-          id: 'AwsSolutions-CFR2',
-          reason:
-            'WAF integration deferred — the app is auth-gated (API behind WAF already); static assets are low-risk.',
         },
         {
           id: 'AwsSolutions-CFR3',

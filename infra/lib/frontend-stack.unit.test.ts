@@ -8,6 +8,7 @@ describe('FrontendStack', () => {
   const stack = new FrontendStack(app, 'TestFrontendStack', {
     envConfig: { envName: 'dev', account: '123456789012', region: 'us-east-1' } as any,
     apiUrl: 'https://test.appsync-api.us-east-1.amazonaws.com/graphql',
+    cloudfrontWafArn: 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/test-waf/abc123',
   });
   const template = Template.fromStack(stack);
 
@@ -104,6 +105,7 @@ describe('ContentDeployRole (SMOKE-2 §4.2)', () => {
   const stack = new FrontendStack(app, 'RoleTestFrontendStack', {
     envConfig: { envName: 'staging', account: '889007427685', region: 'us-east-1' } as any,
     apiUrl: 'https://test.appsync-api.us-east-1.amazonaws.com/graphql',
+    cloudfrontWafArn: 'arn:aws:wafv2:us-east-1:889007427685:global/webacl/test-waf/abc123',
   });
   const template = Template.fromStack(stack);
 

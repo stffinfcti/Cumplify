@@ -448,8 +448,41 @@ export class AiStack extends cdk.Stack {
       },
     });
 
-    // Timeout handled by WaitForApproval's TimeoutSeconds (7 days)
-    // On timeout, SFN execution fails — CloudWatch alarm detects failed executions.
+    // Timeout: a 7d unanswered approval previously failed the execution and
+    // left the DDB item PENDING forever — the approval queue card stayed
+    // clickable but the task token was dead, so APPROVE 404'd. Catch
+    // States.Timeout → mark the item EXPIRED directly via DynamoDB
+    // integration (no Lambda needed for one UpdateItem).
+    const markExpired = new sfn.CustomState(this, 'MarkExpired', {
+      stateJson: {
+        Type: 'Task',
+        Resource: 'arn:aws:states:::aws-sdk:dynamodb:updateItem',
+        Parameters: {
+          TableName: props.tableName,
+          Key: {
+            PK: { 'S.$': "States.Format('TENANT#{}#HITL', $.tenantId)" },
+            SK: { 'S.$': "States.Format('PENDING#{}', $.hitlItemId)" },
+          },
+          UpdateExpression:
+            'SET #status = :expired, resolvedAt = :now, approver = :system REMOVE GSI9PK, GSI9SK',
+          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeValues: {
+            ':expired': { S: 'EXPIRED' },
+            ':pending': { S: 'PENDING' },
+            ':now': { 'S.$': '$$.State.EnteredTime' },
+            ':system': { S: 'sfn-timeout' },
+          },
+          // Only flip a still-pending item — never overwrite a resolution
+          // that raced in just before the token died.
+          ConditionExpression: '#status = :pending',
+          ResultPath: sfn.JsonPath.DISCARD,
+        },
+      },
+    });
+    waitForApproval.addCatch(markExpired, {
+      errors: ['States.Timeout'],
+      resultPath: '$.timeoutError',
+    });
 
     // HITL-10: SENT_BACK (SendTaskFailure from the approval Lambda) → terminal Pass.
     // Must be wired via addCatch, not a raw stateJson Catch: CDK renders only states
@@ -477,6 +510,19 @@ export class AiStack extends cdk.Stack {
     // No wildcard addPermission. No other principal may invoke ExecuteWriteback.
     storeTokenLambda.grantInvoke(hitlStateMachine.role);
     executeWritebackLambda.grantInvoke(hitlStateMachine.role);
+    // MarkExpired writes the HITL item directly via the dynamodb integration.
+    hitlStateMachine.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:UpdateItem'],
+        resources: [props.tableArn],
+        conditions: {
+          // Can only ever touch HITL-prefixed partitions.
+          'ForAllValues:StringLike': {
+            'dynamodb:LeadingKeys': ['TENANT#*#HITL'],
+          },
+        },
+      }),
+    );
 
     // ─── New SQS Queues + DLQs (DocStudio, LeadAuditor, ControlTower) ──────
     const docStudioDlq = this.createStdDlq('DocStudioDlq');
@@ -1147,6 +1193,17 @@ export class AiStack extends cdk.Stack {
       },
     });
 
+    const markRunFailedFn = new NodejsFunction(this, 'MarkRunFailedFn', {
+      entry: 'services/qms-generation/src/mark-run-failed.ts',
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(60),
+      bundling: { externalModules: [], target: 'node22' },
+      environment: { ...genEnv, POWERTOOLS_SERVICE_NAME: 'qms-mark-run-failed' },
+    });
+
     const finalizeManualFn = new NodejsFunction(this, 'FinalizeManualFn', {
       entry: 'services/qms-generation/src/finalize-manual.ts',
       handler: 'handler',
@@ -1188,7 +1245,13 @@ export class AiStack extends cdk.Stack {
       resourceName: `${graphqlApiId}/types/Mutation/fields/publishGenerationEvent`,
     });
 
-    for (const fn of [seedSectionsFn, composeSectionFn, finalizeManualFn, regenerateSectionFn]) {
+    for (const fn of [
+      seedSectionsFn,
+      composeSectionFn,
+      finalizeManualFn,
+      regenerateSectionFn,
+      markRunFailedFn,
+    ]) {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           effect: iam.Effect.ALLOW,
@@ -1235,7 +1298,12 @@ export class AiStack extends cdk.Stack {
     }
 
     // GEN-5 progress events: compose + finalize publish the @aws_iam mutation
-    for (const fn of [composeSectionFn, finalizeManualFn, regenerateSectionFn]) {
+    for (const fn of [
+      composeSectionFn,
+      finalizeManualFn,
+      regenerateSectionFn,
+      markRunFailedFn,
+    ]) {
       fn.addToRolePolicy(
         new iam.PolicyStatement({
           effect: iam.Effect.ALLOW,
@@ -1294,6 +1362,17 @@ export class AiStack extends cdk.Stack {
       interval: cdk.Duration.seconds(10),
       backoffRate: 2,
     });
+
+    // Any stage dying post-retry previously stranded the run at 'running'
+    // forever (the SFN failed but nobody touched qms.generation_runs).
+    // Catch-all on every stage → MarkRunFailed flips the row 'failed'.
+    const markRunFailed = new tasks.LambdaInvoke(this, 'MarkRunFailed', {
+      lambdaFunction: markRunFailedFn,
+      outputPath: '$.Payload',
+    });
+    seedTask.addCatch(markRunFailed, { errors: ['States.ALL'], resultPath: '$.stageError' });
+    composeMap.addCatch(markRunFailed, { errors: ['States.ALL'], resultPath: '$.stageError' });
+    finalizeTask.addCatch(markRunFailed, { errors: ['States.ALL'], resultPath: '$.stageError' });
 
     const docGenStateMachine = new sfn.StateMachine(this, 'DocGenStateMachine', {
       stateMachineName: `cumplify-docgen-${envConfig.envName}`,

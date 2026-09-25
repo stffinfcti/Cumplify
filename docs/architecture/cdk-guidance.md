@@ -73,15 +73,19 @@ const pipeline = new pipelines.CodePipeline(this, 'CumplifyPipeline', {
   selfMutation: true,         // pipeline updates its own definition before deploying stages
 
   synth: new pipelines.ShellStep('Synth', {
-    input: pipelines.CodePipelineSource.connection('Cumplifyrepo/Cumplify', 'develop', {
+    input: pipelines.CodePipelineSource.connection('stffinfcti/Cumplify', 'develop', {
       connectionArn: 'arn:aws:codestar-connections:us-east-1:MGMT_ACCOUNT:connection/UUID',
       // NOTE: connection must be AVAILABLE (manually authorized) before first run
     }),
     commands: [
-      'source ~/.nvm/nvm.sh && nvm use',
       'npm ci',
+      'cd frontend && npm ci && cd ..',
       'npm run test',
-      'npm audit --audit-level=high',
+      'cd frontend && npm run i18n:check && cd ..',
+      'npm run lint',
+      'npm run typecheck',
+      'npx tsx scripts/audit-gate.ts',
+      'cd frontend && npm audit --audit-level=high && cd ..',
       'npx cdk synth --all',
       // CDK Nag runs as an Aspect during synth; a Nag error fails synth here.
     ],
@@ -110,10 +114,11 @@ pipeline.addStage(new CumplifyStage(this, 'Staging', { env: ENVS.staging }), {
 pipeline.addStage(new CumplifyStage(this, 'Prod', { env: ENVS.prod }), {
   pre: [
     new pipelines.ManualApprovalStep('ApproveToProd'),
-    // LegalSignoffGuard runs as a ShellStep invoking a Lambda that blocks
-    // unless attorney sign-off recorded (verified PHASE-19 hard gate).
+    // LegalSignoffGuard is a ShellStep running scripts/assert-legal-signoff.ts,
+    // which blocks unless a committed legal-signoff/prod-approval.json record
+    // attests attorney sign-off (verified PHASE-19 hard gate).
     new pipelines.ShellStep('LegalSignoffGuard', {
-      commands: ['npx ts-node scripts/assert-legal-signoff.ts'],
+      commands: ['npx tsx scripts/assert-legal-signoff.ts'],
     }),
   ],
 });

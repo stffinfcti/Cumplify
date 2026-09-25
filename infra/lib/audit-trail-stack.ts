@@ -19,6 +19,8 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as destinations from 'aws-cdk-lib/aws-lambda-destinations';
@@ -38,6 +40,7 @@ export interface AuditTrailStackProps extends cdk.StackProps {
   readonly auditSinkQueueArn: string;
   readonly auditSinkDlqUrl: string;
   readonly auditSinkDlqArn: string;
+  readonly opsAlertTopic: sns.ITopic;
 }
 
 export class AuditTrailStack extends cdk.Stack {
@@ -377,6 +380,10 @@ export class AuditTrailStack extends cdk.Stack {
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
+
+    for (const alarm of [sealerDlqAlarm, tamperAlarm, chainBrokenAlarm]) {
+      alarm.addAlarmAction(new cwActions.SnsAction(props.opsAlertTopic));
+    }
 
     // ─── CfnOutputs ────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, 'AuditArchiveBucketName', { value: auditArchiveBucket.bucketName });

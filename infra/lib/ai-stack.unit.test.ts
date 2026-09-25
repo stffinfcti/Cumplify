@@ -419,9 +419,14 @@ describe('AiStack', () => {
       const wait = asl.States.WaitForApproval;
       // Carry #3: sfnExecutionArn passed via $$.Execution.Id
       expect(wait.Parameters.Payload['sfnExecutionArn.$']).toBe('$$.Execution.Id');
-      expect(wait.Catch).toHaveLength(1);
-      expect(wait.Catch[0].ErrorEquals).toEqual(['SENT_BACK']);
-      expect(wait.Catch[0].Next).toBe('HandleSendBack');
+      const catches = wait.Catch as Array<{ ErrorEquals: string[]; Next: string }>;
+      const sentBack = catches.find((c) => c.ErrorEquals.includes('SENT_BACK'));
+      expect(sentBack?.Next).toBe('HandleSendBack');
+      // States.Timeout → MarkExpired: a dead task token must not leave the
+      // HITL item PENDING forever (dynamodb:updateItem direct integration).
+      const timeout = catches.find((c) => c.ErrorEquals.includes('States.Timeout'));
+      expect(timeout?.Next).toBe('MarkExpired');
+      expect(asl.States.MarkExpired).toBeDefined();
     });
 
     it('exports GuardrailId', () => {

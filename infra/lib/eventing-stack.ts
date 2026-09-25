@@ -13,6 +13,8 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import * as destinations from 'aws-cdk-lib/aws-lambda-destinations';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
@@ -21,6 +23,7 @@ import type { EnvConfig } from './env-config.js';
 
 export interface EventingStackProps extends cdk.StackProps {
   readonly envConfig: EnvConfig;
+  readonly opsAlertTopic: sns.ITopic;
 }
 
 export class EventingStack extends cdk.Stack {
@@ -324,7 +327,7 @@ export class EventingStack extends cdk.Stack {
     ];
 
     for (const { id, dlq } of allDlqs) {
-      new cloudwatch.Alarm(this, id, {
+      const alarm = new cloudwatch.Alarm(this, id, {
         metric: dlq.metricApproximateNumberOfMessagesVisible({
           period: cdk.Duration.minutes(5),
         }),
@@ -332,8 +335,8 @@ export class EventingStack extends cdk.Stack {
         evaluationPeriods: 3, // 15 min
         comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-        // No alarm action until spec 14 wires alerting (accepted decision)
       });
+      alarm.addAlarmAction(new cwActions.SnsAction(props.opsAlertTopic));
     }
 
     // ─── CfnOutputs (C-6: everything readback needs) ────────────────────────

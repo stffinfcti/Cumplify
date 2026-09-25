@@ -205,7 +205,16 @@ export class IdentityStack extends cdk.Stack {
         oAuth: {
           flows: { authorizationCodeGrant: true, implicitCodeGrant: false },
           scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
-          callbackUrls: ['http://localhost:3000/callback'], // Placeholder — spec 3 updates
+          // localhost stays registered so `next dev` sign-in works; the deployed
+          // origin comes from envConfig.frontendDomain once the env is live.
+          callbackUrls: [
+            'http://localhost:3000/callback',
+            ...(envConfig.frontendDomain ? [`https://${envConfig.frontendDomain}/callback`] : []),
+          ],
+          logoutUrls: [
+            'http://localhost:3000/logout',
+            ...(envConfig.frontendDomain ? [`https://${envConfig.frontendDomain}/logout`] : []),
+          ],
         },
         preventUserExistenceErrors: true,
         readAttributes: new cognito.ClientAttributes().withStandardAttributes({

@@ -1,8 +1,1 @@
-[
-  {
-    "advisory": "GHSA-3jxr-9vmj-r5cp",
-    "module": "brace-expansion",
-    "reason": "brace-expansion@5.0.6 is BUNDLED inside the aws-cdk-lib tarball (bundleDependencies -> minimatch@10.2.5); npm overrides/lockfile edits cannot reach bundled deps and no rebundled aws-cdk-lib exists yet (latest 2.261.0 published 2026-07-02 predates the advisory). Exploitability negligible in context: DoS via attacker-controlled glob patterns, but aws-cdk-lib is build-time-only code where all glob patterns originate from our own source. Unbundled instances (1.x, 2.x trees) were patched via npm audit fix in the same commit. Remove this entry when aws-cdk-lib rebundles brace-expansion >= 5.0.7.",
-    "expires": "2026-08-21"
-  }
-]
+[]

@@ -134,6 +134,22 @@ function hasFilesMatching(root: string, patterns: string[]): boolean {
   return false;
 }
 
+/** Recursive file walker — the test-discovery checks must reach tests in
+ * src/, __tests__/, or any nested layout, not just a service's top level. */
+function* walkFiles(dir: string): Generator<string> {
+  for (const entry of readdirSync(dir)) {
+    const p = join(dir, entry);
+    if (statSync(p).isDirectory()) {
+      if (entry === 'node_modules' || entry.startsWith('.')) continue;
+      yield* walkFiles(p);
+    } else {
+      yield p;
+    }
+  }
+}
+
+const INTEGRATION_TEST_RE = /\.(integration|int)\.test\.ts$/;
+
 function checkPropertyTests(): string | null {
   const servicesDir = join(ROOT, 'services');
   if (!existsSync(servicesDir)) return null;
@@ -144,15 +160,16 @@ function checkPropertyTests(): string | null {
     const dir = join(servicesDir, entry);
     if (!statSync(dir).isDirectory()) continue;
 
-    // Check if directory has source .ts files
-    const files = readdirSync(dir);
-    const sourceFiles = files.filter(
+    const allFiles = [...walkFiles(dir)].map((f) => f.split('/').pop() ?? f);
+
+    // Check if the subtree has source .ts files
+    const sourceFiles = allFiles.filter(
       (f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && f !== 'index.ts' && f !== 'types.ts',
     );
     if (sourceFiles.length === 0) continue;
 
-    // Check for property tests
-    const propertyTests = files.filter((f) => f.endsWith('.property.test.ts'));
+    // Check for property tests anywhere under the service
+    const propertyTests = allFiles.filter((f) => f.endsWith('.property.test.ts'));
     if (propertyTests.length === 0) {
       return `FAIL: services/${entry}/ has no property-based test (*.property.test.ts). Per 13-testing.md, property-based tests are mandatory on services/*.`;
     }
@@ -250,16 +267,17 @@ function main() {
     const moduleTestDir = join(ROOT, 'services', moduleName);
     const hasIntegTests =
       existsSync(moduleTestDir) &&
-      readdirSync(moduleTestDir).some((f) => f.endsWith('.integration.test.ts'));
+      [...walkFiles(moduleTestDir)].some((f) => INTEGRATION_TEST_RE.test(f));
     if (!hasIntegTests) {
       runStep(6, `integration tests (module: ${moduleName})`, null, {
         skipReason: `No integration tests defined for module ${moduleName}.`,
       });
     } else {
+      // Both suffixes exist in the tree — run them together.
       const s6 = runStep(
         6,
         `integration tests (module: ${moduleName})`,
-        `npx vitest run services/${moduleName}/**/*.integration.test.ts --reporter=verbose`,
+        `npx vitest run "services/${moduleName}/**/*.integration.test.ts" "services/${moduleName}/**/*.int.test.ts" --reporter=verbose`,
       );
       if (s6 === 'FAIL') {
         computeResult();

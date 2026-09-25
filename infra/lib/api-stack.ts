@@ -149,7 +149,9 @@ export class ApiStack extends cdk.Stack {
           authorizationType: appsync.AuthorizationType.LAMBDA,
           lambdaAuthorizerConfig: {
             handler: authorizerFn,
-            resultsCacheTtl: cdk.Duration.seconds(300), // OQ-3: 300s dev
+            // 60s: caps role/entitlement revocation lag at ~1 min. The dev
+            // 300s carry (OQ-3) let a disabled user keep calling for 5 min.
+            resultsCacheTtl: cdk.Duration.seconds(60),
           },
         },
         additionalAuthorizationModes: [{ authorizationType: appsync.AuthorizationType.IAM }],
@@ -437,6 +439,20 @@ export class ApiStack extends cdk.Stack {
           },
         },
       }),
+      // '*' and '?' are IAM wildcard chars: a session tag containing them turns
+      // the verbatim-substituted LeadingKeys pattern `TENANT#<tag>#*` into a
+      // match-every-tenant selector. `${*}`/`${?}` are the IAM literal-char
+      // escapes — the array is OR'd.
+      new iam.PolicyStatement({
+        effect: iam.Effect.DENY,
+        actions: ['sts:TagSession'],
+        principals: [new iam.AnyPrincipal()],
+        conditions: {
+          StringLike: {
+            'aws:RequestTag/tenantId': ['*${*}*', '*${?}*'],
+          },
+        },
+      }),
     );
 
     // Inline policy: DDB actions with LeadingKeys condition
@@ -446,7 +462,10 @@ export class ApiStack extends cdk.Stack {
           'dynamodb:GetItem',
           'dynamodb:PutItem',
           'dynamodb:Query',
-          'dynamodb:TransactWriteItems',
+          // TransactWriteItems deliberately absent: LeadingKeys is not
+          // evaluated for transactions (with ForAllValues an absent key
+          // passes true), so a transaction grant would be an unscoped
+          // cross-tenant write door.
         ],
         resources: [
           props.tableArn,
@@ -609,13 +628,15 @@ export class ApiStack extends cdk.Stack {
         POWERTOOLS_SERVICE_NAME: 'resolver-billing',
       },
     });
-    // Least-privilege: read ONLY the Stripe secret. It uses the default
-    // AWS-managed KMS key (no CMK), so no extra kms grant is needed. The secret
-    // is provisioned out-of-band per env (cumplify/<env>/stripe); if absent in
+    // Scoped to ONLY the Stripe secret — read + write (the resolver writes back
+    // new tenant→customer mappings so repeat portal calls reuse the Stripe
+    // customer instead of duplicating it). The secret uses the default
+    // AWS-managed KMS key (no CMK), so no extra kms grant is needed. It is
+    // provisioned out-of-band per env (cumplify/<env>/stripe); if absent in
     // an env the resolver throws STRIPE_NOT_CONFIGURED (billing stays inert).
-    secretsmanager.Secret.fromSecretNameV2(this, 'StripeSecret', stripeSecretName).grantRead(
-      billingFn,
-    );
+    const stripeSecret = secretsmanager.Secret.fromSecretNameV2(this, 'StripeSecret', stripeSecretName);
+    stripeSecret.grantRead(billingFn);
+    stripeSecret.grantWrite(billingFn);
 
     // Lambda data sources — one per module
     const m1DS = api.addLambdaDataSource('M1DataSource', resolverFns[0]);
@@ -989,10 +1010,10 @@ export class ApiStack extends cdk.Stack {
     // the loop over [hitlApprovalFn, hitlQueryFn, profileFn] above.
 
     // SFN task-callback permissions for the approval Lambda (design §2.3).
-    // SendTaskSuccess/SendTaskFailure authorize via the task token itself;
-    // resource-level scoping exists only for activities (not used here), so
-    // Resource must be '*' — verified against the service authorization
-    // reference at Task 14 review.
+    // Authorization rides on the task token (an unguessable capability). These
+    // actions DO support execution-ARN scoping, but the HITL state machine has
+    // no deterministic name today; scoping needs `execution:<name>:*` and is
+    // deferred until the machine is explicitly named.
     hitlApprovalFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['states:SendTaskSuccess', 'states:SendTaskFailure'],
