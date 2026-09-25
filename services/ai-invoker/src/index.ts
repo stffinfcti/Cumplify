@@ -13,6 +13,7 @@ import { resolveModel } from './register-resolver.js';
 import { converse } from './converse.js';
 import { computeCredits, loadWeights, incrementMeter, emitCreditsTelemetry } from './metering.js';
 import { checkCreditBalance } from './credit-precheck.js';
+import { resolveExemptFlag } from './exempt-principals.js';
 import { assertSchemaValid } from './schema-retry.js';
 import { buildGuardrailConfig } from './guardrail.js';
 import { embed } from './embed.js';
@@ -71,8 +72,12 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
   logger.info('Invoking model', { seat, modelId, tenantId, agent });
 
-  // Step 2: Credit pre-check (SERVE-9)
-  await checkCreditBalance(tenantId, request.creditExempt ?? false);
+  // Step 2: Credit pre-check (SERVE-9) — the exemption flag is honored only
+  // for registered internal/system principals (see exempt-principals.ts).
+  const cap = await checkCreditBalance(
+    tenantId,
+    resolveExemptFlag(request.creditExempt, agent, 'creditExempt'),
+  );
 
   // Load model weights for metering
   const weights = await loadWeights(modelId);
@@ -148,7 +153,7 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
     // Meter consumed usage (billing integrity — even blocked calls have token cost)
     const credits = computeCredits(usage, weights);
-    await incrementMeter(tenantId, credits);
+    await incrementMeter(tenantId, credits, cap);
     await emitCreditsTelemetry({
       tenantId, agent, module, feature,
       inputTokens: usage.inputTokens,
@@ -195,7 +200,7 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
           // metering even on blocked hops (same pattern as honest-miss path).
           if (err instanceof InvokeError && err.code === 'HOP_BLOCKED') {
             const credits = computeCredits(usage, weights);
-            await incrementMeter(tenantId, credits);
+            await incrementMeter(tenantId, credits, cap);
             await emitCreditsTelemetry({
               tenantId, agent, module, feature,
               inputTokens: usage.inputTokens,
@@ -267,7 +272,7 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
         // Meter consumed usage before returning honest-miss
         const credits = computeCredits(usage, weights);
-        await incrementMeter(tenantId, credits);
+        await incrementMeter(tenantId, credits, cap);
         await emitCreditsTelemetry({
           tenantId, agent, module, feature,
           inputTokens: usage.inputTokens,
@@ -356,7 +361,7 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
         // Meter consumed usage (FIX-W-1 pattern)
         const credits = computeCredits(usage, weights);
-        await incrementMeter(tenantId, credits);
+        await incrementMeter(tenantId, credits, cap);
         await emitCreditsTelemetry({
           tenantId, agent, module, feature,
           inputTokens: usage.inputTokens,
@@ -449,7 +454,7 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
           // Meter consumed usage (FIX-W-1 pattern)
           const credits = computeCredits(usage, weights);
-          await incrementMeter(tenantId, credits);
+          await incrementMeter(tenantId, credits, cap);
           await emitCreditsTelemetry({
             tenantId, agent, module, feature,
             inputTokens: usage.inputTokens,
@@ -547,7 +552,7 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
           });
         } catch (retryErr) {
           const credits = computeCredits(usage, weights);
-          await incrementMeter(tenantId, credits);
+          await incrementMeter(tenantId, credits, cap);
           await emitCreditsTelemetry({
             tenantId, agent, module, feature,
             inputTokens: usage.inputTokens,
@@ -565,7 +570,7 @@ export async function invoke(request: InvokeRequest): Promise<InvokeResponse> {
 
   // Step 7: Meter tokens → credits (SERVE-3)
   const credits = computeCredits(usage, weights);
-  await incrementMeter(tenantId, credits);
+  await incrementMeter(tenantId, credits, cap);
 
   // Emit telemetry (non-blocking)
   await emitCreditsTelemetry({

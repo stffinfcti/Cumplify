@@ -9,6 +9,7 @@
 import { DynamoDBClient, UpdateItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { Logger } from '@aws-lambda-powertools/logger';
+import { InvokeError } from './types.js';
 import type { ModelWeight, TokenUsage } from './types.js';
 
 const logger = new Logger({ serviceName: 'ai-invoker-metering' });
@@ -92,8 +93,19 @@ export async function loadWeights(modelId: string): Promise<ModelWeight> {
 /**
  * Atomically increment the tenant's monthly credit meter.
  * Key: TENANT#<tenantId>#METER / MONTH#<yyyymm>
+ *
+ * TOCTOU (M-effort): the pre-check's check-then-act between the meter read
+ * and this ADD used to race — two concurrent invokes could both pass the
+ * pre-check and both ADD past the grant. When the caller passes the cap the
+ * pre-check resolved, the SAME invariant rides the write as a
+ * ConditionExpression ('used < cap before this ADD'), so a racing write is
+ * rejected by DynamoDB instead of silently over-crediting.
  */
-export async function incrementMeter(tenantId: string, credits: number): Promise<void> {
+export async function incrementMeter(
+  tenantId: string,
+  credits: number,
+  cap?: { hardCap?: number },
+): Promise<void> {
   if (!Number.isFinite(credits) || credits < 0) {
     throw new Error(`Refusing to increment meter by non-finite credits: ${credits}`);
   }
@@ -101,20 +113,42 @@ export async function incrementMeter(tenantId: string, credits: number): Promise
   const pk = `TENANT#${tenantId}#METER`;
   const sk = `MONTH#${yyyymm}`;
 
-  await ddb.send(
-    new UpdateItemCommand({
-      TableName: TABLE_NAME,
-      Key: {
-        PK: { S: pk },
-        SK: { S: sk },
-      },
-      UpdateExpression: 'ADD creditsUsed :credits SET lastUpdated = :ts',
-      ExpressionAttributeValues: {
-        ':credits': { N: credits.toFixed(6) },
-        ':ts': { S: new Date().toISOString() },
-      },
-    }),
-  );
+  const capped = cap?.hardCap !== undefined;
+  try {
+    await ddb.send(
+      new UpdateItemCommand({
+        TableName: TABLE_NAME,
+        Key: {
+          PK: { S: pk },
+          SK: { S: sk },
+        },
+        // attribute_not_exists covers a never-metered tenant (fresh month row);
+        // the equality edge is rejected exactly as the pre-check's >= gate was.
+        ...(capped
+          ? {
+              ConditionExpression:
+                'attribute_not_exists(creditsUsed) OR creditsUsed < :cap',
+            }
+          : {}),
+        UpdateExpression: 'ADD creditsUsed :credits SET lastUpdated = :ts',
+        ExpressionAttributeValues: {
+          ':credits': { N: credits.toFixed(6) },
+          ':ts': { S: new Date().toISOString() },
+          ...(capped ? { ':cap': { N: String(cap!.hardCap) } } : {}),
+        },
+      }),
+    );
+  } catch (err) {
+    if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
+      // A concurrent write already consumed the remaining grant — the correct
+      // outcome is the same block the pre-check would have thrown.
+      throw new InvokeError(
+        'PAUSED_FOR_CREDITS',
+        `Tenant ${tenantId} credit balance exhausted by a concurrent invoke (grant: ${cap!.hardCap})`,
+      );
+    }
+    throw err;
+  }
 }
 
 /**

@@ -13,7 +13,11 @@
  */
 
 import { Logger } from '@aws-lambda-powertools/logger';
-import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
+import {
+  DynamoDBClient,
+  GetItemCommand,
+  type GetItemCommandOutput,
+} from '@aws-sdk/client-dynamodb';
 import { ROLE_PRIORITY } from './permissions/role-priority.js';
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 
@@ -68,10 +72,12 @@ interface TokenClaims extends JWTPayload {
 
 /**
  * Reads tenant entitlement from CumplifyCore (PK=TENANT#<tenantId>#META, SK=PLAN).
- * Returns a static JSON string for resolverContext.entitlement.
+ * Returns a static JSON string for resolverContext.entitlement, or null when
+ * the read itself fails (caller must fail-closed: authorize := false).
  * P1 scope: static stamp. P2 upgrades to real-time lookup.
  */
-async function getEntitlementStamp(tenantId: string): Promise<string> {
+async function getEntitlementStamp(tenantId: string): Promise<string | null> {
+  let item: GetItemCommandOutput['Item'] | undefined;
   try {
     const result = await ddb.send(
       new GetItemCommand({
@@ -84,25 +90,28 @@ async function getEntitlementStamp(tenantId: string): Promise<string> {
         ExpressionAttributeNames: { '#plan': 'plan' },
       }),
     );
-
-    if (result.Item) {
-      return JSON.stringify({
-        plan: result.Item.plan?.S ?? 'Launch',
-        seats: Number(result.Item.seats?.N ?? '5'),
-        features: result.Item.features?.SS ?? [],
-      });
-    }
+    item = result.Item;
   } catch (err) {
-    logger.warn('Failed to read entitlement, using default', {
+    // Fail-closed (A-2): a DDB read error is indistinguishable from a revoked
+    // plan — deny loudly rather than stamp a default entitlement.
+    logger.error('Entitlement read failed — denying authorization', {
       tenantId,
       error: (err as Error).message,
     });
+    return null;
   }
 
-  // Default entitlement (new tenants without a PLAN item yet)
-  // TODO(P2): A-2 entitlement fail-open carry — when billing enforcement
-  // activates (ai-core EXPIRED-flag), a missing/failed entitlement read must
-  // block, not default to Launch. Tracked in P2 billing spec.
+  if (item) {
+    return JSON.stringify({
+      plan: item.plan?.S ?? 'Launch',
+      seats: Number(item.seats?.N ?? '5'),
+      features: item.features?.SS ?? [],
+    });
+  }
+
+  // Documented escape: a MISSING PLAN item means a new tenant that has not been
+  // provisioned an entitlement yet — the Launch default is the intended stamp,
+  // not fail-open. Only the read-error path above fails closed.
   return JSON.stringify({ plan: 'Launch', seats: 5, features: [] });
 }
 
@@ -194,8 +203,13 @@ export async function handler(event: AppSyncAuthEvent): Promise<AuthResponse> {
 
   const sub = claims!.sub ?? 'unknown';
 
-  // Read entitlement stamp (D-10: static from CumplifyCore tenant metadata)
+  // Read entitlement stamp (D-10: static from CumplifyCore tenant metadata).
+  // null = the read failed → fail-closed (a valid JWT is NOT sufficient when
+  // the plan ledger is unreadable; the only default allowed is a MISSING item).
   const entitlement = await getEntitlementStamp(tenantId);
+  if (entitlement === null) {
+    return { isAuthorized: false };
+  }
 
   logger.info('Authorization granted', { tenantId, role, poolClass, sub, matchedPool });
 

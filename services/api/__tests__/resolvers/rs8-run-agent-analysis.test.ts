@@ -62,7 +62,7 @@ function makeEvent(fieldName: string, args: Record<string, unknown> = {}) {
   return {
     info: { fieldName },
     arguments: args,
-    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-9' } },
+    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-9', role: 'IMSLead' } },
   };
 }
 

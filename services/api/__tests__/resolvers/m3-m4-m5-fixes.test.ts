@@ -58,7 +58,9 @@ function makeEvent(
   return {
     info: { fieldName },
     arguments: args,
-    identity: { resolverContext: { tenantId: 'tenant-test', sub: 'user-test', ...ctx } },
+    identity: {
+      resolverContext: { tenantId: 'tenant-test', sub: 'user-test', role: 'IMSLead', ...ctx },
+    },
   };
 }
 
@@ -90,7 +92,7 @@ describe('m3 scheduleAudit — SQL fix regression', () => {
     await m3Handler(
       makeEvent('scheduleAudit', {
         input: {
-          programmeId: 'prog-1',
+          programmeId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d',
           standard: 'ISO9001',
           scope: 'Warehouse',
           leadAuditorId: 'u1',
@@ -112,10 +114,28 @@ describe('m3 scheduleAudit — SQL fix regression', () => {
 
 describe('m3 completeAudit — argument-shape fix regression', () => {
   it('reads the bare id argument (not input.auditId) and never references a conclusion column', async () => {
-    await m3Handler(makeEvent('completeAudit', { id: 'audit-1' }));
+    mockExecute.mockResolvedValueOnce({
+      records: [[{ stringValue: 'audit-1' }]],
+      columnMetadata: [{ name: 'id' }],
+    });
+    await m3Handler(makeEvent('completeAudit', { id: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' }));
     const [sql, params] = mockExecute.mock.calls[0];
     expect(sql).not.toContain('conclusion');
-    expect(params).toEqual([{ name: 'id', value: { stringValue: 'audit-1' } }]);
+    expect(sql).toContain(`AND status <> 'completed'`); // check-then-act predicate rides the UPDATE
+    expect(params).toEqual([{ name: 'id', value: { stringValue: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' } }]);
+  });
+
+  it('rejects a double-complete — empty RETURNING throws AUDIT_NOT_FOUND_OR_ALREADY_COMPLETED', async () => {
+    await expect(
+      m3Handler(makeEvent('completeAudit', { id: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' })),
+    ).rejects.toThrow('AUDIT_NOT_FOUND_OR_ALREADY_COMPLETED');
+  });
+
+  it('rejects a non-UUID id up front (VALIDATION, no SQL)', async () => {
+    await expect(m3Handler(makeEvent('completeAudit', { id: 'audit-1' }))).rejects.toThrow(
+      'VALIDATION',
+    );
+    expect(mockExecute).not.toHaveBeenCalled();
   });
 });
 
@@ -301,7 +321,7 @@ describe('m4 registerMeasuringResource — new mutation (unblocks recordCalibrat
 });
 
 describe('m5 createRisk — register-refresh fix regression', () => {
-  it('refreshes m5_views.risk_register_view via the SECURITY DEFINER accessor, in the same transaction as the INSERT', async () => {
+  it('refreshes m5_views.risk_register_view via the SECURITY DEFINER accessor, AFTER the write commits', async () => {
     await m5Handler(
       makeEvent('createRisk', {
         input: {
@@ -319,11 +339,37 @@ describe('m5 createRisk — register-refresh fix regression', () => {
     const [refreshSql] = mockExecute.mock.calls[1];
     expect(insertSql).toContain('INSERT INTO m5.risks');
     expect(refreshSql).toContain('m5_views.refresh_risk_register_view()');
-    // Refresh happens BEFORE commit — same transaction, atomic with the write.
-    expect(mockCommit).toHaveBeenCalledTimes(1);
-    expect(mockExecute.mock.invocationCallOrder[1]).toBeLessThan(
+    // Refresh happens AFTER the write's commit — a post-commit best-effort
+    // refresh in a second transaction (MV lock + refresh-failure isolation).
+    expect(mockCommit).toHaveBeenCalledTimes(2);
+    expect(mockExecute.mock.invocationCallOrder[1]).toBeGreaterThan(
       mockCommit.mock.invocationCallOrder[0],
     );
+  });
+
+  it('still returns the created risk when the post-commit refresh fails', async () => {
+    mockExecute
+      .mockResolvedValueOnce({
+        records: [[{ stringValue: 'risk-1' }]],
+        columnMetadata: [{ name: 'id' }],
+      })
+      .mockRejectedValueOnce(new Error('refresh blew up'));
+
+    const result = (await m5Handler(
+      makeEvent('createRisk', {
+        input: {
+          standard: 'ISO9001',
+          category: 'QUALITY',
+          description: 'Test risk',
+          likelihood: 3,
+          severity: 3,
+        },
+      }),
+    )) as Record<string, unknown>;
+
+    // The domain write committed — a refresh failure must not fail the mutation.
+    expect(result.id).toBe('risk-1');
+    expect(mockCommit).toHaveBeenCalledTimes(1); // only the INSERT txn committed
   });
 });
 
@@ -402,7 +448,7 @@ describe('generateAuditChecklist — M3-native clause-registry checklist', () =>
     });
 
     const result = (await m3Handler(
-      makeEvent('generateAuditChecklist', { auditId: 'audit-1' }),
+      makeEvent('generateAuditChecklist', { auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' }),
     )) as Record<string, unknown>[];
 
     // Audit validation with ::uuid cast
@@ -475,7 +521,7 @@ describe('generateAuditChecklist — M3-native clause-registry checklist', () =>
     });
 
     const result = (await m3Handler(
-      makeEvent('generateAuditChecklist', { auditId: 'audit-1' }),
+      makeEvent('generateAuditChecklist', { auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' }),
     )) as Record<string, unknown>[];
 
     // Still returns 1 row (idempotent — no duplicates)
@@ -490,7 +536,7 @@ describe('generateAuditChecklist — M3-native clause-registry checklist', () =>
     });
 
     await expect(
-      m3Handler(makeEvent('generateAuditChecklist', { auditId: 'nonexistent' })),
+      m3Handler(makeEvent('generateAuditChecklist', { auditId: 'b4e2d7f3-9c5a-4e6b-8d7f-2a3b4c5d6e7f' })),
     ).rejects.toThrow('AUDIT_NOT_FOUND');
 
     expect(mockRollback).toHaveBeenCalled();
@@ -542,7 +588,7 @@ describe('generateAuditChecklist — M3-native clause-registry checklist', () =>
       ],
     });
 
-    await m3Handler(makeEvent('generateAuditChecklist', { auditId: 'a-1' }));
+    await m3Handler(makeEvent('generateAuditChecklist', { auditId: 'c5f3e8a4-0d6b-4f7c-9e8a-3b4c5d6e7f8a' }));
 
     // INSERT params contain the wrapped question
     const [, insertParams] = mockExecute.mock.calls[2];

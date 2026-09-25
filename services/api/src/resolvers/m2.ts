@@ -13,6 +13,7 @@ import {
   extractAgentContext,
   beginTenantTransaction,
   publishAuditEvent,
+  requireModuleRole,
   marshalOne,
   marshalMany,
   jsonOut,
@@ -28,12 +29,19 @@ import {
 
 const logger = new Logger({ serviceName: 'resolver-m2' });
 const lambdaClient = new LambdaClient({});
+
+// M-effort: server-side bound on list queries (mirror forms' LIST_MAX_LIMIT).
+const LIST_QUERY_LIMIT = 500;
 const CAPA_GURU_FN_ARN = process.env.CAPA_GURU_FN_ARN ?? '';
 
 interface AppSyncEvent {
   info: { fieldName: string };
   arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
+  identity?: {
+    resolverContext?: Record<string, string>;
+    userArn?: string;
+    username?: string;
+  };
 }
 
 const AGENT_FIELDS = new Set(['agentTriageNC', 'agentProposeCorrectiveAction']);
@@ -42,7 +50,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
   // RS-7: agent* (@aws_iam) fields never carry resolverContext — branch
   // BEFORE extractContext, which would throw for them.
   if (AGENT_FIELDS.has(event.info.fieldName)) {
-    const { tenantId, actor } = extractAgentContext(event.arguments, 'CAPAGuru');
+    const { tenantId, actor } = extractAgentContext(event.arguments, 'CAPAGuru', event.identity);
     logger.appendKeys({ tenantId, requestField: event.info.fieldName });
     return event.info.fieldName === 'agentTriageNC'
       ? agentTriageNC(event, tenantId, actor)
@@ -50,28 +58,36 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
   }
 
   const ctx = extractContext(event);
-  const { tenantId, sub } = ctx;
+  const { tenantId, sub, role } = ctx;
   logger.appendKeys({ tenantId, requestField: event.info.fieldName });
 
+  // M-effort: M2 write mutations are role-gated at entry (Part 13 matrix);
+  // queries stay at the authenticated floor.
   switch (event.info.fieldName) {
     case 'raiseNonconformity':
-      return raiseNonconformity(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => raiseNonconformity(event, tenantId, sub));
     case 'recordRootCause':
-      return recordRootCause(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => recordRootCause(event, tenantId, sub));
     case 'createCorrectiveAction':
-      return createCorrectiveAction(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () =>
+        createCorrectiveAction(event, tenantId, sub),
+      );
     case 'closeCapa':
-      return closeCapa(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => closeCapa(event, tenantId, sub));
     case 'verifyEffectiveness':
-      return verifyEffectiveness(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => verifyEffectiveness(event, tenantId, sub));
     case 'disposeNonconformingOutput':
-      return disposeNonconformingOutput(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () =>
+        disposeNonconformingOutput(event, tenantId, sub),
+      );
     case 'runCapaAnalysis':
-      return runCapaAnalysis(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => runCapaAnalysis(event, tenantId, sub));
     case 'runNcIntake':
-      return runNcIntake(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () => runNcIntake(event, tenantId, sub));
     case 'runRootCauseAnalysis':
-      return runRootCauseAnalysis(event, tenantId, sub);
+      return requireModuleRole(role, 'M2', () =>
+        runRootCauseAnalysis(event, tenantId, sub),
+      );
     case 'listRootCauseAnalyses':
       return listRootCauseAnalyses(event, tenantId);
     case 'getNonconformity':
@@ -500,7 +516,7 @@ async function listRootCauseAnalyses(event: AppSyncEvent, tenantId: string) {
   try {
     const result = await txn.execute(
       `SELECT id, nc_id, method, findings, root_cause_summary, created_by, created_at
-       FROM m2.root_cause_analyses WHERE nc_id = :ncId::uuid ORDER BY created_at DESC`,
+       FROM m2.root_cause_analyses WHERE nc_id = :ncId::uuid ORDER BY created_at DESC LIMIT ${LIST_QUERY_LIMIT}`,
       [{ name: 'ncId', value: { stringValue: ncId } }],
     );
     await txn.commit();
@@ -524,11 +540,16 @@ async function closeCapa(event: AppSyncEvent, tenantId: string, actor: string) {
     // FIXED 2026-07-14 (architect): closed_at/closed_by columns do not exist on
     // m2.corrective_actions (migration 003); input field is id per CloseCapaInput.
     // closureNotes has no column — it is preserved in the audit-trail payload.
+    // M-effort: status predicate rides the UPDATE — a concurrent close can no
+    // longer double-close (and double-emit CAPA.Closed for) the same row.
     const result = await txn.execute(
       `UPDATE m2.corrective_actions SET status = 'closed', updated_at = NOW()
-       WHERE id = :id::uuid RETURNING *`,
+       WHERE id = :id::uuid AND status <> 'closed' RETURNING *`,
       [{ name: 'id', value: { stringValue: input.id as string } }],
     );
+    if (!result.records || result.records.length === 0) {
+      throw new Error('CAPA_NOT_FOUND_OR_ALREADY_CLOSED');
+    }
     await txn.commit();
     await publishAuditEvent({
       tenantId,
@@ -684,7 +705,7 @@ async function listOpenCAPAs(event: AppSyncEvent, tenantId: string) {
     const result = await txn.execute(
       `SELECT ca.* FROM m2.corrective_actions ca
        JOIN m2.nonconformities nc ON nc.id = ca.nc_id
-       WHERE ${clauses.join(' AND ')} ORDER BY ca.due_date ASC`,
+       WHERE ${clauses.join(' AND ')} ORDER BY ca.due_date ASC LIMIT ${LIST_QUERY_LIMIT}`,
       params,
     );
     await txn.commit();
@@ -715,7 +736,7 @@ async function listNonconformities(event: AppSyncEvent, tenantId: string) {
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(
-      `SELECT * FROM m2.nonconformities ${where} ORDER BY raised_at DESC`,
+      `SELECT * FROM m2.nonconformities ${where} ORDER BY raised_at DESC LIMIT ${LIST_QUERY_LIMIT}`,
       params,
     );
     await txn.commit();
@@ -730,7 +751,7 @@ async function listCorrectiveActions(event: AppSyncEvent, tenantId: string) {
   const txn = await beginTenantTransaction(tenantId);
   try {
     const result = await txn.execute(
-      `SELECT * FROM m2.corrective_actions WHERE nc_id = :ncId::uuid ORDER BY created_at ASC`,
+      `SELECT * FROM m2.corrective_actions WHERE nc_id = :ncId::uuid ORDER BY created_at ASC LIMIT ${LIST_QUERY_LIMIT}`,
       [{ name: 'ncId', value: { stringValue: event.arguments.ncId as string } }],
     );
     await txn.commit();

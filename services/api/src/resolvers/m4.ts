@@ -12,6 +12,7 @@ import {
   extractContext,
   beginTenantTransaction,
   publishAuditEvent,
+  requireModuleRole,
   marshalOne,
   marshalMany,
   getTenantDdbClient,
@@ -31,6 +32,9 @@ import {
 
 const logger = new Logger({ serviceName: 'resolver-m4' });
 
+// M-effort: server-side bound on list queries (mirror forms' LIST_MAX_LIMIT).
+const LIST_QUERY_LIMIT = 500;
+
 // Audit ledger is a privileged read surface (approver subs, justifications,
 // execution ARNs): admins + auditors only — plain Employees are gated out.
 const AUDIT_TRAIL_ROLES = new Set(['InternalAuditor', 'ExternalAuditor']);
@@ -43,18 +47,22 @@ interface AppSyncEvent {
 
 export async function handler(event: AppSyncEvent): Promise<unknown> {
   const ctx = extractContext(event);
-  const { tenantId, sub } = ctx;
+  const { tenantId, sub, role } = ctx;
   logger.appendKeys({ tenantId, requestField: event.info.fieldName });
 
+  // M-effort: M4 write mutations are role-gated at entry (Part 13 matrix);
+  // queries stay at the authenticated floor.
   switch (event.info.fieldName) {
     case 'registerRecord':
-      return registerRecord(event, tenantId, sub);
+      return requireModuleRole(role, 'M4', () => registerRecord(event, tenantId, sub));
     case 'registerMeasuringResource':
-      return registerMeasuringResource(event, tenantId, sub);
+      return requireModuleRole(role, 'M4', () =>
+        registerMeasuringResource(event, tenantId, sub),
+      );
     case 'recordCalibration':
-      return recordCalibration(event, tenantId, sub);
+      return requireModuleRole(role, 'M4', () => recordCalibration(event, tenantId, sub));
     case 'createRetentionPolicy':
-      return createRetentionPolicy(event, tenantId, sub);
+      return requireModuleRole(role, 'M4', () => createRetentionPolicy(event, tenantId, sub));
     case 'getRecord':
       return getRecord(event, tenantId);
     case 'listCalibrationsDue':
@@ -410,7 +418,7 @@ async function listCalibrationsDue(event: AppSyncEvent, tenantId: string) {
     const result = await txn.execute(
       `SELECT * FROM m4.calibration_records
        WHERE next_due <= (NOW() + make_interval(days => :windowDays::int))
-       ORDER BY next_due ASC`,
+       ORDER BY next_due ASC LIMIT ${LIST_QUERY_LIMIT}`,
       [{ name: 'windowDays', value: { longValue: windowDays } }],
     );
     await txn.commit();

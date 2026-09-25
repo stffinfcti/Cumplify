@@ -123,7 +123,7 @@ describe('runAuditFindings (S4 Audit Studio dispatch)', () => {
 
   it('reads context, Event-invokes LeadAuditor with findingsIntent, acks DISPATCHED — and publishes NO audit event (L3: fail-closed registry, HITL plane owns the trail)', async () => {
     wireReads();
-    const result = (await handler(makeEvent('runAuditFindings', { auditId: 'audit-1' }))) as {
+    const result = (await handler(makeEvent('runAuditFindings', { auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' }))) as {
       runId: string;
       status: string;
     };
@@ -145,7 +145,7 @@ describe('runAuditFindings (S4 Audit Studio dispatch)', () => {
     expect(payload.tenantId).toBe('tenant-test');
     expect(payload.requestedBy).toBe('user-test');
     expect(payload.runId).toBe(result.runId);
-    expect(payload.findingsIntent.auditId).toBe('audit-1');
+    expect(payload.findingsIntent.auditId).toBe('a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d');
     expect(payload.findingsIntent.audit.standard).toBe('ISO9001');
     expect(payload.findingsIntent.audit.scope).toBe('Fabrication shop processes');
     expect(payload.findingsIntent.audit.status).toBe('planned');
@@ -170,7 +170,7 @@ describe('runAuditFindings (S4 Audit Studio dispatch)', () => {
   it('AUDIT_NOT_FOUND when audit does not exist', async () => {
     mockExecute.mockResolvedValueOnce({ records: [], columnMetadata: [] });
 
-    await expect(handler(makeEvent('runAuditFindings', { auditId: 'no-such' }))).rejects.toThrow(
+    await expect(handler(makeEvent('runAuditFindings', { auditId: 'b4e2d7f3-9c5a-4e6b-8d7f-2a3b4c5d6e7f' }))).rejects.toThrow(
       'AUDIT_NOT_FOUND',
     );
     expect(mockLambdaSend).not.toHaveBeenCalled();
@@ -180,7 +180,7 @@ describe('runAuditFindings (S4 Audit Studio dispatch)', () => {
     const original = process.env.LEAD_AUDITOR_FN_ARN;
     process.env.LEAD_AUDITOR_FN_ARN = '';
     try {
-      await expect(handler(makeEvent('runAuditFindings', { auditId: 'audit-1' }))).rejects.toThrow(
+      await expect(handler(makeEvent('runAuditFindings', { auditId: 'a3f1c6d2-8b4e-4f5a-9c6d-1e2f3a4b5c6d' }))).rejects.toThrow(
         'LEAD_AUDITOR_NOT_AVAILABLE',
       );
       expect(mockLambdaSend).not.toHaveBeenCalled();
