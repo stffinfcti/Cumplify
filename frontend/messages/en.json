@@ -944,7 +944,8 @@
     "loading": "Loading...",
     "print": "Print",
     "viewerTitle": "Controlled Document Viewer",
-    "draftSection": "Draft with DocStudio"
+    "draftSection": "Draft with DocStudio",
+    "renderFailed": "Failed to render document content."
   },
   "documents": {
     "title": "Documents",
@@ -1036,7 +1037,9 @@
     "failedSection": "Section composition failed — no content presented",
     "saveVersion": "Save version",
     "saving": "Saving…",
-    "saveFailed": "Save failed"
+    "saveFailed": "Save failed",
+    "mermaidError": "Diagram could not be rendered",
+    "mermaidLoading": "Loading diagram…"
   },
   "proposal": {
     "rationale": "Why",

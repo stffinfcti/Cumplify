@@ -13,7 +13,7 @@
 
 import { Logger } from '@aws-lambda-powertools/logger';
 import { assertTenantIdSafe } from '../../api/src/resolvers/shared.js';
-import { resolveHitlItem } from './hitl.js';
+import { ambientDdb, resolveHitlItem } from './hitl.js';
 
 const logger = new Logger({ serviceName: 'expire-hitl-item' });
 
@@ -27,6 +27,8 @@ export async function handler(event: ExpireHitlItemInput): Promise<{ resolved: t
   logger.appendKeys({ tenantId, hitlItemId });
   assertTenantIdSafe(tenantId);
 
-  await resolveHitlItem(tenantId, hitlItemId, 'TIMED_OUT', 'sfn-timeout');
+  // This Lambda's own role carries the LeadingKeys-scoped write grant —
+  // the ambient client is the correct credential path here (unlike resolvers).
+  await resolveHitlItem(tenantId, hitlItemId, 'TIMED_OUT', 'sfn-timeout', ambientDdb);
   return { resolved: true };
 }

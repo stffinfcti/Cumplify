@@ -442,7 +442,6 @@ export default function DocumentsPage() {
                   }
                 })()}
                 runId={selectedDoc.id}
-                documentId={selectedDoc.id}
                 versionId={latestVersion?.id ?? null}
                 onSaved={() => openDetail(selectedDoc)}
                 onConverge={async (harmonizationKey, content) => {

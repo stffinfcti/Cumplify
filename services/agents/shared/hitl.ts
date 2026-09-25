@@ -107,15 +107,25 @@ export async function enterHitlGate(input: HitlGateInput): Promise<HitlResult> {
  * Removes the GSI attribute (sparse GSI — resolved items disappear from pending query).
  * Sets TTL to 30 days from now.
  */
+/** Minimal structural sender — any DynamoDBClient (tenant-scoped or ambient)
+ * satisfies it; avoids depending on the concrete class across service roots. */
+export type DdbSender = { send: (cmd: UpdateItemCommand) => Promise<unknown> };
+
+/** Ambient-credentialed client for system callers (SFN timeout path) whose
+ * own role carries the HITL write grant. Resolvers must pass their
+ * tenant-scoped client instead. */
+export const ambientDdb: DdbSender = ddb;
+
 export async function resolveHitlItem(
   tenantId: string,
   hitlItemId: string,
   resolution: 'APPROVED' | 'REJECTED' | 'TIMED_OUT',
-  approver?: string,
-  // The approval Lambda passes its tenant-scoped client — its ambient role has
-  // no DDB grants at all; UpdateItem rides the tenant-data role's HITL-pinned
-  // statement (BUG-14). Default ambient client kept for future system callers.
-  client: { send: (cmd: UpdateItemCommand) => Promise<unknown> } = ddb,
+  approver: string | undefined,
+  // REQUIRED: the caller chooses the credential path — the approval Lambda's
+  // ambient role has no DDB grants at all, so it must ride the tenant-data
+  // role's HITL-pinned statement (BUG-14); a silent ambient default would
+  // write through ambient creds instead.
+  client: DdbSender,
 ): Promise<void> {
   const ttlEpoch = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60; // 30 days
 

@@ -120,7 +120,14 @@ function main(): void {
   } catch (e) {
     raw = (e as { stdout?: string }).stdout ?? '';
   }
-  const findings = extractFindings(JSON.parse(raw));
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  // npm audit infra failures (ENOAUDIT, registry down) print an `{"error":…}`
+  // object — treating it as zero findings would silently PASS a broken gate.
+  if (parsed.error || parsed.vulnerabilities === undefined) {
+    console.error(`audit-gate: npm audit returned an error object: ${raw.slice(0, 400)}`);
+    process.exit(2);
+  }
+  const findings = extractFindings(parsed);
   const { blocked, waived, expired, invalid } = decide(findings, allowlist, new Date());
 
   for (const w of waived) {

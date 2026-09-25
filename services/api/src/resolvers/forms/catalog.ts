@@ -3,7 +3,12 @@
  * single-record fetch). Extracted from forms.ts.
  */
 
-import { beginTenantTransaction, getCurrentOrgProfile, rollbackQuietly } from '../shared.js';
+import {
+  beginTenantTransaction,
+  clampListLimit,
+  getCurrentOrgProfile,
+  rollbackQuietly,
+} from '../shared.js';
 import type { SqlParameter } from '@aws-sdk/client-rds-data';
 import {
   marshalTemplates,
@@ -124,8 +129,9 @@ const LIST_MAX_LIMIT = 500;
 export async function listFormRecords(event: AppSyncEvent, tenantId: string): Promise<unknown[]> {
   const templateId = event.arguments.templateId as string;
   const status = event.arguments.status as string | undefined;
-  const limit = Math.min(
-    Math.max(1, (event.arguments.limit as number | undefined) ?? LIST_DEFAULT_LIMIT),
+  const limit = clampListLimit(
+    event.arguments.limit as number | undefined,
+    LIST_DEFAULT_LIMIT,
     LIST_MAX_LIMIT,
   );
   const offset = Math.max(0, (event.arguments.offset as number | undefined) ?? 0);

@@ -132,7 +132,9 @@ describe('resolveHitlItem', () => {
   it('removes GSI attributes on resolution (sparse GSI pattern)', async () => {
     mockDdbSend.mockResolvedValueOnce({});
 
-    await resolveHitlItem('tenant-1', 'hitl-001', 'APPROVED', 'user-sub-xyz');
+    await resolveHitlItem('tenant-1', 'hitl-001', 'APPROVED', 'user-sub-xyz', {
+      send: mockDdbSend,
+    });
 
     const ddbCall = mockDdbSend.mock.calls[0][0];
     const updateExpr: string = ddbCall.input.UpdateExpression;
@@ -148,7 +150,9 @@ describe('resolveHitlItem', () => {
   it('sets TTL to ~30 days from now', async () => {
     mockDdbSend.mockResolvedValueOnce({});
 
-    await resolveHitlItem('tenant-1', 'hitl-002', 'TIMED_OUT');
+    await resolveHitlItem('tenant-1', 'hitl-002', 'TIMED_OUT', undefined, {
+      send: mockDdbSend,
+    });
 
     const ddbCall = mockDdbSend.mock.calls[0][0];
     const ttl = ddbCall.input.ExpressionAttributeValues[':ttl'];

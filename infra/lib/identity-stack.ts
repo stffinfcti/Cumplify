@@ -146,6 +146,16 @@ export class IdentityStack extends cdk.Stack {
     let poolBClient: cognito.UserPoolClient | undefined;
     let poolCClient: cognito.UserPoolClient | undefined;
 
+    // Missing frontendDomain on a non-dev env leaves Cognito with only
+    // localhost callbacks — OAuth breaks silently. Warn once at synth (not
+    // per-pool) so it is loud in pipeline output but does not block a first
+    // deploy (the CloudFront domain is only known after it).
+    if (envConfig.envName !== 'dev' && !envConfig.frontendDomain) {
+      cdk.Annotations.of(this).addWarning(
+        `envConfig.${envConfig.envName}.frontendDomain is unset — Cognito will only accept localhost OAuth callbacks. Populate it once the distribution exists.`,
+      );
+    }
+
     for (const poolConfig of pools) {
       const pool = new cognito.UserPool(this, poolConfig.id, {
         userPoolName: poolConfig.poolName,
@@ -188,16 +198,6 @@ export class IdentityStack extends cdk.Stack {
         poolConfig.id === 'PoolA'
           ? { userSrp: false, custom: false, userPassword: false }
           : { userSrp: true, custom: false, userPassword: false };
-
-      // Missing frontendDomain on a non-dev env leaves Cognito with only
-      // localhost callbacks — OAuth breaks silently. Warn at synth so it is
-      // loud in pipeline output but does not block a first deploy (the
-      // CloudFront domain is only known after it).
-      if (envConfig.envName !== 'dev' && !envConfig.frontendDomain) {
-        cdk.Annotations.of(this).addWarning(
-          `envConfig.${envConfig.envName}.frontendDomain is unset — Cognito will only accept localhost OAuth callbacks. Populate it once the distribution exists.`,
-        );
-      }
 
       const client = pool.addClient(`${poolConfig.id}Client`, {
         userPoolClientName: `${poolConfig.poolName}-client`,

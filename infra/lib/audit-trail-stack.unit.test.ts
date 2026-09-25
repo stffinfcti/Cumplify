@@ -117,20 +117,17 @@ describe('AuditTrailStack template assertions', () => {
   });
 
   describe('IAM Deny Policy (FIX-2)', () => {
-    it('contains DenyAuditLogMutation with 5 actions and ForAnyValue:StringLike condition', () => {
+    it('contains DenyAuditLogMutation on the single-item actions with ForAnyValue:StringLike condition', () => {
       template.hasResourceProperties('AWS::IAM::ManagedPolicy', {
         PolicyDocument: {
           Statement: Match.arrayWith([
             Match.objectLike({
               Sid: 'DenyAuditLogMutation',
               Effect: 'Deny',
-              Action: [
-                'dynamodb:UpdateItem',
-                'dynamodb:DeleteItem',
-                'dynamodb:BatchWriteItem',
-                'dynamodb:PartiQLUpdate',
-                'dynamodb:PartiQLDelete',
-              ],
+              // Only single-item actions carry a LeadingKeys condition —
+              // BatchWrite/PartiQL/Transact can't evaluate it, so listing
+              // them here would be a dead deny (documented at the site).
+              Action: ['dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
               Condition: {
                 'ForAnyValue:StringLike': {
                   'dynamodb:LeadingKeys': ['TENANT#*#AUDITLOG'],

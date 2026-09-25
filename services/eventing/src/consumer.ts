@@ -211,5 +211,12 @@ function parseAndValidate(body: string): QueueMessage {
     }
   }
 
+  // tenantId flows into set_config('app.tenant_id'), S3 tenants/<t>/ keys and
+  // DDB TENANT#<t># partitions — reject charset garbage here so every consumer
+  // inherits the assert instead of repeating it per handler.
+  if (typeof detail.tenantId !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(detail.tenantId)) {
+    throw new PoisonMessageError('Invalid detail.tenantId charset');
+  }
+
   return obj as unknown as QueueMessage;
 }

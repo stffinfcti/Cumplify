@@ -15,7 +15,12 @@ DELETE FROM m1.document_versions a
    -- two "versions" of one number both reviewed is a real divergence. The
    -- index below fails loudly on those instead of silently picking a winner.
    AND NOT EXISTS (SELECT 1 FROM m1.document_approvals ap
-                   WHERE ap.document_version_id = a.id);
+                   WHERE ap.document_version_id = a.id)
+   -- Same for distribution rows (002_m1_document_studio FKs to
+   -- document_versions too) — otherwise the delete aborts mid-statement
+   -- on a raw FK violation instead of the intended unique-index failure.
+   AND NOT EXISTS (SELECT 1 FROM m1.document_distribution dd
+                   WHERE dd.document_version_id = a.id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS document_versions_document_version_no
   ON m1.document_versions (document_id, version_no);

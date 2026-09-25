@@ -26,6 +26,7 @@ import { createInvokeFn, createEmbedFn } from '../shared/invoke-transport.js';
 import { retrieve } from '../shared/retrieval.js';
 import type { CumplifyEvent } from '../../eventing/src/types.js';
 import type { ContentBlock } from '../../ai-invoker/src/types.js';
+import { assertTenantIdSafe } from '../../api/src/resolvers/shared.js';
 import { CAPA_GURU_PROMPT } from './prompt.js';
 import { CAPA_GURU_TOOLS } from './tools.js';
 
@@ -136,6 +137,7 @@ export interface RunAnalysisResult {
 
 export async function runCapaAnalysis(input: RunAnalysisInput): Promise<RunAnalysisResult> {
   const { tenantId, ncId, requestedBy, context } = input;
+  assertTenantIdSafe(tenantId);
 
   const caSummary =
     context.correctiveActions.length > 0

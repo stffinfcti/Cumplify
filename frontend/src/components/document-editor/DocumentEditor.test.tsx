@@ -97,30 +97,30 @@ beforeEach(() => {
 
 describe('DocumentEditor — section-kind routing', () => {
   it('renders a Tiptap editor for prose sections', () => {
-    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" />);
     expect(screen.getByTestId('tiptap-editor-content')).toBeInTheDocument();
   });
 
   it('renders non-editable content for gap sections (missingSources, no Tiptap instance)', () => {
-    render(<DocumentEditor sections={[GAP_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[GAP_SECTION]} runId="run-1" />);
     expect(screen.queryByTestId('tiptap-editor-content')).not.toBeInTheDocument();
     expect(screen.getByText(/register.risk_assessments/)).toBeInTheDocument();
   });
 
   it('renders na_justified sections with the justification text', () => {
-    render(<DocumentEditor sections={[NA_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[NA_SECTION]} runId="run-1" />);
     expect(screen.getByText('Design not in scope')).toBeInTheDocument();
   });
 
   it('renders failed sections with the failed marker', () => {
-    render(<DocumentEditor sections={[FAILED_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[FAILED_SECTION]} runId="run-1" />);
     expect(screen.getByTestId('badge-REJECTED')).toBeInTheDocument();
   });
 });
 
 describe('DocumentEditor — human edit attribution', () => {
   it('a human edit shows the RS-9 sync-pending banner (honest, never faked as saved)', () => {
-    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" />);
     expect(screen.queryByTestId('guidance-banner')).not.toBeInTheDocument();
 
     act(() => {
@@ -139,7 +139,7 @@ describe('DocumentEditor — iterate with agent (regenerateSection)', () => {
       <DocumentEditor
         sections={[PROSE_SECTION]}
         runId="run-1"
-        documentId="doc-1"
+
         onSaved={onSaved}
       />,
     );
@@ -158,9 +158,7 @@ describe('DocumentEditor — iterate with agent (regenerateSection)', () => {
 
   it('re-baselines when the server content moves: real text becomes the agent proposal', async () => {
     mockMutate.mockResolvedValue({ regenerateSection: { harmonizationKey: '4.1', kind: 'PROSE' } });
-    const { rerender } = render(
-      <DocumentEditor sections={[PROSE_SECTION]} runId="run-1" documentId="doc-1" />,
-    );
+    const { rerender } = render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" />);
 
     fireEvent.click(screen.getByText('editor.iterateWithAgent'));
     await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
@@ -171,7 +169,6 @@ describe('DocumentEditor — iterate with agent (regenerateSection)', () => {
       <DocumentEditor
         sections={[{ ...PROSE_SECTION, sentences: [{ text: 'Regenerated content.' }] }]}
         runId="run-1"
-        documentId="doc-1"
       />,
     );
     await waitFor(() => expect(screen.getByTestId('guidance-banner')).toBeInTheDocument());
@@ -181,7 +178,7 @@ describe('DocumentEditor — iterate with agent (regenerateSection)', () => {
 
 describe('DocumentEditor — Mermaid insertion (P2S3 gap closure)', () => {
   it('the insert-diagram button calls editor.chain().insertMermaidBlock()', () => {
-    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" />);
 
     fireEvent.click(screen.getByText('editor.insertDiagram'));
 
@@ -196,7 +193,7 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
       <DocumentEditor
         sections={[PROSE_SECTION]}
         runId="run-1"
-        documentId="doc-1"
+
         onConverge={onConverge}
       />,
     );
@@ -218,7 +215,7 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
       <DocumentEditor
         sections={[PROSE_SECTION]}
         runId="run-1"
-        documentId="doc-1"
+
         onConverge={onConverge}
       />,
     );
@@ -243,7 +240,7 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
       <DocumentEditor
         sections={[PROSE_SECTION]}
         runId="run-1"
-        documentId="doc-1"
+
         onConverge={onConverge}
       />,
     );
@@ -256,7 +253,7 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
       <DocumentEditor
         sections={[{ ...PROSE_SECTION, sentences: [{ text: 'Regenerated.' }] }]}
         runId="run-1"
-        documentId="doc-1"
+
         onConverge={onConverge}
       />,
     );
@@ -269,7 +266,7 @@ describe('DocumentEditor — accept/reject + onConverge', () => {
   });
 
   it('a typing burst coalesces into ONE tracked change (found live 2026-07-22: four identical entries per sentence)', () => {
-    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" documentId="doc-1" />);
+    render(<DocumentEditor sections={[PROSE_SECTION]} runId="run-1" />);
     act(() => {
       capturedOnUpdate!({ editor: { getHTML: () => '<p>Edit a.</p>' } });
     });
@@ -298,7 +295,7 @@ describe('DocumentEditor — RS-9 save wire (owner 2026-07-22: drafts must be ed
       <DocumentEditor
         sections={[PROSE_SECTION]}
         runId="doc-1"
-        documentId="doc-1"
+
         versionId="v1"
         onSaved={onSaved}
       />,
@@ -334,7 +331,7 @@ describe('DocumentEditor — RS-9 save wire (owner 2026-07-22: drafts must be ed
       <DocumentEditor
         sections={[{ ...PROSE_SECTION, humanEditedBody: '<p>Previously saved.</p>' }]}
         runId="doc-1"
-        documentId="doc-1"
+
         versionId="v1"
       />,
     );

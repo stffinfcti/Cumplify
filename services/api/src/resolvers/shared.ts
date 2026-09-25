@@ -23,6 +23,7 @@ import {
 } from '@aws-sdk/client-rds-data';
 import { STSClient, AssumeRoleCommand } from '@aws-sdk/client-sts';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { createHash } from 'node:crypto';
 import { Logger } from '@aws-lambda-powertools/logger';
 import { publish } from '../../../eventing/src/publisher.js';
 import { canApprove } from '../permissions/role-matrix.js';
@@ -111,7 +112,7 @@ export async function getTenantDdbClient(tenantId: string): Promise<DynamoDBClie
   const assumed = await stsClient.send(
     new AssumeRoleCommand({
       RoleArn: TENANT_DATA_ROLE_ARN,
-      RoleSessionName: `resolver-${tenantId.substring(0, 8)}-${now}`,
+      RoleSessionName: `resolver-${tenantIdHash(tenantId)}-${now}`,
       Tags: [{ Key: 'tenantId', Value: tenantId }], // BARE tenantId (FF-3)
       DurationSeconds: 900,
     }),
@@ -140,12 +141,22 @@ export async function getTenantDdbClient(tenantId: string): Promise<DynamoDBClie
 
 // ─── Aurora resume-retry (BUG-C) ─────────────────────────────────────────────
 // First call after 0-ACU auto-pause throws DatabaseResumingException.
-// Retry a few times with 15s waits (mirrors migrator's withResumeRetry).
+// Retry a few times with 15s waits. Shared by resolvers AND agent writeback
+// (execute-writeback imports this — its callers pass the Lambda context's
+// remaining-time budget so a resume cycle can't burn into a hard timeout).
 
 const MAX_RESUME_RETRIES = 3;
 const RESUME_DELAY_MS = 15_000;
+// Minimum remaining execution time needed to attempt one more resume cycle
+// (one request + one delay + margin for rollback/commit).
+const MIN_REMAINING_MS = 30_000;
 
-async function withResumeRetry<T>(fn: () => Promise<T>): Promise<T> {
+const logger = new Logger({ serviceName: 'resolver-shared' });
+
+export async function withResumeRetry<T>(
+  fn: () => Promise<T>,
+  getRemainingTimeInMillis?: () => number,
+): Promise<T> {
   for (let attempt = 0; attempt <= MAX_RESUME_RETRIES; attempt++) {
     try {
       return await fn();
@@ -159,6 +170,17 @@ async function withResumeRetry<T>(fn: () => Promise<T>): Promise<T> {
         msg.includes('Timed out');
 
       if (isDatabaseResuming && attempt < MAX_RESUME_RETRIES) {
+        // Stop retrying when the Lambda lacks the time budget to finish — a
+        // mid-retry hard timeout leaves the txn state worse than a fast fail.
+        const remaining = getRemainingTimeInMillis?.();
+        if (remaining !== undefined && remaining < MIN_REMAINING_MS) {
+          logger.warn('Aurora resuming but insufficient remaining time — failing fast', {
+            attempt,
+            remainingMs: remaining,
+          });
+          throw err;
+        }
+        logger.warn('Aurora resuming from auto-pause — retrying', { attempt });
         await new Promise((resolve) => setTimeout(resolve, RESUME_DELAY_MS));
         continue;
       }
@@ -358,11 +380,10 @@ export function extractAgentContext(
   assertTenantIdSafe(tenantId);
 
   const hint = iamSessionTenantHint(identity);
-  // `resolver-<first8>-<epoch>` hints are the stamp's first-8 chars: compare
-  // against the INPUT's first 8 — a prefix test would accept 'acme' hint for
-  // 'acme-evil' (cross-tenant), and a longer hint can never be a prefix of a
-  // legitimately-stamped shorter tenantId.
-  if (hint && (hint.exact ? hint.value !== tenantId : hint.value !== tenantId.substring(0, 8))) {
+  // `resolver-<hash16>-<epoch>` hints carry the stamp's 64-bit tenant hash:
+  // compare hashes, not prefixes — a prefix test would accept a sibling
+  // tenant sharing the first 8 chars (cross-tenant).
+  if (hint && (hint.exact ? hint.value !== tenantId : hint.value !== tenantIdHash(tenantId))) {
     throw new Error(
       `FORBIDDEN: input.tenantId does not match the calling principal's tenant session tag`,
     );
@@ -377,14 +398,23 @@ export function extractAgentContext(
  * `username` = <roleId>:<sessionName>. Tenant-scoped callers stamp the
  * tenant into the session name by convention:
  *   - `tenant-<tenantId>`          → full tenantId
- *   - `resolver-<first8>-<epoch>`  → tenant-data resolver sessions
- *     (getTenantDdbClient's RoleSessionName), first 8 chars of tenantId
+ *   - `resolver-<hash16>-<epoch>`  → tenant-data resolver sessions
+ *     (getTenantDdbClient's RoleSessionName), first 16 hex chars of
+ *     sha256(tenantId)
  * Any other session name yields no hint — the caller is not tenant-bound
  * by name and the input charset check stands alone.
  */
+/** Deterministic 64-bit tenant marker for session names — RoleSessionName
+ * caps at 64 chars, so a full tenantId + prefix + epoch doesn't fit; a
+ * truncated first-8 stamp collides across tenants sharing an 8-char prefix
+ * (one tenant's session hint then validates a sibling tenant's input). */
+function tenantIdHash(tenantId: string): string {
+  return createHash('sha256').update(tenantId).digest('hex').slice(0, 16);
+}
+
 const SESSION_TENANT_PATTERNS: RegExp[] = [
   /^tenant-([A-Za-z0-9-]{1,64})$/,
-  /^resolver-([A-Za-z0-9-]{1,8})-\d+$/,
+  /^resolver-([0-9a-f]{16})-\d+$/,
 ];
 
 export function iamSessionTenantHint(identity?: {
@@ -418,6 +448,13 @@ export function iamSessionTenantHint(identity?: {
  * characters at the resolver boundary so they can never reach AssumeRole.
  */
 const TENANT_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
+/** Client-supplied page size floored at 1 and capped — an unbounded limit is
+ * a response-size blowup and a negative one is a SQL error. Single idiom for
+ * every list resolver. */
+export function clampListLimit(limit: number | undefined, def: number, max: number): number {
+  return Math.min(Math.max(1, limit ?? def), max);
+}
+
 export function assertTenantIdSafe(tenantId: string): void {
   if (!TENANT_ID_RE.test(tenantId)) {
     throw new Error('Invalid tenantId format — authorization failed');

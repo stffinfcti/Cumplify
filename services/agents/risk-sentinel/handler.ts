@@ -21,6 +21,7 @@ import { Logger } from '@aws-lambda-powertools/logger';
 
 import { toolLoop } from '../shared/tool-loop.js';
 import { createInvokeFn } from '../shared/invoke-transport.js';
+import { assertTenantIdSafe } from '../../api/src/resolvers/shared.js';
 import { RISK_SENTINEL_PROMPT } from './prompt.js';
 import { RISK_SENTINEL_TOOLS } from './tools.js';
 
@@ -53,6 +54,7 @@ export interface RunAssessmentResult {
 
 export async function runAssessment(input: RunAssessmentInput): Promise<RunAssessmentResult> {
   const { tenantId, riskId, requestedBy, context } = input;
+  assertTenantIdSafe(tenantId);
 
   const userMessage = [
     `Assess this existing risk. Propose an updated likelihood/severity rating via risk-assessment-write, or the SAME rating with an explicit "context insufficient" rationale if you cannot responsibly assess it.`,

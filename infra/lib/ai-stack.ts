@@ -1285,7 +1285,8 @@ export class AiStack extends cdk.Stack {
     }
 
     // PutEvents only for the functions that emit progress events —
-    // markRunFailed writes the run row and nothing else.
+    // markRunFailed skips PutEvents (its run_complete publish rides the
+    // @aws_iam AppSync field granted below, not the event bus).
     for (const fn of [seedSectionsFn, composeSectionFn, finalizeManualFn, regenerateSectionFn]) {
       fn.addToRolePolicy(
         new iam.PolicyStatement({

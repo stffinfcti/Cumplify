@@ -59,30 +59,23 @@ export async function submitDocumentForApproval(
     if (hasRun) {
       const runId = (runResult.records![0][0] as { stringValue?: string }).stringValue!;
 
-      // APR-1: every section must have reviewed_at IS NOT NULL
-      const unreviewedResult = await txn.execute(
+      // APR-1 + APR-3 in one scan: zero unreviewed sections AND zero
+      // 'gap'/'failed' — two COUNT FILTERs share the single row pass.
+      const readiness = await txn.execute(
         `
-        SELECT COUNT(*) AS cnt FROM qms.generation_sections
-        WHERE run_id = :runId::uuid AND reviewed_at IS NULL
+        SELECT
+          COUNT(*) FILTER (WHERE reviewed_at IS NULL) AS unreviewed,
+          COUNT(*) FILTER (WHERE status IN ('gap', 'failed')) AS gap_failed
+        FROM qms.generation_sections
+        WHERE run_id = :runId::uuid
       `,
         [{ name: 'runId', value: { stringValue: runId } }],
       );
-      const unreviewedCount =
-        (unreviewedResult.records![0][0] as { longValue?: number }).longValue ?? 0;
+      const unreviewedCount = (readiness.records![0][0] as { longValue?: number }).longValue ?? 0;
       if (unreviewedCount > 0) {
         throw new Error('UNREVIEWED_SECTIONS');
       }
-
-      // APR-3: zero sections with status IN ('gap', 'failed')
-      const gapFailedResult = await txn.execute(
-        `
-        SELECT COUNT(*) AS cnt FROM qms.generation_sections
-        WHERE run_id = :runId::uuid AND status IN ('gap', 'failed')
-      `,
-        [{ name: 'runId', value: { stringValue: runId } }],
-      );
-      const gapFailedCount =
-        (gapFailedResult.records![0][0] as { longValue?: number }).longValue ?? 0;
+      const gapFailedCount = (readiness.records![0][1] as { longValue?: number }).longValue ?? 0;
       if (gapFailedCount > 0) {
         throw new Error('UNRESOLVED_GAPS');
       }
@@ -588,7 +581,9 @@ export async function saveDocumentSectionEdit(
     );
     const liveStatus = (marshalOne(lockResult) as { status: string } | null)?.status;
     if (!liveStatus) throw new Error('VERSION_NOT_FOUND');
-    if (liveStatus === 'approved' || liveStatus === 'obsolete') {
+    // marshalOne reverse-maps lifecycle enums to UPPERCASE — the re-check
+    // compares the same shape as phase 1, not the raw lowercase column.
+    if (liveStatus === 'APPROVED' || liveStatus === 'OBSOLETE') {
       throw new Error('SEALED_VERSION_REJECTED');
     }
 
@@ -625,9 +620,12 @@ export async function saveDocumentSectionEdit(
     );
 
     // An edit invalidates any prior review — back to DRAFT (APR-1: review
-    // state is not inheritable across content changes).
+    // state is not inheritable across content changes). The status predicate
+    // keeps the rewind from ever un-sealing a record-of-truth even under a
+    // predicate bug upstream.
     await txn.execute(
-      `UPDATE m1.documents SET status = 'draft', updated_at = NOW() WHERE id = :docId::uuid`,
+      `UPDATE m1.documents SET status = 'draft', updated_at = NOW()
+       WHERE id = :docId::uuid AND status NOT IN ('approved', 'obsolete')`,
       [{ name: 'docId', value: { stringValue: meta.documentId } }],
     );
 

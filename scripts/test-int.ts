@@ -26,8 +26,6 @@ interface EnvSpec {
   name: string;
   neededBy: string;
   purpose: string;
-  /** When false the suite degrades gracefully instead of loud-skipping. */
-  required: boolean;
 }
 
 const ENV_SPECS: EnvSpec[] = [
@@ -36,63 +34,53 @@ const ENV_SPECS: EnvSpec[] = [
     neededBy: 'all live AWS calls (aws CLI in denial suite; mapped to AWS_PROFILE for SDK clients)',
     purpose:
       "AWS CLI profile for live calls. Default 'cumplify-dev-admin'; set '' to use the ambient job/CI role.",
-    required: false,
   },
   {
     name: 'C7_CLUSTER_ARN',
     neededBy: 'cross-tenant-denial (RDS RLS cases #3/#4, rds-data)',
     purpose: 'Aurora cluster ARN for Data API calls (find in cdk-outputs.json / AWS console).',
-    required: false,
   },
   {
     name: 'C7_APP_ROLE_SECRET_ARN',
     neededBy: 'cross-tenant-denial (rds-data app_role credentials)',
     purpose: 'Secrets Manager ARN of the RDS app_role secret (cumplify/<env>/rds/app-role*).',
-    required: false,
   },
   {
     name: 'C7_TENANT_DATA_ROLE_ARN',
     neededBy: 'cross-tenant-denial (iam:SimulatePrincipalPolicy case #2)',
     purpose: 'Tenant-data role ARN — the DDB per-tenant scoping role being proven.',
-    required: false,
   },
   {
     name: 'C7_TABLE_ARN',
     neededBy: 'cross-tenant-denial (DDB table policy simulation)',
     purpose: 'CumplifyCore DynamoDB table ARN.',
-    required: false,
   },
   {
     name: 'C7_DB_NAME',
     neededBy: 'cross-tenant-denial (rds-data database name)',
     purpose: "Aurora database name. Default 'postgres'.",
-    required: false,
   },
   {
     name: 'C7_GRAPHQL_URL',
     neededBy: 'cross-tenant-denial (subscription denial case #6)',
     purpose: 'Deployed AppSync GraphQL URL (cdk-outputs.json GraphqlApiUrl).',
-    required: false,
   },
   {
     name: 'C7_POOL_A_TOKEN',
     neededBy: 'cross-tenant-denial (authorizer denial case #1)',
     purpose: 'Legacy Pool-A Cognito ID token (MFA-onboarded user) — proves authorizer rejects it.',
-    required: false,
   },
   {
     name: 'C7_POOL_B_TOKEN',
     neededBy: 'cross-tenant-denial (subscription denial case #6)',
     purpose:
       'Pool-B Cognito ID token for a tenant-scoped user — proves cross-tenant subscription denial.',
-    required: false,
   },
   {
     name: 'LIVE_AOSS_ENDPOINT',
     neededBy: 'cross-tenant-isolation (AOSS retrieval, REQ-RET-2)',
     purpose:
       'AOSS collection endpoint (https://<id>.<region>.aoss.amazonaws.com) pre-seeded with tenant-A/B docs.',
-    required: false,
   },
 ];
 

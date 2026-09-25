@@ -114,11 +114,11 @@ pipeline.addStage(new CumplifyStage(this, 'Staging', { env: ENVS.staging }), {
 pipeline.addStage(new CumplifyStage(this, 'Prod', { env: ENVS.prod }), {
   pre: [
     new pipelines.ManualApprovalStep('ApproveToProd'),
-    // LegalSignoffGuard is a ShellStep running scripts/assert-legal-signoff.ts,
+    // LegalSignoffGuard is a ShellStep running scripts/assert-legal-signoff.mjs,
     // which blocks unless a committed legal-signoff/prod-approval.json record
     // attests attorney sign-off (verified PHASE-19 hard gate).
     new pipelines.ShellStep('LegalSignoffGuard', {
-      commands: ['npx tsx scripts/assert-legal-signoff.ts'],
+      commands: ['node scripts/assert-legal-signoff.mjs'],
     }),
   ],
 });

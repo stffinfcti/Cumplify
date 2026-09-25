@@ -37,7 +37,7 @@ import { Logger } from '@aws-lambda-powertools/logger';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { publish } from '../../eventing/src/publisher.js';
-import { assertTenantIdSafe } from '../../api/src/resolvers/shared.js';
+import { assertTenantIdSafe, withResumeRetry } from '../../api/src/resolvers/shared.js';
 import type { Context } from 'aws-lambda';
 import { ulid } from 'ulid';
 
@@ -72,49 +72,6 @@ export interface WritebackInput {
 
 // ─── Aurora resume-retry (M-1, ACC-1 pattern) ────────────────────────────────
 // First call after 0-ACU auto-pause throws DatabaseResumingException.
-const MAX_RESUME_RETRIES = 3;
-const RESUME_DELAY_MS = 15_000;
-// Minimum remaining execution time needed to attempt one more resume cycle
-// (one request + one delay + margin for rollback/commit).
-const MIN_REMAINING_MS = 30_000;
-
-async function withResumeRetry<T>(
-  fn: () => Promise<T>,
-  getRemainingTimeInMillis?: () => number,
-): Promise<T> {
-  for (let attempt = 0; attempt <= MAX_RESUME_RETRIES; attempt++) {
-    try {
-      return await fn();
-    } catch (err: unknown) {
-      const msg = (err as Error).message ?? '';
-      const name = (err as { name?: string }).name ?? '';
-      const isDatabaseResuming =
-        msg.includes('Communications link failure') ||
-        msg.includes('DatabaseResumingException') ||
-        name === 'DatabaseResumingException' ||
-        msg.includes('Timed out');
-
-      if (isDatabaseResuming && attempt < MAX_RESUME_RETRIES) {
-        // Stop retrying when the Lambda lacks the time budget to finish — a
-        // mid-retry hard timeout leaves the txn state worse than a fast fail.
-        const remaining = getRemainingTimeInMillis?.();
-        if (remaining !== undefined && remaining < MIN_REMAINING_MS) {
-          logger.warn('Aurora resuming but insufficient remaining time — failing fast', {
-            attempt,
-            remainingMs: remaining,
-          });
-          throw err;
-        }
-        logger.warn('Aurora resuming from auto-pause — retrying', { attempt });
-        await new Promise((resolve) => setTimeout(resolve, RESUME_DELAY_MS));
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw new Error('Unreachable');
-}
-
 // ─── Finding type mapping (C-3d) ────────────────────────────────────────────
 // The model prompt uses hyphenated values (major-nc, minor-nc) but the DB
 // CHECK constraint requires underscored values (major_nc, minor_nc).

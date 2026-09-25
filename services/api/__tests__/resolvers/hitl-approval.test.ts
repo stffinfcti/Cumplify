@@ -553,7 +553,7 @@ describe('hitl-approval resolver — SOD-1 author≠approver (architecture §8)'
 
     await expect(
       handler(makeEvent({ input: { hitlItemId: 'hitl-item-123', decision: 'APPROVE' } }) as never),
-    ).rejects.toThrow(/SoD violation/);
+    ).rejects.toThrow(/SOD_VIOLATION/);
     // blocked BEFORE the RESOLVING update and BEFORE SFN
     expect(mockSfnSend).not.toHaveBeenCalled();
   });
@@ -611,7 +611,7 @@ describe('hitl-approval resolver — RS-6 approval-matrix narrowing', () => {
           'quality-manager', // passes the M2 floor — narrowed out by matrix
         ) as never,
       ),
-    ).rejects.toThrow(/Approval matrix/);
+    ).rejects.toThrow(/approval matrix/);
     expect(mockSfnSend).not.toHaveBeenCalled();
   });
 

@@ -23,8 +23,8 @@
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { Logger } from '@aws-lambda-powertools/logger';
 import {
+  assertTenantIdSafe,
   beginTenantTransaction,
-  marshalMany,
   publishAuditEvent,
   versionContentKey,
   rollbackQuietly,
@@ -66,6 +66,28 @@ const MANUAL_TITLES: Record<string, string> = {
 };
 
 type Txn = Awaited<ReturnType<typeof beginTenantTransaction>>;
+import { loadRun, loadSectionSkeletons, type SectionSkeleton } from './run-state.js';
+
+/** map with bounded concurrency — Data API round-trips on one transaction
+ * can overlap on the wire (each per-document chain stays internally
+ * sequential), but unbounded fan-out would throttle. */
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let idx = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (idx < items.length) {
+        const i = idx++;
+        results[i] = await fn(items[i]);
+      }
+    }),
+  );
+  return results;
+}
 
 async function insertDocument(
   txn: Txn,
@@ -105,12 +127,14 @@ async function insertDocument(
     // too), while documents.version counts finalize upserts only — reusing it
     // would collide with edited versions and overwrite their S3 content key.
     // Lock the document row, then take MAX(version_no)+1 (m1.ts:826 pattern) —
-    // one CTE statement instead of two round-trips per document.
+    // one CTE statement instead of two round-trips per document. The LEFT JOIN
+    // FROM the lock CTE keeps it load-bearing (Postgres skips unreferenced
+    // SELECT CTEs → no lock taken) and yields a row even with zero versions.
     const versionResult = await txn.execute(
       `WITH lock AS (SELECT id FROM m1.documents WHERE id = :docId::uuid FOR UPDATE)
        SELECT COALESCE(MAX(v.version_no), 0) + 1 AS next
-       FROM m1.document_versions v
-       WHERE v.document_id = :docId::uuid`,
+       FROM lock l LEFT JOIN m1.document_versions v ON v.document_id = l.id
+       GROUP BY l.id`,
       [{ name: 'docId', value: { stringValue: documentId } }],
     );
     const versionNo = Number((versionResult.records![0][0] as { longValue?: number }).longValue);
@@ -177,6 +201,7 @@ async function writeVersion(
 
 export async function handler(event: FinalizeInput): Promise<FinalizeOutput> {
   const { runId, tenantId } = event;
+  assertTenantIdSafe(tenantId);
   logger.appendKeys({ runId, tenantId });
 
   let status: string;
@@ -195,9 +220,6 @@ export async function handler(event: FinalizeInput): Promise<FinalizeOutput> {
   // session slot held across seconds of S3 latency. They prefetch in
   // parallel in phase 2 instead; document writes move to phase 3, which
   // re-checks the idempotency guard under the run row's FOR UPDATE lock.
-  interface SectionSkeleton extends Omit<SectionState, 'content'> {
-    contentS3Key: string | null;
-  }
   let standards: string[];
   let owner: string;
   let profile: Record<string, unknown>;
@@ -205,41 +227,16 @@ export async function handler(event: FinalizeInput): Promise<FinalizeOutput> {
   const readTxn = await beginTenantTransaction(tenantId);
   try {
     // Load run — idempotency guard first
-    const runResult = await readTxn.execute(
-      `SELECT gr.standards, gr.manual_document_id, gr.requested_by, opv.payload
-       FROM qms.generation_runs gr
-       JOIN qms.org_profiles op ON op.tenant_id = gr.tenant_id
-       JOIN qms.org_profile_versions opv ON opv.profile_id = op.id AND opv.version_no = gr.profile_version
-       WHERE gr.id = :runId::uuid`,
-      [{ name: 'runId', value: { stringValue: runId } }],
-    );
-    if (!runResult.records?.length) throw new Error(`RUN_NOT_FOUND: ${runId}`);
-    const rec = runResult.records[0];
-    standards =
-      (rec[0] as { arrayValue?: { stringValues?: string[] } }).arrayValue?.stringValues ?? [];
-    const existingManualId =
-      (rec[1] as { stringValue?: string; isNull?: boolean }).stringValue ?? null;
-    owner = (rec[2] as { stringValue?: string }).stringValue ?? 'docgen-state-machine';
-    profile = JSON.parse((rec[3] as { stringValue?: string }).stringValue ?? '{}') as Record<
-      string,
-      unknown
-    >;
+    const run = await loadRun(readTxn, runId);
+    if (!run) throw new Error(`RUN_NOT_FOUND: ${runId}`);
+    standards = run.standards;
+    const existingManualId = run.manualDocumentId;
+    owner = run.requestedBy ?? 'docgen-state-machine';
+    profile = run.profile;
 
-    // Section states + registry join
-    const sectionsResult = await readTxn.execute(
-      `SELECT id, harmonization_key, status, content_s3_key, clause_registry_ids
-       FROM qms.generation_sections WHERE run_id = :runId::uuid ORDER BY harmonization_key`,
-      [{ name: 'runId', value: { stringValue: runId } }],
-    );
-    // marshalMany reverse-maps the overloaded `status` column to GraphQL
-    // UPPERCASE (d11d803) — normalize back to DB casing for internal logic.
-    const sectionRows: Record<string, unknown>[] = marshalMany(sectionsResult).map((r) => ({
-      ...r,
-      status: (r.status as string).toLowerCase(),
-    }));
-    for (const row of sectionRows) {
-      const s = row.status as string;
-      summary[s] = (summary[s] ?? 0) + 1;
+    skeletons = await loadSectionSkeletons(readTxn, runId);
+    for (const sk of skeletons) {
+      summary[sk.kind] = (summary[sk.kind] ?? 0) + 1;
     }
     status = (summary.failed ?? 0) > 0 ? 'partial' : 'complete';
 
@@ -249,42 +246,6 @@ export async function handler(event: FinalizeInput): Promise<FinalizeOutput> {
       logger.info('Run already finalized — skipping document writes', { existingManualId });
       return { runId, status, summary, manualDocumentId: existingManualId, documentsCreated: 0 };
     }
-
-    const registryResult = await readTxn.execute(
-      `SELECT id, standard, clause_no, clause_title, annex_sl_mode, doc_type, sort_order
-       FROM qms.clause_registry`,
-    );
-    const registryById = new Map(marshalMany(registryResult).map((r) => [r.id as string, r]));
-
-    // Section skeletons — clause metadata resolved now, S3 content deferred
-    // to the parallel prefetch (phase 2). `sortOrder` is the lowest clause
-    // registry sort_order (9999 when the section maps no clauses — Math.min
-    // over an empty list returns Infinity).
-    skeletons = sectionRows.map((row) => {
-      const clauseIds = (row.clauseRegistryIds as string[]) ?? [];
-      const clauses = clauseIds
-        .map((id) => registryById.get(id))
-        .filter((c): c is NonNullable<typeof c> => !!c)
-        .map((c) => ({
-          standard: c.standard as string,
-          clauseNo: c.clauseNo as string,
-          clauseTitle: c.clauseTitle as string,
-          annexSlMode: c.annexSlMode as string,
-          // doc_type is REVERSE_ENUMS-mapped to UPPERCASE by marshalMany —
-          // normalize back to DB casing (same class as the status fix above)
-          docType: (c.docType as string).toLowerCase(),
-        }));
-      const sortOrder = clauseIds.length
-        ? Math.min(...clauseIds.map((id) => (registryById.get(id)?.sortOrder as number) ?? 9999))
-        : 9999;
-      return {
-        sectionKey: row.harmonizationKey as string,
-        kind: row.status as SectionState['kind'],
-        clauses,
-        sortOrder,
-        contentS3Key: (row.contentS3Key as string | null) ?? null,
-      };
-    });
     await readTxn.commit();
   } catch (err) {
     await rollbackQuietly(readTxn);
@@ -379,61 +340,68 @@ export async function handler(event: FinalizeInput): Promise<FinalizeOutput> {
       contentRef: manualVersion.contentRef,
     });
 
-    // 2. Clause documents — failed sections ship nothing
-    for (const section of sections) {
-      if (section.kind === 'failed') continue;
-      const sectionStandard = documentStandard([
-        ...new Set(section.clauses.map((c) => c.standard)),
-      ]);
-      const docType = section.clauses[0]?.docType ?? 'procedure';
-      const title = clauseDocTitle(section);
-      const clauseNos = [...new Set(section.clauses.map((c) => c.clauseNo))];
-      const doc = await insertDocument(txn, tenantId, {
-        standard: sectionStandard,
-        docType,
-        title,
-        clauseRefs: clauseNos,
-        owner,
-        harmonizationKey: section.sectionKey,
-      });
-      const docId = doc.documentId;
-      const content = {
-        schemaVersion: 1,
-        documentId: docId,
-        versionNo: doc.versionNo,
-        locale,
-        frontMatter: buildFrontMatter(profile, standards),
-        sections: [
-          {
-            harmonizationKey: section.sectionKey,
-            clauseRefs: section.clauses.map((c) => ({
-              standard: c.standard,
-              clauseNo: c.clauseNo,
-            })),
-            kind: section.kind,
-            ...(section.content?.sentences !== undefined
-              ? { sentences: section.content.sentences }
-              : {}),
-            ...(section.content?.gap !== undefined ? { gap: section.content.gap } : {}),
-            ...(section.content?.naJustification !== undefined
-              ? { naJustification: section.content.naJustification }
-              : {}),
-          },
-        ],
-      };
-      const version = await writeVersion(txn, tenantId, docId, doc.versionNo, owner, content);
-      documentsCreated++;
-      masterEntries.push({
-        documentId: docId,
-        title,
-        docType,
-        standard: sectionStandard,
-        clauseRefs: clauseNos,
-        status: 'draft',
-        versionNo: doc.versionNo,
-        contentRef: version.contentRef,
-      });
-    }
+    // 2. Clause documents — failed sections ship nothing. Each section's
+    // chain (insert → lock+MAX+1 → S3 → version insert) is independent of
+    // every other doc's, so chains overlap at bounded concurrency instead of
+    // ~3 serial round-trips each (~120 sequential calls on a full run).
+    const clauseEntries = await mapLimit(
+      sections.filter((section) => section.kind !== 'failed'),
+      8,
+      async (section) => {
+        const sectionStandard = documentStandard([
+          ...new Set(section.clauses.map((c) => c.standard)),
+        ]);
+        const docType = section.clauses[0]?.docType ?? 'procedure';
+        const title = clauseDocTitle(section);
+        const clauseNos = [...new Set(section.clauses.map((c) => c.clauseNo))];
+        const doc = await insertDocument(txn, tenantId, {
+          standard: sectionStandard,
+          docType,
+          title,
+          clauseRefs: clauseNos,
+          owner,
+          harmonizationKey: section.sectionKey,
+        });
+        const docId = doc.documentId;
+        const content = {
+          schemaVersion: 1,
+          documentId: docId,
+          versionNo: doc.versionNo,
+          locale,
+          frontMatter: buildFrontMatter(profile, standards),
+          sections: [
+            {
+              harmonizationKey: section.sectionKey,
+              clauseRefs: section.clauses.map((c) => ({
+                standard: c.standard,
+                clauseNo: c.clauseNo,
+              })),
+              kind: section.kind,
+              ...(section.content?.sentences !== undefined
+                ? { sentences: section.content.sentences }
+                : {}),
+              ...(section.content?.gap !== undefined ? { gap: section.content.gap } : {}),
+              ...(section.content?.naJustification !== undefined
+                ? { naJustification: section.content.naJustification }
+                : {}),
+            },
+          ],
+        };
+        const version = await writeVersion(txn, tenantId, docId, doc.versionNo, owner, content);
+        return {
+          documentId: docId,
+          title,
+          docType,
+          standard: sectionStandard,
+          clauseRefs: clauseNos,
+          status: 'draft' as const,
+          versionNo: doc.versionNo,
+          contentRef: version.contentRef,
+        };
+      },
+    );
+    documentsCreated += clauseEntries.length;
+    masterEntries.push(...clauseEntries);
 
     // 3. Correlation matrix + master list (derived, never authored)
     const matrixDoc = await insertDocument(txn, tenantId, {

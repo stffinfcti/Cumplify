@@ -2,4 +2,3 @@ node_modules/
 .next/
 .amplify-hosting/
 out/
-next-env.d.ts

@@ -11,9 +11,6 @@ import { LambdaClient } from '@aws-sdk/client-lambda';
 
 export const logger = new Logger({ serviceName: 'resolver-m1' });
 
-// M-effort: server-side bound on list queries (mirror forms' LIST_MAX_LIMIT) —
-// an unbounded SELECT * turns a big register into a resolver timeout/payload blowup.
-
 // Boundary shape for SaveDocumentSectionEditInput.trackedChanges (AWSJSON):
 // an array of ChangeEntry objects, stored verbatim (M-effort, item 8).
 export const TrackedChangesSchema = z.array(z.record(z.string(), JsonValueSchema));

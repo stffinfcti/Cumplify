@@ -308,19 +308,20 @@ export class AuditTrailStack extends cdk.Stack {
       true,
     );
 
-    // ─── IAM Deny Policy (FIX-2: 5 actions) — REQUIRES-HUMAN ───────────────
+    // ─── IAM Deny Policy (FIX-2) — REQUIRES-HUMAN ─────────────────────────
     const auditLogDenyPolicy = new iam.ManagedPolicy(this, 'AuditLogDenyPolicy', {
       statements: [
         new iam.PolicyStatement({
           sid: 'DenyAuditLogMutation',
           effect: iam.Effect.DENY,
-          actions: [
-            'dynamodb:UpdateItem',
-            'dynamodb:DeleteItem',
-            'dynamodb:BatchWriteItem',
-            'dynamodb:PartiQLUpdate',
-            'dynamodb:PartiQLDelete',
-          ],
+          // Only single-item actions can carry a dynamodb:LeadingKeys
+          // condition — BatchWriteItem/PartiQL*/TransactWriteItems evaluate
+          // the request, not per-item keys, so they can never match a
+          // LeadingKeys deny. Mutations via those paths are a WORM blind
+          // spot: no IAM condition can scope them, so the boundary there is
+          // app-code only (no service code may write AUDITLOG partitions via
+          // batch/partiql/transact). Recorded as an accepted residual.
+          actions: ['dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
           resources: [props.tableArn],
           conditions: {
             'ForAnyValue:StringLike': {

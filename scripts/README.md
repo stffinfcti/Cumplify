@@ -6,7 +6,7 @@
 | `audit-gate.ts` | `npm audit` with expiring allowlist (`audit-allowlist.json`; `expires` REQUIRED — missing/expired entries fail) |
 | `gen-role-matrix.ts` (`npm run gen:role-matrix` / `check:role-matrix`) | Emits `frontend/src/lib/role-matrix.ts` from the authoritative `services/api/src/permissions/role-matrix.ts`; `--check` fails on drift (wired into verify step 3) |
 | `test-int.ts` (`npm run test:int`) | Provisioning-aware runner for `*.int.test.ts` (live AWS); prints the env report then runs vitest.int.config.ts |
-| `assert-legal-signoff.ts` | Legal sign-off assertion for the pipeline |
+| `assert-legal-signoff.mjs` | Legal sign-off assertion for the pipeline |
 | `framer-sync.mjs` / `verify-framer.mjs` | Framer design sync helpers |
 
 ## Integration lane (`npm run test:int`)

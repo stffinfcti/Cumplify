@@ -944,7 +944,8 @@
     "loading": "Cargando...",
     "print": "Imprimir",
     "viewerTitle": "Visor de Documento Controlado",
-    "draftSection": "Redactar con DocStudio"
+    "draftSection": "Redactar con DocStudio",
+    "renderFailed": "No se pudo renderizar el contenido del documento."
   },
   "documents": {
     "title": "Documentos",
@@ -1036,7 +1037,9 @@
     "failedSection": "Composición de sección fallida — sin contenido presentado",
     "saveVersion": "Guardar versión",
     "saving": "Guardando…",
-    "saveFailed": "Error al guardar"
+    "saveFailed": "Error al guardar",
+    "mermaidError": "No se pudo renderizar el diagrama",
+    "mermaidLoading": "Cargando diagrama…"
   },
   "proposal": {
     "rationale": "Justificación",

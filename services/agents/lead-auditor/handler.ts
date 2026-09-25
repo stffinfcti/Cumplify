@@ -15,6 +15,7 @@ import type { CumplifyEvent } from '../../eventing/src/types.js';
 import type { SQSEvent, SQSBatchResponse } from 'aws-lambda';
 import { ISO_CANON_TENANT_ID } from '../shared/constants.js';
 import { LEAD_AUDITOR_PROMPT } from './prompt.js';
+import { assertTenantIdSafe } from '../../api/src/resolvers/shared.js';
 import { LEAD_AUDITOR_TOOLS } from './tools.js';
 
 const DLQ_URL = process.env.LEAD_AUDITOR_DLQ_URL!;
@@ -136,6 +137,7 @@ export interface RunFindingsResult {
  */
 export async function runAuditFindings(input: RunFindingsInput): Promise<RunFindingsResult> {
   const { tenantId, requestedBy, findingsIntent } = input;
+  assertTenantIdSafe(tenantId);
   const { auditId, audit, checklist, priorFindings } = findingsIntent;
 
   const checklistLines =

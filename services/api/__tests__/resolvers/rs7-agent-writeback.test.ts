@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createHash } from 'node:crypto';
 
 const { mockExecute, mockCommit, mockRollback, mockPublishAuditEvent } = vi.hoisted(() => ({
   mockExecute: vi.fn(),
@@ -50,6 +51,8 @@ import { handler as m1Handler } from '../../src/resolvers/m1.js';
 import { handler as m2Handler } from '../../src/resolvers/m2.js';
 import { handler as m3Handler } from '../../src/resolvers/m3.js';
 import { handler as m5Handler } from '../../src/resolvers/m5.js';
+
+const hash16 = (id: string) => createHash('sha256').update(id).digest('hex').slice(0, 16);
 
 const EMPTY_RESULT = { records: undefined, columnMetadata: undefined };
 
@@ -107,26 +110,27 @@ describe('extractAgentContext — IAM session-tag tenant binding (RS-7a)', () =>
     ).rejects.toThrow('FORBIDDEN');
   });
 
-  it('accepts a resolver-<first8>-<epoch> session whose prefix matches', async () => {
+  it('accepts a resolver-<hash16>-<epoch> session whose hash matches', async () => {
     const result = await m3Handler({
       info: { fieldName: 'agentScoreReadiness' },
       arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
       identity: {
-        userArn:
-          'arn:aws:sts::123456789012:assumed-role/tenant-data-role/resolver-tenant-a-1750000000',
+        userArn: `arn:aws:sts::123456789012:assumed-role/tenant-data-role/resolver-${hash16('tenant-abc')}-1750000000`,
       },
     });
     expect(result).toEqual([]);
   });
 
-  it('rejects a resolver-<first8>-<epoch> session with a different tenant prefix', async () => {
+  it('rejects a resolver-<hash16>-<epoch> session with a different tenant hash', async () => {
+    // 'f'*16 matches the hash charset but is a different tenant's stamp —
+    // must 403 (a mismatched hint binds, never silently escapes).
     await expect(
       m3Handler({
         info: { fieldName: 'agentScoreReadiness' },
         arguments: { standard: 'ISO9001', tenantId: 'tenant-abc' },
         identity: {
           userArn:
-            'arn:aws:sts::123456789012:assumed-role/tenant-data-role/resolver-zzzzzzzz-1750000000',
+            'arn:aws:sts::123456789012:assumed-role/tenant-data-role/resolver-ffffffffffffffff-1750000000',
         },
       }),
     ).rejects.toThrow('FORBIDDEN');

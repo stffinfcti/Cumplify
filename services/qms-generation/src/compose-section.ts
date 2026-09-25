@@ -17,6 +17,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { Logger } from '@aws-lambda-powertools/logger';
 import {
+  assertTenantIdSafe,
   beginTenantTransaction,
   marshalMany,
   publishAuditEvent,
@@ -105,6 +106,7 @@ function composerMessages(
 
 export async function handler(event: ComposeInput): Promise<{ sectionId: string; status: string }> {
   const { runId, tenantId, sectionId, sectionKey } = event;
+  assertTenantIdSafe(tenantId);
   logger.appendKeys({ runId, tenantId, sectionId, sectionKey });
 
   const txn = await beginTenantTransaction(tenantId);

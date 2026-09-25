@@ -1026,7 +1026,9 @@ describe('BC-2: relation field existence probe', () => {
   }
 
   it('probes the allowlisted table with :uuid::uuid cast inside the tenant transaction', async () => {
-    setupRelationSave({ records: [[{ longValue: 1 }]] }); // probe returns 1 row = exists
+    setupRelationSave({
+      records: [[{ stringValue: 'a1b2c3d4-0000-4000-8000-000000000001' }]],
+    }); // probe echoes the id = exists
 
     await handler(
       makeEvent('saveFormRecordValues', {
@@ -1037,16 +1039,16 @@ describe('BC-2: relation field existence probe', () => {
       }),
     ).catch(() => {});
 
-    // Call 3 is the probe
+    // Call 3 is the batched probe (one ANY() query per target table)
     const [probeSql, probeParams] = mockExecute.mock.calls[2];
     // Must reference the allowlisted table (code constant, not from data)
     expect(probeSql).toContain('qms.clause_registry');
-    // Must cast the UUID param
-    expect(probeSql).toContain(':uuid::uuid');
-    // Param value is the UUID
+    // Must cast the UUID-array param
+    expect(probeSql).toContain(':ids::uuid[]');
+    // Param value carries the UUID as a text-array literal
     expect(probeParams).toContainEqual({
-      name: 'uuid',
-      value: { stringValue: 'a1b2c3d4-0000-4000-8000-000000000001' },
+      name: 'ids',
+      value: { stringValue: '{a1b2c3d4-0000-4000-8000-000000000001}' },
     });
   });
 
@@ -1075,7 +1077,9 @@ describe('BC-2: relation field existence probe', () => {
   });
 
   it('valid target proceeds to upsert without error', async () => {
-    setupRelationSave({ records: [[{ longValue: 1 }]] }); // exists
+    setupRelationSave({
+      records: [[{ stringValue: 'a1b2c3d4-0000-4000-8000-000000000001' }]],
+    }); // probe echoes the id = exists
 
     await handler(
       makeEvent('saveFormRecordValues', {
@@ -1118,7 +1122,7 @@ describe('BC-2: relation field existence probe', () => {
         { name: 'relation_target' },
       ],
     });
-    mockExecute.mockResolvedValueOnce({ records: [[{ longValue: 1 }]] }); // probe hit
+    mockExecute.mockResolvedValueOnce({ records: [[{ stringValue: 'nc-uuid-here' }]] }); // probe hit
     mockExecute.mockResolvedValue({ records: [], columnMetadata: [] });
 
     await handler(
@@ -1129,7 +1133,7 @@ describe('BC-2: relation field existence probe', () => {
 
     const [probeSql] = mockExecute.mock.calls[2];
     expect(probeSql).toContain('m2.nonconformities');
-    expect(probeSql).toContain(':uuid::uuid');
+    expect(probeSql).toContain(':ids::uuid[]');
   });
 
   it('field metadata query includes relation_target column', async () => {
@@ -2639,6 +2643,11 @@ describe('approveFormRecord — SoD enforcement (BC-4)', () => {
         { name: 'standards' },
         { name: 'clause_refs' },
       ],
+    });
+    // Field meta fetch for the phase-3 re-read (txn1)
+    mockExecute.mockResolvedValueOnce({
+      records: [],
+      columnMetadata: [{ name: 'field_key' }, { name: 'required' }],
     });
     // Phase-3 status re-check (FOR UPDATE, record still complete)
     mockExecute.mockResolvedValueOnce({

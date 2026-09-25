@@ -54,7 +54,6 @@ interface ContentSection {
 interface DocumentEditorProps {
   sections: ContentSection[];
   runId: string;
-  documentId: string;
   /** Latest document version id — REQUIRED for saving (RS-9 writes a NEW version on it). */
   versionId?: string | null;
   /** A section edit persisted — parent should refetch content + versions. */
@@ -76,7 +75,6 @@ const SAVE_SECTION_EDIT = `mutation SaveDocumentSectionEdit($input: SaveDocument
 export function DocumentEditor({
   sections,
   runId,
-  documentId: _documentId,
   versionId,
   onSaved,
   onConverge,

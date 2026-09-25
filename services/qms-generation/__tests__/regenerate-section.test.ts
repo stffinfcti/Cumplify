@@ -155,15 +155,20 @@ function wire(fx: Fx) {
   );
 
   mockExecute.mockImplementation(async (sql: string) => {
+    if (sql.includes('FROM qms.generation_runs WHERE id = :runId::uuid FOR UPDATE')) {
+      // Phase-3 serialization lock — run row exists whenever we get this far
+      return rows(['id'], [[RUN]]);
+    }
     if (sql.includes('FROM qms.generation_runs gr')) {
       if (!fx.manualDocId && fx.runStatus === 'MISSING') return emptyRes;
       return rows(
-        ['standards', 'manual_document_id', 'status', 'payload'],
+        ['standards', 'manual_document_id', 'status', 'requested_by', 'payload'],
         [
           [
             ['ISO9001'],
             fx.manualDocId,
             fx.runStatus,
+            'owner-1',
             JSON.stringify({
               legalName: 'Test Org',
               documentLocale: 'en',
@@ -218,25 +223,15 @@ function wire(fx: Fx) {
       // Sentinel-key doc resolution (019 unique index): master + matrix +
       // this section's clause doc (only when fx.clauseDocMatches).
       const docRows: unknown[][] = [
-        ['__MASTER_LIST__', MASTER, 'master_list', `tenants/${T}/documents/${MASTER}/v1.json`],
-        [
-          '__CORRELATION_MATRIX__',
-          MATRIX,
-          'correlation_matrix',
-          `tenants/${T}/documents/${MATRIX}/v1.json`,
-        ],
+        ['__MASTER_LIST__', MASTER, 'master_list'],
+        ['__CORRELATION_MATRIX__', MATRIX, 'correlation_matrix'],
       ];
       if (fx.clauseDocMatches) {
-        docRows.push([
-          HKEY,
-          CLAUSE_DOC,
-          'procedure',
-          `tenants/${T}/documents/${CLAUSE_DOC}/v1.json`,
-        ]);
+        docRows.push([HKEY, CLAUSE_DOC, 'procedure']);
       }
-      return rows(['harmonization_key', 'id', 'doc_type', 'content_ref'], docRows);
+      return rows(['harmonization_key', 'id', 'doc_type'], docRows);
     }
-    if (sql.includes('GROUP BY v.document_id')) {
+    if (sql.includes('GROUP BY l.id')) {
       // Batched lock+MAX(version_no)+1 for every doc being versioned
       return rows(
         ['document_id', 'next'],
@@ -248,13 +243,68 @@ function wire(fx: Fx) {
         ],
       );
     }
-    if (sql.includes('DISTINCT ON (v.document_id)')) {
+    if (sql.includes('JOIN LATERAL')) {
+      // Master-list rebuild: latest version per doc, live inside the run lock.
+      // A just-created clause doc (fx.clauseDocMatches=false) is visible.
+      const clauseEntry = fx.clauseDocMatches
+        ? [
+            CLAUSE_DOC,
+            HKEY,
+            'Context',
+            'procedure',
+            'ISO9001',
+            ['4.1'],
+            'draft',
+            2,
+            `tenants/${T}/documents/${CLAUSE_DOC}/v2.json`,
+          ]
+        : [
+            'doc-new-created',
+            HKEY,
+            'Context',
+            'procedure',
+            'ISO9001',
+            ['4.1'],
+            'draft',
+            1,
+            `tenants/${T}/documents/doc-new-created/v1.json`,
+          ];
       return rows(
-        ['document_id', 'version_no', 'content_ref', 'status'],
         [
-          [MANUAL, 2, `tenants/${T}/documents/${MANUAL}/v2.json`, 'draft'],
-          [CLAUSE_DOC, 2, `tenants/${T}/documents/${CLAUSE_DOC}/v2.json`, 'draft'],
-          [MATRIX, 1, `tenants/${T}/documents/${MATRIX}/v1.json`, 'draft'],
+          'id',
+          'harmonization_key',
+          'title',
+          'doc_type',
+          'standard',
+          'clause_refs',
+          'status',
+          'version_no',
+          'content_ref',
+        ],
+        [
+          [
+            MANUAL,
+            '__MANUAL__',
+            'IMS Manual',
+            'manual',
+            'IMS',
+            ['4.1', '5.1'],
+            'draft',
+            2,
+            `tenants/${T}/documents/${MANUAL}/v2.json`,
+          ],
+          clauseEntry,
+          [
+            MATRIX,
+            '__CORRELATION_MATRIX__',
+            'Matrix',
+            'correlation_matrix',
+            'IMS',
+            ['4.1', '5.1'],
+            'draft',
+            fx.sectionKindDb === 'failed' ? 2 : 1,
+            `tenants/${T}/documents/${MATRIX}/v${fx.sectionKindDb === 'failed' ? 2 : 1}.json`,
+          ],
         ],
       );
     }

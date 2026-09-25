@@ -100,7 +100,10 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
   // Step 7: Validate role — canApprove(role, module)
   if (!canApprove(role, module)) {
     logger.warn('Role lacks approval permission', { role, module, hitlItemId });
-    throw new ApprovalError(403, `Role '${role}' cannot approve items in module '${module}'`);
+    throw new ApprovalError(
+      403,
+      `FORBIDDEN: Role '${role}' cannot approve items in module '${module}'`,
+    );
   }
 
   // Step 7a (SOD-1): author ≠ approver. Items stamped with the proposing
@@ -109,7 +112,7 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
   const requestedBy = item.requestedBy as string | undefined;
   if (requestedBy && requestedBy === approverSub && decision === 'APPROVE') {
     logger.warn('SoD violation blocked: proposer attempted self-approval', { hitlItemId });
-    throw new ApprovalError(403, 'SoD violation: the proposer cannot approve their own item');
+    throw new ApprovalError(403, 'SOD_VIOLATION: the proposer cannot approve their own item');
   }
 
   // Step 7b (RS-6): tenant approval-matrix narrowing. The matrix can only
@@ -132,7 +135,7 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
       });
       throw new ApprovalError(
         403,
-        `Approval matrix: role '${role}' is not an approver for '${artifactType}'`,
+        `FORBIDDEN: role '${role}' is not an approver for '${artifactType}' in the approval matrix`,
       );
     }
   }
@@ -280,9 +283,23 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
 
   // Step 9: resolveHitlItem bookkeeping (removes GSI9, sets TTL) — rides the
   // same tenant-scoped client as the RESOLVING guard (BUG-14: ambient role has
-  // no DDB grants).
+  // no DDB grants). SFN already resumed above, so a failure here must not error
+  // the mutation (the decision already took effect): retry once inline, then
+  // best-effort warn — a stuck RESOLVING row is reclaimed by expire-hitl-item.
   const resolution = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
-  await resolveHitlItem(tenantId, hitlItemId, resolution, approverSub, ddb);
+  try {
+    await resolveHitlItem(tenantId, hitlItemId, resolution, approverSub, ddb);
+  } catch (resolveErr: unknown) {
+    try {
+      await resolveHitlItem(tenantId, hitlItemId, resolution, approverSub, ddb);
+    } catch (retryErr: unknown) {
+      logger.error('resolveHitlItem failed after SendTaskSuccess — item left RESOLVING', {
+        hitlItemId,
+        resolution,
+        error: String(retryErr),
+      });
+    }
+  }
 
   // Step 10: Publish audit event
   const detailType = decision === 'APPROVE' ? 'Hitl.Approved' : 'Hitl.SentBack';

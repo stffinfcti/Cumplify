@@ -9,7 +9,13 @@ import { Logger } from '@aws-lambda-powertools/logger';
 import { QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { resolveModule } from '../permissions/role-matrix.js';
-import { extractContext, getTenantDdbClient, TABLE_NAME, type AppSyncEvent } from './shared.js';
+import {
+  clampListLimit,
+  extractContext,
+  getTenantDdbClient,
+  TABLE_NAME,
+  type AppSyncEvent,
+} from './shared.js';
 
 const logger = new Logger({ serviceName: 'resolver-hitl-query' });
 
@@ -36,7 +42,7 @@ export async function handler(event: AppSyncEvent): Promise<unknown> {
 
 async function listPendingHitlItems(event: AppSyncEvent, tenantId: string) {
   const pagination = (event.arguments.pagination as PaginationInput | null) ?? {};
-  const limit = Math.min(pagination.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+  const limit = clampListLimit(pagination.limit ?? undefined, DEFAULT_LIMIT, MAX_LIMIT);
 
   let exclusiveStartKey: Record<string, unknown> | undefined;
 

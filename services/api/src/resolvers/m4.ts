@@ -37,7 +37,8 @@ const logger = new Logger({ serviceName: 'resolver-m4' });
 
 // Audit ledger is a privileged read surface (approver subs, justifications,
 // execution ARNs): admins + auditors only — plain Employees are gated out.
-const AUDIT_TRAIL_ROLES = new Set(['InternalAuditor', 'ExternalAuditor']);
+// Slug form (normalizeRole output), not Cognito-group PascalCase.
+const AUDIT_TRAIL_ROLES = new Set(['internal-auditor', 'external-auditor']);
 
 export async function handler(event: AppSyncEvent): Promise<unknown> {
   const ctx = extractContext(event);
@@ -438,7 +439,7 @@ async function listCalibrationsDue(event: AppSyncEvent, tenantId: string) {
  * upgrade path if that ever matters in practice.
  */
 async function getAuditTrail(event: AppSyncEvent, tenantId: string, ctx: ResolverContext) {
-  if (ctx.poolClass !== 'tenant-admin' && !AUDIT_TRAIL_ROLES.has(ctx.role)) {
+  if (ctx.poolClass !== 'tenant-admin' && !AUDIT_TRAIL_ROLES.has(normalizeRole(ctx.role))) {
     throw new Error('FORBIDDEN: audit trail requires admin or auditor role');
   }
 
@@ -542,7 +543,7 @@ function payloadHasExactValue(payload: unknown, needle: string, depth = 0): bool
       }
       continue;
     }
-    if (v && typeof v === 'object' && payloadHasExactValue(v, needle, depth)) return true;
+    if (v && typeof v === 'object' && payloadHasExactValue(v, needle, depth + 1)) return true;
   }
   return false;
 }

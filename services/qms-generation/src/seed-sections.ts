@@ -15,6 +15,7 @@
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { Logger } from '@aws-lambda-powertools/logger';
 import {
+  assertTenantIdSafe,
   beginTenantTransaction,
   marshalMany,
   rollbackQuietly,
@@ -42,6 +43,7 @@ export function sectionContentKey(tenantId: string, runId: string, sectionKey: s
 
 export async function handler(event: SeedInput): Promise<SeedOutput> {
   const { runId, tenantId } = event;
+  assertTenantIdSafe(tenantId);
   logger.appendKeys({ runId, tenantId });
 
   const txn = await beginTenantTransaction(tenantId);

@@ -29,6 +29,7 @@ import {
   completionFrom,
   getFormRecordById,
   buildValueParam,
+  sqlStringOrNull,
   marshalFieldMeta,
   marshalFieldMetaFull,
   type AppSyncEvent,
@@ -153,6 +154,7 @@ export async function saveFormRecordValues(
     // round-trip per field, which serialized every autosave flush.
     const deleteFieldIds: string[] = [];
     const upserts: Array<{ fieldId: string; column: string; param: SqlParameter }> = [];
+    const relationProbes = new Map<string, string[]>(); // targetTable → ids to verify
 
     for (const [fieldKey, value] of Object.entries(values)) {
       const meta = fieldMeta.get(fieldKey);
@@ -171,19 +173,14 @@ export async function saveFormRecordValues(
       const valueColumn = FIELD_TYPE_COLUMN[meta.fieldType];
       if (!valueColumn) continue;
 
-      // BC-2: Relation existence probe — inside the tenant transaction (RLS-enforced)
       if (meta.fieldType === 'relation' && meta.relationTarget) {
         const targetTable = RELATION_TARGET_TABLE[meta.relationTarget];
         if (!targetTable) {
           throw new Error(`INVALID_RELATION_TARGET: ${meta.relationTarget}`);
         }
-        const probeResult = await txn.execute(
-          `SELECT 1 FROM ${targetTable} WHERE id = :uuid::uuid`,
-          [{ name: 'uuid', value: { stringValue: String(value) } }],
-        );
-        if (!probeResult.records || probeResult.records.length === 0) {
-          throw new Error('LINK_TARGET_NOT_FOUND');
-        }
+        const ids = relationProbes.get(targetTable) ?? [];
+        ids.push(String(value));
+        relationProbes.set(targetTable, ids);
       }
 
       upserts.push({
@@ -191,6 +188,21 @@ export async function saveFormRecordValues(
         column: valueColumn,
         param: buildValueParam(valueColumn, value),
       });
+    }
+
+    // BC-2: batched relation existence probes — one query per target table
+    // inside the tenant transaction (RLS-enforced), not one per field.
+    for (const [targetTable, ids] of relationProbes) {
+      const probeResult = await txn.execute(
+        `SELECT id::text FROM ${targetTable} WHERE id = ANY(:ids::uuid[])`,
+        [{ name: 'ids', value: { stringValue: `{${ids.join(',')}}` } }],
+      );
+      const found = new Set(
+        (probeResult.records ?? []).map((r) => (r[0] as { stringValue?: string }).stringValue),
+      );
+      if (ids.some((id) => !found.has(id))) {
+        throw new Error('LINK_TARGET_NOT_FOUND');
+      }
     }
 
     if (deleteFieldIds.length > 0) {
@@ -410,15 +422,15 @@ export async function submitFormRecord(
           WHERE id = :ncId::uuid
         `,
           [
-            { name: 'standard', value: { stringValue: currentValues['standard'] as string } },
-            { name: 'source', value: { stringValue: currentValues['source'] as string } },
-            { name: 'ncType', value: { stringValue: currentValues['nc_type'] as string } },
+            { name: 'standard', value: sqlStringOrNull(currentValues['standard']) },
+            { name: 'source', value: sqlStringOrNull(currentValues['source']) },
+            { name: 'ncType', value: sqlStringOrNull(currentValues['nc_type']) },
             {
               name: 'description',
-              value: { stringValue: currentValues['nc_description'] as string },
+              value: sqlStringOrNull(currentValues['nc_description']),
             },
             { name: 'clauseRef', value: { stringValue: clauseNoText } },
-            { name: 'severity', value: { stringValue: currentValues['severity'] as string } },
+            { name: 'severity', value: sqlStringOrNull(currentValues['severity']) },
             { name: 'ncId', value: { stringValue: existingNcId } },
           ],
         );
@@ -433,16 +445,16 @@ export async function submitFormRecord(
         `,
           [
             { name: 'tenantId', value: { stringValue: tenantId } },
-            { name: 'standard', value: { stringValue: currentValues['standard'] as string } },
-            { name: 'source', value: { stringValue: currentValues['source'] as string } },
-            { name: 'ncType', value: { stringValue: currentValues['nc_type'] as string } },
+            { name: 'standard', value: sqlStringOrNull(currentValues['standard']) },
+            { name: 'source', value: sqlStringOrNull(currentValues['source']) },
+            { name: 'ncType', value: sqlStringOrNull(currentValues['nc_type']) },
             {
               name: 'description',
-              value: { stringValue: currentValues['nc_description'] as string },
+              value: sqlStringOrNull(currentValues['nc_description']),
             },
             { name: 'clauseRef', value: { stringValue: clauseNoText } },
-            { name: 'severity', value: { stringValue: currentValues['severity'] as string } },
-            { name: 'raisedBy', value: { stringValue: currentValues['raised_by'] as string } },
+            { name: 'severity', value: sqlStringOrNull(currentValues['severity']) },
+            { name: 'raisedBy', value: sqlStringOrNull(currentValues['raised_by']) },
             { name: 'actor', value: { stringValue: actor } },
           ],
         );
@@ -462,10 +474,10 @@ export async function submitFormRecord(
             { name: 'ncId', value: { stringValue: ncId } },
             {
               name: 'actionDesc',
-              value: { stringValue: currentValues['corrective_action_desc'] as string },
+              value: sqlStringOrNull(currentValues['corrective_action_desc']),
             },
-            { name: 'ownerId', value: { stringValue: currentValues['ca_owner'] as string } },
-            { name: 'dueDate', value: { stringValue: currentValues['ca_due_date'] as string } },
+            { name: 'ownerId', value: sqlStringOrNull(currentValues['ca_owner']) },
+            { name: 'dueDate', value: sqlStringOrNull(currentValues['ca_due_date']) },
             { name: 'containmentFlag', value: { booleanValue: containmentFlag } },
             { name: 'actor', value: { stringValue: actor } },
           ],
@@ -586,6 +598,7 @@ export async function approveFormRecord(
   let tplStandards: string[] | null = null;
   let tplClauseRefs: string[] | null = null;
   let retentionYears = DEFAULT_RETENTION_YEARS;
+  let fieldsMeta: Awaited<ReturnType<typeof fetchTemplateFieldMeta>> | undefined;
   try {
     // FOR UPDATE: serializes concurrent approvals (and an approve/reopen
     // race) — the loser re-reads the flipped status and fails
@@ -657,6 +670,10 @@ export async function approveFormRecord(
       });
       throw new Error('SOD_VIOLATION');
     }
+
+    // Field meta for the phase-3 re-read — fetched here so getFormRecordById
+    // doesn't re-query the same template meta in txn3.
+    fieldsMeta = await fetchTemplateFieldMeta(txn1, templateId);
 
     if (sealConfigured) {
       retentionYears = await upsertRetentionPolicy(txn1, tenantId, actor);
@@ -734,7 +751,7 @@ export async function approveFormRecord(
       };
     }
 
-    refreshed = await getFormRecordById(recordId, tenantId, txn3);
+    refreshed = await getFormRecordById(recordId, tenantId, txn3, fieldsMeta);
     await txn3.commit();
   } catch (err) {
     await rollbackQuietly(txn3);
@@ -812,11 +829,16 @@ export async function reopenFormRecord(
       throw new Error('TEMPLATE_METADATA_MISSING');
     }
 
-    // Transition to reopened
+    // Transition to reopened — also drop the approval stamp and the M4 sealed
+    // pointer: a reopened record must not keep advertising an approval it no
+    // longer holds. The sealed artifact itself stays in the WORM vault (it is
+    // the record of what WAS approved); the record just stops pointing at it.
     await txn.execute(
       `
       UPDATE forms.records
-      SET status = 'reopened', completed_by = NULL, completed_at = NULL, updated_at = NOW()
+      SET status = 'reopened', completed_by = NULL, completed_at = NULL,
+          approved_by = NULL, approved_at = NULL, m4_record_id = NULL,
+          updated_at = NOW()
       WHERE id = :id::uuid
     `,
       [{ name: 'id', value: { stringValue: recordId } }],

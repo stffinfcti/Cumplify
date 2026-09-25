@@ -28,6 +28,7 @@ import {
   jsonOut,
   JsonValueSchema,
   TABLE_NAME,
+  rollbackQuietly,
   type TenantTransaction,
   type DataApiResult,
 } from '../shared.js';
@@ -233,8 +234,13 @@ export function completionFrom(
   fieldsMeta: Array<{ fieldKey: string; required: boolean }>,
   filledKeys: Set<string>,
 ): { fieldsFilled: number; fieldsTotal: number; requiredMissing: string[] } {
+  // Intersect with live template field keys — values for fields later removed
+  // from the template stay in filled_keys but must not count toward filled.
+  const liveKeys = new Set(fieldsMeta.map((f) => f.fieldKey));
+  let filled = 0;
+  for (const k of filledKeys) if (liveKeys.has(k)) filled++;
   return {
-    fieldsFilled: filledKeys.size,
+    fieldsFilled: filled,
     fieldsTotal: fieldsMeta.length,
     requiredMissing: fieldsMeta
       .filter((f) => f.required && !filledKeys.has(f.fieldKey))
@@ -289,13 +295,7 @@ export async function getFormRecordById(
     if (ownsTxn) await t.commit();
     return rec;
   } catch (err) {
-    if (ownsTxn) {
-      try {
-        await t.rollback();
-      } catch {
-        /* never mask the original error */
-      }
-    }
+    if (ownsTxn) await rollbackQuietly(t);
     throw err;
   }
 }
@@ -319,6 +319,16 @@ export function buildValueParam(valueColumn: string, value: unknown): SqlParamet
     default:
       return { name: 'val', value: { stringValue: String(value) } };
   }
+}
+
+/**
+ * Data API param for a value that may be absent from the form payload:
+ * binds `{isNull:true}` instead of `{stringValue: undefined}` — the latter
+ * hits the Data API as a raw param-encoding error rather than a SQL-level
+ * NULL/NOT NULL outcome.
+ */
+export function sqlStringOrNull(value: unknown): { stringValue: string } | { isNull: true } {
+  return value === undefined || value === null ? { isNull: true } : { stringValue: String(value) };
 }
 
 // ─── Data API Marshalling (forms-specific shapes over shared primitives) ─────
@@ -417,7 +427,9 @@ export function marshalValues(result: DataApiResult): Record<string, unknown> {
         value = v;
       }
     }
-    if (fieldKey) obj[fieldKey] = value;
+    // All-null rows carry no value — emit nothing so the key never counts as
+    // filled in completionFrom.
+    if (fieldKey && value !== null) obj[fieldKey] = value;
   }
   return obj;
 }

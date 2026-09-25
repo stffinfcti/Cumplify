@@ -74,9 +74,9 @@ export function ControlledDocViewer({
 
       return buildDocumentHtml(meta, content);
     } catch {
-      return `<html><body><p style="color:red;padding:24px;">Failed to render document content.</p></body></html>`;
+      return `<html><body><p style="color:red;padding:24px;">${t('renderFailed')}</p></body></html>`;
     }
-  }, [contentRaw, documentId, versionNo, generatedAt, user?.email]);
+  }, [contentRaw, documentId, versionNo, generatedAt, user?.email, t]);
 
   function handlePrint() {
     iframeRef.current?.contentWindow?.print();

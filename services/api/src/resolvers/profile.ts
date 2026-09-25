@@ -7,17 +7,11 @@
 import { Logger } from '@aws-lambda-powertools/logger';
 import { GetItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { extractContext, getTenantDdbClient, TABLE_NAME } from './shared.js';
+import { extractContext, getTenantDdbClient, TABLE_NAME, type AppSyncEvent } from './shared.js';
 
 const logger = new Logger({ serviceName: 'resolver-profile' });
 
 const VALID_LOCALES = ['en', 'es', 'pt'] as const;
-
-interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
-}
 
 export async function handler(event: AppSyncEvent): Promise<unknown> {
   const ctx = extractContext(event);

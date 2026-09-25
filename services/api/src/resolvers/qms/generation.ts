@@ -19,10 +19,11 @@ import {
   logger,
   sfnClient,
   lambdaClient,
-  EXPORT_FN,
-  REGEN_FN,
+  exportFnName,
+  regenFnName,
   type AppSyncEvent,
 } from './common.js';
+import { publishGenerationEvent } from '../../../../qms-generation/src/appsync-publish.js';
 
 export async function getGenerationRun(event: AppSyncEvent, tenantId: string) {
   const runId = event.arguments.id as string;
@@ -211,18 +212,24 @@ export async function generateImsManual(event: AppSyncEvent, tenantId: string, a
         input: JSON.stringify({ runId, tenantId }),
       }),
     );
-    const stamp = await beginTenantTransaction(tenantId);
+    // Stamp the execution ARN best-effort: any failure here must not reach the
+    // outer catch — StartExecution already succeeded and the SFN is running.
     try {
-      await stamp.execute(
-        `UPDATE qms.generation_runs SET sfn_execution_arn = :arn, updated_at = NOW() WHERE id = :id::uuid`,
-        [
-          { name: 'arn', value: { stringValue: exec.executionArn! } },
-          { name: 'id', value: { stringValue: runId } },
-        ],
-      );
-      await stamp.commit();
-    } catch (err) {
-      await rollbackQuietly(stamp);
+      const stamp = await beginTenantTransaction(tenantId);
+      try {
+        await stamp.execute(
+          `UPDATE qms.generation_runs SET sfn_execution_arn = :arn, updated_at = NOW() WHERE id = :id::uuid`,
+          [
+            { name: 'arn', value: { stringValue: exec.executionArn! } },
+            { name: 'id', value: { stringValue: runId } },
+          ],
+        );
+        await stamp.commit();
+      } catch (err) {
+        await rollbackQuietly(stamp);
+        throw err;
+      }
+    } catch {
       logger.warn('Failed to stamp sfn_execution_arn (run continues)', { runId });
     }
   } catch (err) {
@@ -236,6 +243,22 @@ export async function generateImsManual(event: AppSyncEvent, tenantId: string, a
       await mark.commit();
     } catch (markErr) {
       await rollbackQuietly(mark);
+    }
+    // Subscribed clients must see the terminal state — the state machine's
+    // own failure path (mark-run-failed) publishes the same run_complete.
+    // Best-effort: a publish failure must not mask the original error.
+    try {
+      await publishGenerationEvent({
+        runId,
+        tenantId,
+        type: 'run_complete',
+        summary: JSON.stringify({ status: 'failed' }),
+      });
+    } catch (pubErr) {
+      logger.warn('run_complete publish failed after inline mark', {
+        runId,
+        error: (pubErr as Error).message,
+      });
     }
     logger.error('StartExecution failed', { runId, error: (err as Error).message });
     throw new Error('GENERATION_UNAVAILABLE');
@@ -251,7 +274,8 @@ export async function generateImsManual(event: AppSyncEvent, tenantId: string, a
 export async function requestImsExport(event: AppSyncEvent, tenantId: string) {
   const documentId = event.arguments.documentId as string;
   if (!documentId) throw new Error('BAD_REQUEST: documentId required');
-  if (!EXPORT_FN) throw new Error('EXPORT_NOT_AVAILABLE');
+  const exportFn = exportFnName();
+  if (!exportFn) throw new Error('EXPORT_NOT_AVAILABLE');
 
   const txn = await beginTenantTransaction(tenantId);
   let manual: Record<string, unknown> | null = null;
@@ -308,7 +332,7 @@ export async function requestImsExport(event: AppSyncEvent, tenantId: string) {
   };
   const invoke = await lambdaClient.send(
     new InvokeCommand({
-      FunctionName: EXPORT_FN,
+      FunctionName: exportFn,
       Payload: JSON.stringify(payload),
     }),
   );
@@ -338,11 +362,12 @@ export async function regenerateSection(event: AppSyncEvent, tenantId: string, a
   const input = event.arguments.input as { runId: string; harmonizationKey: string };
   if (!input?.runId || !input?.harmonizationKey)
     throw new Error('BAD_REQUEST: runId and harmonizationKey required');
-  if (!REGEN_FN) throw new Error('REGENERATE_NOT_AVAILABLE');
+  const regenFn = regenFnName();
+  if (!regenFn) throw new Error('REGENERATE_NOT_AVAILABLE');
 
   const invoke = await lambdaClient.send(
     new InvokeCommand({
-      FunctionName: REGEN_FN,
+      FunctionName: regenFn,
       Payload: JSON.stringify({
         tenantId,
         runId: input.runId,

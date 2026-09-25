@@ -258,7 +258,7 @@ export function DocumentViewer({ documentId, onBack, onDiff }: DocumentViewerPro
       // response must not become a navigation target.
       const url = data.requestImsExport.url;
       if (!/^https:\/\//.test(url)) {
-        setExportError('UNKNOWN');
+        setExportError(tErr('generic'));
         return;
       }
       const opened = window.open(url, '_blank', 'noopener');

@@ -642,10 +642,13 @@ export class ApiStack extends cdk.Stack {
     stripeSecret.grantRead(billingFn);
     // persistCustomerMapping needs only PutSecretValue — grantWrite would also
     // allow RotateSecret/UpdateSecret/CancelRotation on the shared Stripe key.
+    // The imported secretArn is the partial ARN (no -?????? suffix) — real
+    // secret ARNs always carry it, so a bare secretArn statement matches
+    // nothing and PutSecretValue gets AccessDenied at runtime.
     billingFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['secretsmanager:PutSecretValue'],
-        resources: [stripeSecret.secretArn],
+        resources: [`${stripeSecret.secretArn}-??????`],
       }),
     );
 
@@ -1327,6 +1330,8 @@ export class ApiStack extends cdk.Stack {
         REGION: cdk.Stack.of(this).region,
         DOCGEN_SFN_ARN: docGenSfnArn,
         REGEN_FN: regenFnName,
+        // publishes run_complete on the inline StartExecution-fail path
+        APPSYNC_URL: api.graphqlUrl,
         POWERTOOLS_SERVICE_NAME: 'resolver-qms',
       },
     });
@@ -1383,6 +1388,14 @@ export class ApiStack extends cdk.Stack {
       }),
     );
     props.dynamodbKey.grantDecrypt(qmsFn);
+    // generateImsManual's inline fail path publishes run_complete through the
+    // same @aws_iam field the generation plane uses (field-scoped grant).
+    qmsFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['appsync:GraphQL'],
+        resources: [`${api.arn}/types/Mutation/fields/publishGenerationEvent`],
+      }),
+    );
     // Task 9: requestImsExport dispatches to ExportFn (SQL in QmsFn, S3/zip there)
     qmsFn.addEnvironment('EXPORT_FN', exportFn.functionName);
     exportFn.grantInvoke(qmsFn);

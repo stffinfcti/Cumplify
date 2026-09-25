@@ -83,7 +83,7 @@ async function createBillingPortalSession(
     if (!returnUrl) return false;
     try {
       const u = new URL(returnUrl);
-      return u.protocol === 'https:' || u.hostname === 'localhost';
+      return u.protocol === 'https:' || (u.protocol === 'http:' && u.hostname === 'localhost');
     } catch {
       return false;
     }

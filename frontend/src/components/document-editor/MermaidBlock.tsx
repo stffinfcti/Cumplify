@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useTranslations } from 'next-intl';
 import styles from './MermaidBlock.module.css';
 
 /**
@@ -23,6 +24,7 @@ interface MermaidBlockProps {
 }
 
 export function MermaidBlock({ source, onUpdate, readOnly = false }: MermaidBlockProps) {
+  const t = useTranslations('editor');
   const [svg, setSvg] = useState<string>('');
   const [editing, setEditing] = useState(false);
   const [localSource, setLocalSource] = useState(source);
@@ -108,11 +110,11 @@ export function MermaidBlock({ source, onUpdate, readOnly = false }: MermaidBloc
         <div className={styles.diagram} dangerouslySetInnerHTML={{ __html: svg }} />
       ) : error ? (
         <div className={styles.error}>
-          <span className={styles.errorLabel}>Mermaid error</span>
+          <span className={styles.errorLabel}>{t('mermaidError')}</span>
           <code className={styles.errorMsg}>{error}</code>
         </div>
       ) : (
-        <div className={styles.placeholder}>Loading diagram...</div>
+        <div className={styles.placeholder}>{t('mermaidLoading')}</div>
       )}
     </div>
   );
