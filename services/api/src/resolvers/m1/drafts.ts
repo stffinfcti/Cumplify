@@ -5,7 +5,13 @@
 
 import { InvokeCommand } from '@aws-sdk/client-lambda';
 import { ulid } from 'ulid';
-import { beginTenantTransaction, publishAuditEvent, marshalOne } from '../shared.js';
+import {
+  beginTenantTransaction,
+  publishAuditEvent,
+  marshalOne,
+  getCurrentOrgProfile,
+  rollbackQuietly,
+} from '../shared.js';
 import { mapEnum, DOC_TYPE_MAP } from '../enum-mappings.js';
 import { logger, lambdaClient, DOC_STUDIO_FN_ARN, type AppSyncEvent } from './common.js';
 
@@ -29,22 +35,10 @@ export async function runDocDraft(event: AppSyncEvent, tenantId: string, actor: 
   let orgProfile: Record<string, unknown> | null = null;
   const txn = await beginTenantTransaction(tenantId);
   try {
-    const result = await txn.execute(`
-      SELECT pv.payload
-      FROM qms.org_profiles p
-      JOIN qms.org_profile_versions pv
-        ON pv.profile_id = p.id AND pv.version_no = p.current_version
-      LIMIT 1
-    `);
+    orgProfile = (await getCurrentOrgProfile(txn))?.payload ?? null;
     await txn.commit();
-    const raw = (result.records?.[0]?.[0] as { stringValue?: string } | undefined)?.stringValue;
-    if (raw) orgProfile = JSON.parse(raw) as Record<string, unknown>;
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 
@@ -103,7 +97,7 @@ export async function createDocumentDraft(event: AppSyncEvent, tenantId: string,
     });
     return doc;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -123,7 +117,9 @@ export async function agentDraftDocument(event: AppSyncEvent, tenantId: string, 
   // content-plane prefix or a draft could pin a version to another
   // tenant's object.
   const contentRef = input.contentRef as string;
-  if (!contentRef.startsWith(`tenants/${tenantId}/`)) {
+  // `..` would let `tenants/<t>/../<other>/x` satisfy the prefix check while
+  // S3 normalizes it out of the tenant's plane.
+  if (contentRef.includes('..') || !contentRef.startsWith(`tenants/${tenantId}/`)) {
     throw new Error('FORBIDDEN: contentRef outside tenant prefix');
   }
   const txn = await beginTenantTransaction(tenantId);
@@ -165,7 +161,7 @@ export async function agentDraftDocument(event: AppSyncEvent, tenantId: string, 
     });
     return doc;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }

@@ -146,8 +146,9 @@ describe('AgentRunButton', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    // Raw backend codes never reach the UI — the localized generic does
-    expect(screen.getByText('errors.generic')).toBeInTheDocument();
+    // Raw backend codes never reach the UI — NC_NOT_FOUND is a known code,
+    // localized to its catalog key rather than the raw string.
+    expect(screen.getByText('errors.notFound')).toBeInTheDocument();
     expect(screen.getByText('Analyze')).toBeInTheDocument();
   });
 });

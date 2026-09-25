@@ -302,6 +302,24 @@ describe('m4 getAuditTrail — GSI1 per-entity query + pre-migration fallback', 
     )) as Array<Record<string, unknown>>;
     expect(result).toHaveLength(0);
   });
+
+  it('fallback matches an entityId inside a serialized-JSON payload string', async () => {
+    const blobItem = {
+      ...ledgerItem('evt-1', '2027-01-01T00:00:00.000Z', 'unrelated'),
+      // Pre-migration payloads sometimes stored ids inside JSON.stringify'd
+      // blobs — invisible to a structure-only exact-value walk.
+      payload: { M: { summary: { S: '{"affected":"risk-42","count":2}' } } },
+    };
+    mockDdbSend
+      .mockResolvedValueOnce({ Items: [] }) // GSI miss
+      .mockResolvedValueOnce({ Items: [blobItem] });
+
+    const result = (await m4Handler(
+      makeEvent('getAuditTrail', { entityId: 'risk-42' }, { role: 'InternalAuditor' }),
+    )) as Array<Record<string, unknown>>;
+    expect(result).toHaveLength(1);
+    expect(result[0].eventId).toBe('evt-1');
+  });
 });
 
 describe('m4 registerMeasuringResource — new mutation (unblocks recordCalibration)', () => {
@@ -324,6 +342,12 @@ describe('m4 registerMeasuringResource — new mutation (unblocks recordCalibrat
 
 describe('m5 createRisk — register-refresh fix regression', () => {
   it('refreshes m5_views.risk_register_view via the SECURITY DEFINER accessor, AFTER the write commits', async () => {
+    // INSERT ... RETURNING * yields the full row — the audit event reads
+    // risk.standard (toIsoStandard throws on an unknown/undefined value).
+    mockExecute.mockResolvedValueOnce({
+      records: [[{ stringValue: 'risk-1' }, { stringValue: 'ISO9001' }]],
+      columnMetadata: [{ name: 'id' }, { name: 'standard' }],
+    });
     await m5Handler(
       makeEvent('createRisk', {
         input: {
@@ -352,8 +376,8 @@ describe('m5 createRisk — register-refresh fix regression', () => {
   it('still returns the created risk when the post-commit refresh fails', async () => {
     mockExecute
       .mockResolvedValueOnce({
-        records: [[{ stringValue: 'risk-1' }]],
-        columnMetadata: [{ name: 'id' }],
+        records: [[{ stringValue: 'risk-1' }, { stringValue: 'ISO9001' }]],
+        columnMetadata: [{ name: 'id' }, { name: 'standard' }],
       })
       .mockRejectedValueOnce(new Error('refresh blew up'));
 

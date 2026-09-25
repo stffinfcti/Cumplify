@@ -20,6 +20,7 @@ import {
   type ResolverContext,
   LIST_QUERY_LIMIT,
   type AppSyncEvent,
+  rollbackQuietly,
 } from './shared.js';
 import { normalizeRole, KNOWN_ROLES } from '../permissions/role-matrix.js';
 import {
@@ -254,7 +255,7 @@ async function registerRecord(event: AppSyncEvent, tenantId: string, actor: stri
     logger.info('Record registered', { tenantId });
     return record;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -290,7 +291,7 @@ async function registerMeasuringResource(event: AppSyncEvent, tenantId: string, 
     logger.info('Measuring resource registered', { tenantId });
     return resource;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -341,7 +342,7 @@ async function recordCalibration(event: AppSyncEvent, tenantId: string, actor: s
     logger.info('Calibration recorded', { tenantId });
     return calibration;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -385,7 +386,7 @@ async function createRetentionPolicy(event: AppSyncEvent, tenantId: string, acto
     });
     return policy;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -399,7 +400,7 @@ async function getRecord(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -417,7 +418,7 @@ async function listCalibrationsDue(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -488,7 +489,10 @@ async function getAuditTrail(event: AppSyncEvent, tenantId: string, ctx: Resolve
 
   // Fallback: pre-migration events (no entityId attribute) — partition scan
   // with EXACT payload-value matching (the old substring test false-positived
-  // on short entityIds, returning the tenant's whole ledger).
+  // on short entityIds, returning the tenant's whole ledger). Bounded at
+  // MAX_FALLBACK_SCAN_PAGES of the most-recent tail — an unbounded scan
+  // costs a full ledger read per query; pre-migration entities older than
+  // that tail resolve as "no events" until the entityId ledger backfill runs.
   const matches: Record<string, unknown>[] = [];
   const pk = `TENANT#${tenantId}#AUDITLOG`;
   let lastKey: Record<string, unknown> | undefined;
@@ -512,18 +516,33 @@ async function getAuditTrail(event: AppSyncEvent, tenantId: string, ctx: Resolve
     }
     lastKey = resp.LastEvaluatedKey as Record<string, unknown> | undefined;
     pages += 1;
-  } while (lastKey && pages < 10);
+  } while (lastKey && pages < MAX_FALLBACK_SCAN_PAGES);
 
   return matches;
 }
 
-/** True when any string VALUE nested in payload equals needle exactly. */
-function payloadHasExactValue(payload: unknown, needle: string): boolean {
+// The partition-scan fallback reads at most this many pages of the audit
+// partition (newest first) before giving up — see the fallback comment above.
+const MAX_FALLBACK_SCAN_PAGES = 10;
+
+/** True when any string VALUE nested in payload equals needle exactly.
+ * Serialized-JSON strings are parsed and searched too — pre-migration
+ * payloads stored entity ids inside JSON.stringify'd blobs, invisible to a
+ * structure-only walk. Depth-capped against pathological nesting. */
+function payloadHasExactValue(payload: unknown, needle: string, depth = 0): boolean {
   if (payload === needle) return true;
-  if (!payload || typeof payload !== 'object') return false;
+  if (depth > 8 || !payload || typeof payload !== 'object') return false;
   for (const v of Object.values(payload as Record<string, unknown>)) {
     if (v === needle) return true;
-    if (v && typeof v === 'object' && payloadHasExactValue(v, needle)) return true;
+    if (typeof v === 'string' && (v.startsWith('{') || v.startsWith('['))) {
+      try {
+        if (payloadHasExactValue(JSON.parse(v), needle, depth + 1)) return true;
+      } catch {
+        /* not JSON — plain string */
+      }
+      continue;
+    }
+    if (v && typeof v === 'object' && payloadHasExactValue(v, needle, depth)) return true;
   }
   return false;
 }

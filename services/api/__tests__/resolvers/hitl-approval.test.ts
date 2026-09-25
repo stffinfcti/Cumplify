@@ -371,6 +371,55 @@ describe('hitl-approval resolver — 410 SFN expired', () => {
       ),
     ).rejects.toThrow(/expired/);
   });
+
+  it('transient SFN send error — resets PENDING under the retry cap and rethrows', async () => {
+    mockDdbSend.mockResolvedValueOnce({ Item: makeDdbItem() }); // GetItem
+    mockDdbSend.mockResolvedValueOnce({}); // conditional RESOLVING claim
+    mockSfnSend.mockRejectedValueOnce(new Error('network flap')); // transient
+    mockDdbSend.mockResolvedValueOnce({
+      Attributes: marshall({ sendAttempts: 1 }),
+    }); // reset UPDATE → UPDATED_NEW
+
+    await expect(
+      handler(
+        makeEvent({
+          input: { hitlItemId: 'hitl-item-123', decision: 'APPROVE' },
+        }),
+      ),
+    ).rejects.toThrow('network flap');
+
+    // Third DDB call = the reset UPDATE: conditioned on RESOLVING and
+    // incrementing sendAttempts — the counter the retry cap reads.
+    const resetCmd = mockDdbSend.mock.calls[2][0] as { input: Record<string, unknown> };
+    expect(resetCmd.input.ConditionExpression).toBe('#status = :resolving');
+    expect(resetCmd.input.UpdateExpression).toContain('sendAttempts');
+    expect(mockResolveHitlItem).not.toHaveBeenCalled();
+  });
+
+  it('transient SFN send error at the retry cap — TIMED_OUT + 410', async () => {
+    mockDdbSend.mockResolvedValueOnce({ Item: makeDdbItem() });
+    mockDdbSend.mockResolvedValueOnce({});
+    mockSfnSend.mockRejectedValueOnce(new Error('network flap'));
+    mockDdbSend.mockResolvedValueOnce({
+      Attributes: marshall({ sendAttempts: 3 }), // MAX_SEND_ATTEMPTS reached
+    });
+
+    await expect(
+      handler(
+        makeEvent({
+          input: { hitlItemId: 'hitl-item-123', decision: 'APPROVE' },
+        }),
+      ),
+    ).rejects.toThrow('HITL_TASK_EXPIRED');
+
+    expect(mockResolveHitlItem).toHaveBeenCalledWith(
+      TENANT_ID,
+      'hitl-item-123',
+      'TIMED_OUT',
+      'system',
+      expect.anything(),
+    );
+  });
 });
 
 describe('hitl-approval resolver — justification passthrough', () => {

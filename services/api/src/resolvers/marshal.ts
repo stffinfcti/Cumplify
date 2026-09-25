@@ -86,7 +86,10 @@ export function sqlTimestampToIso(value: string): string {
  */
 function unwrapArray(av: Record<string, unknown>): unknown[] {
   if (Array.isArray(av.arrayValues)) {
-    return (av.arrayValues as Record<string, unknown>[]).map(unwrapArray);
+    // arrayValues elements are Field wrappers ({stringValue}, or a nested
+    // {arrayValue} for arrays-of-arrays) — unwrap each as a field; a nested
+    // arrayValue would otherwise collapse to [].
+    return (av.arrayValues as Record<string, unknown>[]).map((el) => unwrapField(el));
   }
   return (av.stringValues ??
     av.longValues ??
@@ -117,6 +120,36 @@ export interface DataApiResult {
   numberOfRecordsUpdated?: number;
 }
 
+interface ColumnDescriptor {
+  camelKey: string;
+  enumMap?: Record<string, string>;
+}
+
+/** Per-column marshal metadata — computed once per result, not per row×col. */
+function columnDescriptors(columns: Array<{ name?: string; label?: string }>): ColumnDescriptor[] {
+  return columns.map((c, i) => {
+    const colName = c.name ?? c.label ?? `col${i}`;
+    return { camelKey: snakeToCamel(colName), enumMap: REVERSE_ENUMS[colName] };
+  });
+}
+
+function marshalRowWithDescriptors(
+  row: Array<Record<string, unknown>>,
+  descriptors: ColumnDescriptor[],
+): Record<string, unknown> {
+  const obj: Record<string, unknown> = {};
+  for (let i = 0; i < descriptors.length; i++) {
+    let value = unwrapField(row[i]);
+    const { camelKey, enumMap } = descriptors[i];
+    // Reverse-map enum columns: DB lowercase → GraphQL UPPERCASE
+    if (typeof value === 'string' && enumMap?.[value]) {
+      value = enumMap[value];
+    }
+    obj[camelKey] = value;
+  }
+  return obj;
+}
+
 /**
  * Marshal a Data API response into a plain object (or array of objects)
  * with camelCase keys and GraphQL enum casing.
@@ -125,19 +158,7 @@ export function marshalRow(
   row: Array<Record<string, unknown>>,
   columns: Array<{ name?: string; label?: string }>,
 ): Record<string, unknown> {
-  const obj: Record<string, unknown> = {};
-  for (let i = 0; i < columns.length; i++) {
-    const colName = columns[i].name ?? columns[i].label ?? `col${i}`;
-    let value = unwrapField(row[i]);
-
-    // Reverse-map enum columns: DB lowercase → GraphQL UPPERCASE
-    if (typeof value === 'string' && REVERSE_ENUMS[colName]?.[value]) {
-      value = REVERSE_ENUMS[colName][value];
-    }
-
-    obj[snakeToCamel(colName)] = value;
-  }
-  return obj;
+  return marshalRowWithDescriptors(row, columnDescriptors(columns));
 }
 
 /**
@@ -146,7 +167,8 @@ export function marshalRow(
  */
 export function marshalResult(result: DataApiResult): Record<string, unknown>[] {
   if (!result.records || !result.columnMetadata) return [];
-  return result.records.map((row) => marshalRow(row, result.columnMetadata!));
+  const descriptors = columnDescriptors(result.columnMetadata);
+  return result.records.map((row) => marshalRowWithDescriptors(row, descriptors));
 }
 
 /**
@@ -175,7 +197,12 @@ export function marshalMany(result: DataApiResult): Record<string, unknown>[] {
  * double-encoded while array-returning clauseRefs arrived correctly).
  */
 export function jsonOut(value: unknown): unknown {
-  return typeof value === 'string' ? JSON.parse(value) : value;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error('INVALID_PAYLOAD: unparsable jsonb value at the marshal boundary');
+  }
 }
 
 // ─── AWSJSON boundary validation (M-effort, item 8) ──────────────────────────
@@ -203,7 +230,14 @@ export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
  * live 2026-07-22). Errors are INVALID_PAYLOAD, mirroring OrgProfileSchema.
  */
 export function parseAwsJson<T>(schema: z.ZodType<T>, raw: unknown, field: string): T {
-  const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  let payload = raw;
+  if (typeof raw === 'string') {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      throw new Error(`INVALID_PAYLOAD: ${field} is not valid JSON`);
+    }
+  }
   const result = schema.safeParse(payload);
   if (!result.success) {
     throw new Error(

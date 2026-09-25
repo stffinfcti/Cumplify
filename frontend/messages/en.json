@@ -1094,6 +1094,11 @@
     "recordNotFound": "Record not found",
     "versionNotFound": "Document version not found",
     "sealFailed": "Sealing the document failed — try again",
+    "taskExpired": "This approval task expired — refresh the list",
+    "justificationRequired": "A justification is required",
+    "invalidInput": "The submitted data is invalid",
+    "notFound": "The requested item was not found",
+    "unavailable": "This feature is not configured yet",
     "generic": "Something went wrong — please try again"
   }
 }

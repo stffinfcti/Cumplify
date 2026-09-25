@@ -12,6 +12,7 @@
  */
 
 import { Logger } from '@aws-lambda-powertools/logger';
+import { assertTenantIdSafe } from '../../api/src/resolvers/shared.js';
 import { resolveHitlItem } from './hitl.js';
 
 const logger = new Logger({ serviceName: 'expire-hitl-item' });
@@ -24,6 +25,7 @@ export interface ExpireHitlItemInput {
 export async function handler(event: ExpireHitlItemInput): Promise<{ resolved: true }> {
   const { tenantId, hitlItemId } = event;
   logger.appendKeys({ tenantId, hitlItemId });
+  assertTenantIdSafe(tenantId);
 
   await resolveHitlItem(tenantId, hitlItemId, 'TIMED_OUT', 'sfn-timeout');
   return { resolved: true };

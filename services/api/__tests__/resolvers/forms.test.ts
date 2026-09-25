@@ -153,8 +153,8 @@ describe('listFormTemplates', () => {
     columnMetadata: [{ name: 'id' }, { name: 'key' }, { name: 'standards' }],
   };
   const profileRow = (standards: string[]) => ({
-    records: [[{ stringValue: JSON.stringify({ standardsInScope: standards }) }]],
-    columnMetadata: [{ name: 'payload' }],
+    records: [[{ longValue: 2 }, { stringValue: JSON.stringify({ standardsInScope: standards }) }]],
+    columnMetadata: [{ name: 'current_version' }, { name: 'payload' }],
   });
 
   it('TPL-3: a 9001-only tenant sees zero 14001/45001-only registers', async () => {
@@ -2640,6 +2640,11 @@ describe('approveFormRecord — SoD enforcement (BC-4)', () => {
         { name: 'clause_refs' },
       ],
     });
+    // Phase-3 status re-check (FOR UPDATE, record still complete)
+    mockExecute.mockResolvedValueOnce({
+      records: [[{ stringValue: 'complete' }]],
+      columnMetadata: [{ name: 'status' }],
+    });
     // UPDATE status = approved
     mockExecute.mockResolvedValueOnce({ records: [], columnMetadata: [] });
     // getFormRecordById re-read
@@ -2648,7 +2653,10 @@ describe('approveFormRecord — SoD enforcement (BC-4)', () => {
     await handler(makeEvent('approveFormRecord', { input: { recordId: 'rec-1' } })).catch(() => {});
 
     // Update SQL stamps approved
-    const [approveSql] = mockExecute.mock.calls[2];
+    const approveCall = mockExecute.mock.calls.find((c) =>
+      (c[0] as string).includes("status = 'approved'"),
+    )!;
+    const [approveSql] = approveCall;
     expect(approveSql).toContain("status = 'approved'");
     expect(approveSql).toContain('approved_by');
     expect(approveSql).toContain('approved_at');

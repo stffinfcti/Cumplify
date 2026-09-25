@@ -26,6 +26,8 @@ import {
   beginTenantTransaction,
   marshalMany,
   publishAuditEvent,
+  versionContentKey,
+  rollbackQuietly,
 } from '../../api/src/resolvers/shared.js';
 import { publishGenerationEvent } from './appsync-publish.js';
 import { sha256Hex } from './facts.js';
@@ -62,10 +64,6 @@ const MANUAL_TITLES: Record<string, string> = {
   ISO14001: 'Environmental Management System Manual',
   ISO45001: 'OH&S Management System Manual',
 };
-
-function docContentKey(tenantId: string, documentId: string, versionNo: number): string {
-  return `tenants/${tenantId}/documents/${documentId}/v${versionNo}.json`;
-}
 
 type Txn = Awaited<ReturnType<typeof beginTenantTransaction>>;
 
@@ -148,7 +146,7 @@ async function writeVersion(
   content: Record<string, unknown>,
 ): Promise<{ contentRef: string; contentSha: string }> {
   const body = JSON.stringify(content);
-  const contentRef = docContentKey(tenantId, documentId, versionNo);
+  const contentRef = versionContentKey(tenantId, documentId, versionNo);
   const contentSha = sha256Hex(body);
   await s3.send(
     new PutObjectCommand({
@@ -181,7 +179,6 @@ export async function handler(event: FinalizeInput): Promise<FinalizeOutput> {
   const { runId, tenantId } = event;
   logger.appendKeys({ runId, tenantId });
 
-  const txn = await beginTenantTransaction(tenantId);
   let status: string;
   let manualDocumentId: string | null = null;
   let documentsCreated = 0;
@@ -192,9 +189,23 @@ export async function handler(event: FinalizeInput): Promise<FinalizeOutput> {
     failed: 0,
     pending: 0,
   };
+
+  // ── Phase 1 (read txn): run + sections + registry. The ~40 section
+  // content GetObjects used to serialize INSIDE this txn — a Data-API
+  // session slot held across seconds of S3 latency. They prefetch in
+  // parallel in phase 2 instead; document writes move to phase 3, which
+  // re-checks the idempotency guard under the run row's FOR UPDATE lock.
+  interface SectionSkeleton extends Omit<SectionState, 'content'> {
+    contentS3Key: string | null;
+  }
+  let standards: string[];
+  let owner: string;
+  let profile: Record<string, unknown>;
+  let skeletons: SectionSkeleton[];
+  const readTxn = await beginTenantTransaction(tenantId);
   try {
     // Load run — idempotency guard first
-    const runResult = await txn.execute(
+    const runResult = await readTxn.execute(
       `SELECT gr.standards, gr.manual_document_id, gr.requested_by, opv.payload
        FROM qms.generation_runs gr
        JOIN qms.org_profiles op ON op.tenant_id = gr.tenant_id
@@ -204,19 +215,18 @@ export async function handler(event: FinalizeInput): Promise<FinalizeOutput> {
     );
     if (!runResult.records?.length) throw new Error(`RUN_NOT_FOUND: ${runId}`);
     const rec = runResult.records[0];
-    const standards =
+    standards =
       (rec[0] as { arrayValue?: { stringValues?: string[] } }).arrayValue?.stringValues ?? [];
     const existingManualId =
       (rec[1] as { stringValue?: string; isNull?: boolean }).stringValue ?? null;
-    const owner = (rec[2] as { stringValue?: string }).stringValue ?? 'docgen-state-machine';
-    const profile = JSON.parse((rec[3] as { stringValue?: string }).stringValue ?? '{}') as Record<
+    owner = (rec[2] as { stringValue?: string }).stringValue ?? 'docgen-state-machine';
+    profile = JSON.parse((rec[3] as { stringValue?: string }).stringValue ?? '{}') as Record<
       string,
       unknown
     >;
-    const locale = (profile.documentLocale as string) ?? 'en';
 
     // Section states + registry join
-    const sectionsResult = await txn.execute(
+    const sectionsResult = await readTxn.execute(
       `SELECT id, harmonization_key, status, content_s3_key, clause_registry_ids
        FROM qms.generation_sections WHERE run_id = :runId::uuid ORDER BY harmonization_key`,
       [{ name: 'runId', value: { stringValue: runId } }],
@@ -235,20 +245,22 @@ export async function handler(event: FinalizeInput): Promise<FinalizeOutput> {
 
     if (existingManualId) {
       // Already finalized — GEN-5 idempotent re-entry
-      await txn.commit();
+      await readTxn.commit();
       logger.info('Run already finalized — skipping document writes', { existingManualId });
       return { runId, status, summary, manualDocumentId: existingManualId, documentsCreated: 0 };
     }
 
-    const registryResult = await txn.execute(
+    const registryResult = await readTxn.execute(
       `SELECT id, standard, clause_no, clause_title, annex_sl_mode, doc_type, sort_order
        FROM qms.clause_registry`,
     );
     const registryById = new Map(marshalMany(registryResult).map((r) => [r.id as string, r]));
 
-    // Build SectionState[] — content JSONs from S3
-    const sections: SectionState[] = [];
-    for (const row of sectionRows) {
+    // Section skeletons — clause metadata resolved now, S3 content deferred
+    // to the parallel prefetch (phase 2). `sortOrder` is the lowest clause
+    // registry sort_order (9999 when the section maps no clauses — Math.min
+    // over an empty list returns Infinity).
+    skeletons = sectionRows.map((row) => {
       const clauseIds = (row.clauseRegistryIds as string[]) ?? [];
       const clauses = clauseIds
         .map((id) => registryById.get(id))
@@ -262,22 +274,66 @@ export async function handler(event: FinalizeInput): Promise<FinalizeOutput> {
           // normalize back to DB casing (same class as the status fix above)
           docType: (c.docType as string).toLowerCase(),
         }));
-      const sortOrder = Math.min(
-        ...clauseIds.map((id) => (registryById.get(id)?.sortOrder as number) ?? 9999),
-      );
-      let content: Record<string, unknown> | null = null;
-      const key = row.contentS3Key as string | null;
-      if (key) {
-        const obj = await s3.send(new GetObjectCommand({ Bucket: GENERAL_BUCKET, Key: key }));
-        content = JSON.parse(await obj.Body!.transformToString()) as Record<string, unknown>;
-      }
-      sections.push({
+      const sortOrder = clauseIds.length
+        ? Math.min(...clauseIds.map((id) => (registryById.get(id)?.sortOrder as number) ?? 9999))
+        : 9999;
+      return {
         sectionKey: row.harmonizationKey as string,
         kind: row.status as SectionState['kind'],
         clauses,
-        content,
         sortOrder,
+        contentS3Key: (row.contentS3Key as string | null) ?? null,
+      };
+    });
+    await readTxn.commit();
+  } catch (err) {
+    await rollbackQuietly(readTxn);
+    throw err;
+  }
+
+  // ── Phase 2 (no txn): every section content JSON in parallel.
+  const contents = await Promise.all(
+    skeletons.map(async (sk) => {
+      if (!sk.contentS3Key) return null;
+      const obj = await s3.send(
+        new GetObjectCommand({ Bucket: GENERAL_BUCKET, Key: sk.contentS3Key }),
+      );
+      return JSON.parse(await obj.Body!.transformToString()) as Record<string, unknown>;
+    }),
+  );
+  const sections: SectionState[] = skeletons.map((sk, i) => ({
+    sectionKey: sk.sectionKey,
+    kind: sk.kind,
+    clauses: sk.clauses,
+    sortOrder: sk.sortOrder,
+    content: contents[i],
+  }));
+  const locale = (profile.documentLocale as string) ?? 'en';
+
+  // ── Phase 3 (write txn): re-check idempotency under the run row's lock,
+  // then every document write. A concurrent finalize that committed between
+  // phase 1 and this lock wins — we return its manual id.
+  const txn = await beginTenantTransaction(tenantId);
+  try {
+    const recheck = await txn.execute(
+      `SELECT manual_document_id FROM qms.generation_runs WHERE id = :runId::uuid FOR UPDATE`,
+      [{ name: 'runId', value: { stringValue: runId } }],
+    );
+    const racedManualId =
+      ((recheck.records?.[0]?.[0] as { stringValue?: string; isNull?: boolean }) ?? {})
+        .stringValue ?? null;
+    if (racedManualId) {
+      await txn.commit();
+      logger.info('Run finalized by a concurrent invocation — returning its manual id', {
+        racedManualId,
       });
+      return {
+        runId,
+        status,
+        summary,
+        manualDocumentId: racedManualId,
+        documentsCreated: 0,
+      };
     }
 
     const manualStandard = documentStandard(standards);
@@ -441,11 +497,7 @@ export async function handler(event: FinalizeInput): Promise<FinalizeOutput> {
     );
     await txn.commit();
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 

@@ -114,9 +114,9 @@ describe('saveDocumentSectionEdit — happy path', () => {
         columnMetadata: [{ name: 'document_id' }, { name: 'status' }, { name: 'content_ref' }],
       })
       .mockResolvedValueOnce({
-        records: [[{ stringValue: 'doc-1' }]],
-        columnMetadata: [{ name: 'id' }],
-      }) // FOR UPDATE document lock
+        records: [[{ stringValue: 'draft' }]],
+        columnMetadata: [{ name: 'status' }],
+      }) // FOR UPDATE document lock — returns the live status
       .mockResolvedValueOnce({
         records: [[{ longValue: 2 }]],
         columnMetadata: [{ name: 'next' }],
@@ -186,7 +186,8 @@ describe('saveDocumentSectionEdit — happy path', () => {
     const [statusSql] = mockExecute.mock.calls[4];
     expect(statusSql).toContain("SET status = 'draft'");
 
-    expect(mockCommit).toHaveBeenCalledOnce();
+    // Two commits: phase-1 meta txn + phase-3 write txn.
+    expect(mockCommit).toHaveBeenCalledTimes(2);
     expect(mockPublishAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         detailType: 'Document.SectionEdited',
@@ -204,9 +205,9 @@ describe('saveDocumentSectionEdit — happy path', () => {
         columnMetadata: [{ name: 'document_id' }, { name: 'status' }, { name: 'content_ref' }],
       })
       .mockResolvedValueOnce({
-        records: [[{ stringValue: 'doc-1' }]],
-        columnMetadata: [{ name: 'id' }],
-      }) // FOR UPDATE document lock
+        records: [[{ stringValue: 'draft' }]],
+        columnMetadata: [{ name: 'status' }],
+      }) // FOR UPDATE document lock — returns the live status
       .mockResolvedValueOnce({
         records: [[{ longValue: 2 }]],
         columnMetadata: [{ name: 'next' }],
@@ -323,6 +324,9 @@ describe('saveDocumentSectionEdit — not-found paths', () => {
         }),
       ),
     ).rejects.toThrow('SECTION_NOT_FOUND');
-    expect(mockRollback).toHaveBeenCalledOnce();
+    // Thrown in phase 2 (S3 merge), AFTER the meta txn committed and before
+    // the write txn opened — nothing is left to roll back.
+    expect(mockRollback).not.toHaveBeenCalled();
+    expect(mockCommit).toHaveBeenCalledOnce(); // phase-1 meta txn
   });
 });

@@ -3,7 +3,7 @@
  * single-record fetch). Extracted from forms.ts.
  */
 
-import { beginTenantTransaction } from '../shared.js';
+import { beginTenantTransaction, getCurrentOrgProfile, rollbackQuietly } from '../shared.js';
 import type { SqlParameter } from '@aws-sdk/client-rds-data';
 import {
   marshalTemplates,
@@ -39,20 +39,12 @@ export async function listFormTemplates(tenantId: string): Promise<unknown[]> {
       ORDER BY t.sort_order
     `);
     // Tenant scope (RLS-confined read; profile may not exist yet)
-    const profileResult = await txn.execute(`
-      SELECT opv.payload
-      FROM qms.org_profiles op
-      JOIN qms.org_profile_versions opv ON opv.profile_id = op.id AND opv.version_no = op.current_version
-      LIMIT 1
-    `);
+    const profile = await getCurrentOrgProfile(txn);
     await txn.commit();
 
     const templates = marshalTemplates(result);
-    const payloadRaw = profileResult.records?.[0]?.[0] as { stringValue?: string } | undefined;
-    if (!payloadRaw?.stringValue) return templates; // no profile → all (design §5)
-    const scope =
-      (JSON.parse(payloadRaw.stringValue) as { standardsInScope?: string[] }).standardsInScope ??
-      [];
+    if (!profile) return templates; // no profile → all (design §5)
+    const scope = (profile.payload as { standardsInScope?: string[] }).standardsInScope ?? [];
     if (scope.length === 0) return templates;
 
     const scopeSet = new Set(scope);
@@ -61,11 +53,7 @@ export async function listFormTemplates(tenantId: string): Promise<unknown[]> {
       return concrete.some((s) => scopeSet.has(s));
     });
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask the original error */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -114,11 +102,7 @@ export async function getFormTemplate(event: AppSyncEvent): Promise<unknown> {
     await txn.commit();
     return marshalTemplateDetail(tplResult, sectionsResult, fieldsResult);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask the original error */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -195,11 +179,7 @@ export async function listFormRecords(event: AppSyncEvent, tenantId: string): Pr
       return rec;
     });
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask the original error */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }

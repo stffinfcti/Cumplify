@@ -1094,6 +1094,11 @@
     "recordNotFound": "Registro não encontrado",
     "versionNotFound": "Versão do documento não encontrada",
     "sealFailed": "Falha ao selar o documento — tente novamente",
+    "taskExpired": "Esta tarefa de aprovação expirou — atualize a lista",
+    "justificationRequired": "É necessária uma justificação",
+    "invalidInput": "Os dados enviados são inválidos",
+    "notFound": "O item solicitado não foi encontrado",
+    "unavailable": "Este recurso ainda não está configurado",
     "generic": "Algo deu errado — tente novamente"
   }
 }

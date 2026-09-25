@@ -19,6 +19,7 @@ import {
   jsonOut,
   type AppSyncEvent,
   LIST_QUERY_LIMIT,
+  rollbackQuietly,
 } from './shared.js';
 import {
   mapEnum,
@@ -126,7 +127,7 @@ async function raiseNonconformity(event: AppSyncEvent, tenantId: string, actor: 
     logger.info('Nonconformity raised', { tenantId });
     return nc;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -178,7 +179,7 @@ async function recordRootCause(event: AppSyncEvent, tenantId: string, actor: str
     });
     return rca;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -221,7 +222,7 @@ async function createCorrectiveAction(event: AppSyncEvent, tenantId: string, act
     logger.info('Corrective action created', { tenantId });
     return ca;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -272,7 +273,7 @@ async function agentProposeCorrectiveAction(event: AppSyncEvent, tenantId: strin
     logger.info('Agent-proposed corrective action created', { tenantId });
     return ca;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -324,7 +325,7 @@ async function agentTriageNC(event: AppSyncEvent, tenantId: string, actor: strin
     logger.info('Agent-triaged NC reclassified', { tenantId, ncId: input.ncId });
     return nc;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -360,7 +361,7 @@ async function runCapaAnalysis(event: AppSyncEvent, tenantId: string, actor: str
     cas = marshalMany(caResult);
     await txn.commit();
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 
@@ -455,11 +456,7 @@ async function runRootCauseAnalysis(event: AppSyncEvent, tenantId: string, actor
     await txn.commit();
     nc = marshalOne(result);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
   if (!nc) throw new Error('NC_NOT_FOUND');
@@ -508,11 +505,7 @@ async function listRootCauseAnalyses(event: AppSyncEvent, tenantId: string) {
     // object (2026-07-22 wire rule: return objects, never re-stringified).
     return marshalMany(result).map((r) => ({ ...r, findings: jsonOut(r.findings) }));
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -526,13 +519,17 @@ async function closeCapa(event: AppSyncEvent, tenantId: string, actor: string) {
     // closureNotes has no column — it is preserved in the audit-trail payload.
     // M-effort: status predicate rides the UPDATE — a concurrent close can no
     // longer double-close (and double-emit CAPA.Closed for) the same row.
+    const cur = await txn.execute(`SELECT status FROM m2.corrective_actions WHERE id = :id::uuid`, [
+      { name: 'id', value: { stringValue: input.id as string } },
+    ]);
+    if (!cur.records?.length) throw new Error('CAPA_NOT_FOUND');
     const result = await txn.execute(
       `UPDATE m2.corrective_actions SET status = 'closed', updated_at = NOW()
        WHERE id = :id::uuid AND status <> 'closed' RETURNING *`,
       [{ name: 'id', value: { stringValue: input.id as string } }],
     );
     if (!result.records || result.records.length === 0) {
-      throw new Error('CAPA_NOT_FOUND_OR_ALREADY_CLOSED');
+      throw new Error('CAPA_ALREADY_CLOSED');
     }
     await txn.commit();
     await publishAuditEvent({
@@ -551,7 +548,7 @@ async function closeCapa(event: AppSyncEvent, tenantId: string, actor: string) {
     });
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -605,7 +602,7 @@ async function verifyEffectiveness(event: AppSyncEvent, tenantId: string, actor:
     });
     return check;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -645,7 +642,7 @@ async function disposeNonconformingOutput(event: AppSyncEvent, tenantId: string,
     });
     return output;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -659,7 +656,7 @@ async function getNonconformity(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -695,7 +692,7 @@ async function listOpenCAPAs(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -726,7 +723,7 @@ async function listNonconformities(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -741,7 +738,7 @@ async function listCorrectiveActions(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }

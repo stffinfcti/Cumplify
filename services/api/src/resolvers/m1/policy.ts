@@ -3,7 +3,12 @@
  *.
  */
 
-import { beginTenantTransaction, publishAuditEvent, marshalOne } from '../shared.js';
+import {
+  beginTenantTransaction,
+  publishAuditEvent,
+  marshalOne,
+  rollbackQuietly,
+} from '../shared.js';
 import type { AppSyncEvent } from './common.js';
 
 export async function updatePolicy(event: AppSyncEvent, tenantId: string, actor: string) {
@@ -32,7 +37,7 @@ export async function updatePolicy(event: AppSyncEvent, tenantId: string, actor:
     });
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -65,7 +70,7 @@ export async function updateImsScope(event: AppSyncEvent, tenantId: string, acto
     });
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }

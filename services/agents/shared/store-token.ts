@@ -19,6 +19,7 @@
 import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { Logger } from '@aws-lambda-powertools/logger';
+import { assertTenantIdSafe } from '../../api/src/resolvers/shared.js';
 
 const logger = new Logger({ serviceName: 'store-token' });
 const ddb = new DynamoDBClient({});
@@ -74,6 +75,7 @@ export async function handler(event: StoreTokenInput): Promise<{ stored: true }>
     guardrailEvidence,
     requestedBy,
   } = event.input;
+  assertTenantIdSafe(tenantId);
 
   logger.info('Creating/updating HITL item with task token', {
     tenantId,

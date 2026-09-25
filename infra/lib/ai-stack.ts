@@ -1380,10 +1380,12 @@ export class AiStack extends cdk.Stack {
       resultPath: '$.markResult',
     });
     // MarkRunFailed is a catch target — without a terminal Fail it would
-    // swallow the error and report the execution SUCCEEDED.
+    // swallow the error and report the execution SUCCEEDED. errorPath/
+    // causePath re-raise the stage's own {Error, Cause} — a static literal
+    // would hide which stage and why in the execution's failure record.
     const runFailed = new sfn.Fail(this, 'RunFailed', {
-      error: 'StageError',
-      causePath: sfn.JsonPath.stringAt('$.stageError'),
+      errorPath: sfn.JsonPath.stringAt('$.stageError.Error'),
+      causePath: sfn.JsonPath.stringAt('$.stageError.Cause'),
     });
     const markRunFailedThenFail = markRunFailed.next(runFailed);
     seedTask.addCatch(markRunFailedThenFail, {

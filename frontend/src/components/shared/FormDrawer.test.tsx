@@ -177,7 +177,24 @@ describe('FormDrawer', () => {
     fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-08-15' } });
     fireEvent.click(screen.getByTestId('submit-btn'));
 
-    await waitFor(() => expect(screen.getByText('Mutation failed')).toBeInTheDocument());
+    // err.message prose is never rendered — unmapped errors resolve to the
+    // errors.generic catalog string.
+    await waitFor(() => expect(screen.getByText('generic')).toBeInTheDocument());
+    expect(screen.queryByText('Mutation failed')).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('FE-3: a resolver error code maps to its catalog string, not the prose', async () => {
+    onSubmit.mockRejectedValue(new Error('RECORD_NOT_FOUND: English internals here'));
+    render(
+      <FormDrawer open={true} onClose={onClose} title="Test" fields={fields} onSubmit={onSubmit} />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-08-15' } });
+    fireEvent.click(screen.getByTestId('submit-btn'));
+
+    await waitFor(() => expect(screen.getByText('recordNotFound')).toBeInTheDocument());
+    expect(screen.queryByText(/English internals/)).not.toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
 });

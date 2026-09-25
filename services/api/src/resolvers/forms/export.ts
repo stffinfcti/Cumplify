@@ -3,7 +3,7 @@
  * forms.ts.
  */
 
-import { beginTenantTransaction, unwrapField } from '../shared.js';
+import { beginTenantTransaction, unwrapField, rollbackQuietly } from '../shared.js';
 import { GetObjectCommand, PutObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
 import { InvokeCommand } from '@aws-sdk/client-lambda';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -49,11 +49,7 @@ export async function exportFormRecordPdf(event: AppSyncEvent, tenantId: string)
     built = await buildRecordContent(txn, recordId, locale);
     await txn.commit();
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask the original error */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 
@@ -68,47 +64,83 @@ export async function exportFormRecordPdf(event: AppSyncEvent, tenantId: string)
 }
 
 /**
- * Seal an approved record (REC-7/ACC-7). Runs INSIDE approveFormRecord's
- * transaction AFTER the status flip (the content build re-reads the row, so
- * the sealed PDF shows APPROVED + approver). Mirrors the m1 STO-5 discipline:
- * per-object ObjectLockRetainUntilDate from the tenant's m4.retention_policies
- * row (default seeded if absent), m4.records pointer row carrying retain_until
- * == object_lock_until, forms.records.m4_record_id stamped in the SAME txn —
- * a failed seal rolls back the approval (no approved-but-unsealed records).
+ * Seal an approved record (REC-7/ACC-7) — split across approveFormRecord's
+ * three phases so the row lock never spans content-plane work (mirrors the
+ * m1 STO-5 discipline applied at publishControlledDocument):
+ *   phase 1 (approve txn1): upsertRetentionPolicy — retention_years resolve
+ *     under the lock, before any S3/Lambda work.
+ *   phase 2 (no txn): renderAndSealRecordPdf — build the content JSON with
+ *     the approval overlay (the row reads COMPLETE until phase 3, so the
+ *     approver/stamp are injected), render, vault-copy under ObjectLock.
+ *   phase 3 (approve txn2): commitSealToM4 — m4.records pointer carrying
+ *     retain_until == object_lock_until + forms.records.m4_record_id stamp,
+ *     in the SAME txn as the flip.
+ * A phase-2 failure never flips the record (no approved-but-unsealed); a
+ * phase-3 failure leaves an orphan sealed object in the vault (harmless —
+ * WORM never sweeps, and the sealedKey is content-addressed per render).
  */
-export async function sealApprovedRecord(
+export async function upsertRetentionPolicy(
   txn: TenantTransaction,
   tenantId: string,
-  recordId: string,
   actor: string,
-  templateStandards: string[],
-): Promise<Record<string, unknown>> {
+): Promise<number> {
   // Tenant retention policy (RLS-scoped); seed the default row if absent.
   const polRes = await txn.execute(
     `SELECT retention_years FROM m4.retention_policies
      WHERE record_type = 'form_record' LIMIT 1`,
   );
-  let years = DEFAULT_RETENTION_YEARS;
   const polRows = marshalRecordRows(polRes);
-  if (polRows.length > 0) {
-    years = polRows[0].retentionYears as number;
-  } else {
-    await txn.execute(
-      `INSERT INTO m4.retention_policies (tenant_id, record_type, retention_years, disposition_rule, created_by)
-       VALUES (:tenantId, 'form_record', :years, 'review_before_disposal', :actor)`,
-      [
-        { name: 'tenantId', value: { stringValue: tenantId } },
-        { name: 'years', value: { longValue: DEFAULT_RETENTION_YEARS } },
-        { name: 'actor', value: { stringValue: actor } },
-      ],
-    );
+  if (polRows.length > 0) return polRows[0].retentionYears as number;
+
+  // Two approvers racing the seed land on the (tenant_id, record_type)
+  // UNIQUE index (migration 020) — DO NOTHING, then read whoever won.
+  await txn.execute(
+    `INSERT INTO m4.retention_policies (tenant_id, record_type, retention_years, disposition_rule, created_by)
+     VALUES (:tenantId, 'form_record', :years, 'review_before_disposal', :actor)
+     ON CONFLICT (tenant_id, record_type) DO NOTHING`,
+    [
+      { name: 'tenantId', value: { stringValue: tenantId } },
+      { name: 'years', value: { longValue: DEFAULT_RETENTION_YEARS } },
+      { name: 'actor', value: { stringValue: actor } },
+    ],
+  );
+  const reread = await txn.execute(
+    `SELECT retention_years FROM m4.retention_policies
+     WHERE record_type = 'form_record' LIMIT 1`,
+  );
+  const rows = marshalRecordRows(reread);
+  return (rows[0]?.retentionYears as number | undefined) ?? DEFAULT_RETENTION_YEARS;
+}
+
+export interface SealedArtifact {
+  sealedKey: string;
+  sha256: string;
+}
+
+/** Phase 2 — build + render + vault copy, outside any write transaction. */
+export async function renderAndSealRecordPdf(
+  tenantId: string,
+  recordId: string,
+  actor: string,
+  approvedAt: Date,
+  retainUntil: Date,
+): Promise<SealedArtifact> {
+  const locale = await getTenantDocumentLocale(tenantId);
+  const txn = await beginTenantTransaction(tenantId);
+  let built: BuiltRecordContent;
+  try {
+    built = await buildRecordContent(txn, recordId, locale, {
+      status: 'APPROVED',
+      approvedBy: actor,
+      approvedAt: approvedAt.toISOString(),
+    });
+    await txn.commit();
+  } catch (err) {
+    await rollbackQuietly(txn);
+    throw err;
   }
 
-  const locale = await getTenantDocumentLocale(tenantId);
-  const built = await buildRecordContent(txn, recordId, locale);
   const rendered = await renderRecordPdf(tenantId, recordId, built);
-
-  const retainUntil = new Date(Date.now() + years * 365.25 * 24 * 3600 * 1000);
   const sealedKey = `tenants/${tenantId}/sealed/records/${recordId}-${rendered.sha256.slice(0, 12)}.pdf`;
   await s3.send(
     new CopyObjectCommand({
@@ -119,7 +151,21 @@ export async function sealApprovedRecord(
       ObjectLockRetainUntilDate: retainUntil,
     }),
   );
+  return { sealedKey, sha256: rendered.sha256 };
+}
 
+/** Phase 3 — m4.records pointer + forms.records.m4_record_id stamp, inside
+ * the same transaction as the approval flip. Returns the m4 row id. */
+export async function commitSealToM4(
+  txn: TenantTransaction,
+  tenantId: string,
+  recordId: string,
+  actor: string,
+  templateStandards: string[],
+  years: number,
+  artifact: SealedArtifact,
+  retainUntil: Date,
+): Promise<string> {
   // BC-6: multi-standard templates seal as 'IMS' (m4.records CHECK widened in 011).
   const effective = effectiveStandard(templateStandards);
   const m4Res = await txn.execute(
@@ -134,7 +180,10 @@ export async function sealApprovedRecord(
       { name: 'standard', value: { stringValue: effective } },
       { name: 'retClass', value: { stringValue: `${years}y` } },
       { name: 'retainUntil', value: { stringValue: retainUntil.toISOString() } },
-      { name: 'objectRef', value: { stringValue: `s3://${EVIDENCE_BUCKET}/${sealedKey}` } },
+      {
+        name: 'objectRef',
+        value: { stringValue: `s3://${EVIDENCE_BUCKET}/${artifact.sealedKey}` },
+      },
       { name: 'actor', value: { stringValue: actor } },
     ],
   );
@@ -150,15 +199,7 @@ export async function sealApprovedRecord(
       { name: 'id', value: { stringValue: recordId } },
     ],
   );
-
-  return {
-    sealed: true,
-    sealedKey,
-    m4RecordId,
-    retentionYears: years,
-    lockMode: EVIDENCE_LOCK_MODE,
-    retainUntil: retainUntil.toISOString(),
-  };
+  return m4RecordId;
 }
 
 interface BuiltRecordContent {
@@ -207,23 +248,40 @@ async function renderRecordPdf(
     logger.error('record PDF render failed', { raw: new TextDecoder().decode(invoke.Payload) });
     throw new Error('RENDER_FAILED');
   }
-  const { results } = JSON.parse(new TextDecoder().decode(invoke.Payload)) as {
-    results: Array<{ pdfKey: string; sha256: string }>;
-  };
+  let results: Array<{ pdfKey: string; sha256: string }> | undefined;
+  try {
+    results = (
+      JSON.parse(new TextDecoder().decode(invoke.Payload)) as {
+        results?: Array<{ pdfKey: string; sha256: string }>;
+      }
+    ).results;
+  } catch {
+    throw new Error('RENDER_FAILED');
+  }
   if (!results?.[0]?.pdfKey) throw new Error('RENDER_FAILED');
+  // The renderer must stay inside the tenant's content-plane prefix — a key
+  // outside `tenants/<tenantId>/` would presign or vault-copy a foreign object.
+  if (!results[0].pdfKey.startsWith(`tenants/${tenantId}/`)) {
+    logger.error('renderer returned a pdfKey outside the tenant prefix', {
+      pdfKey: results[0].pdfKey,
+    });
+    throw new Error('RENDER_FAILED');
+  }
   return { pdfKey: results[0].pdfKey, sha256: results[0].sha256 };
 }
 
 /**
  * Build the form_record content JSON (pdf-export template contract). All
  * labels are resolved HERE from the shared i18n catalogs — the PDF service
- * renders strings it is given. Reads run inside the caller's transaction, so
- * a seal after the approval UPDATE sees the approved row.
+ * renders strings it is given. `overlay` stamps the record fields a caller
+ * knows but the row doesn't yet reflect (the approve seal builds content
+ * before the status flip commits — the PDF must still read APPROVED).
  */
 async function buildRecordContent(
   txn: TenantTransaction,
   recordId: string,
   locale: string,
+  overlay?: { status: string; approvedBy: string; approvedAt: string },
 ): Promise<BuiltRecordContent> {
   const recResult = await txn.execute(
     `
@@ -283,20 +341,27 @@ async function buildRecordContent(
   );
   const values = marshalValues(valuesResult);
 
-  // Clause relations render as "ISO9001 8.7 — Title", not a bare UUID.
-  // Other relation targets render the UUID (display resolution per target
-  // table is a named carry-forward, not silently pretty-printed).
+  // Clause relations render as "ISO9001 8.7 — Title", not a bare UUID — one
+  // batched lookup, not a per-field round trip. Other relation targets render
+  // the UUID (display resolution per target table is a named carry-forward,
+  // not silently pretty-printed).
   const clauseDisplay = new Map<string, string>();
-  for (const f of fields) {
-    if (f.relationTarget !== 'clause') continue;
-    const v = values[f.fieldKey as string];
-    if (typeof v !== 'string' || clauseDisplay.has(v)) continue;
+  const clauseIds = [
+    ...new Set(
+      fields
+        .filter((f) => f.relationTarget === 'clause')
+        .map((f) => values[f.fieldKey as string])
+        .filter((v): v is string => typeof v === 'string'),
+    ),
+  ];
+  if (clauseIds.length > 0) {
     const clauseRes = await txn.execute(
-      `SELECT standard, clause_no, clause_title FROM qms.clause_registry WHERE id = :id::uuid`,
-      [{ name: 'id', value: { stringValue: v } }],
+      `SELECT id, standard, clause_no, clause_title FROM qms.clause_registry WHERE id = ANY(:ids::uuid[])`,
+      [{ name: 'ids', value: { stringValue: `{${clauseIds.join(',')}}` } }],
     );
-    const row = marshalRecordRows(clauseRes)[0];
-    if (row) clauseDisplay.set(v, `${row.standard} ${row.clauseNo} — ${row.clauseTitle}`);
+    for (const row of marshalRecordRows(clauseRes)) {
+      clauseDisplay.set(row.id as string, `${row.standard} ${row.clauseNo} — ${row.clauseTitle}`);
+    }
   }
 
   const recordSections = sections.map((sec) => ({
@@ -339,12 +404,12 @@ async function buildRecordContent(
     },
     record: {
       id: rec.id,
-      status: rec.status,
+      status: overlay?.status ?? rec.status,
       openedBy: rec.openedBy,
       completedBy: rec.completedBy ?? null,
       completedAt: rec.completedAt ?? null,
-      approvedBy: rec.approvedBy ?? null,
-      approvedAt: rec.approvedAt ?? null,
+      approvedBy: overlay?.approvedBy ?? rec.approvedBy ?? null,
+      approvedAt: overlay?.approvedAt ?? rec.approvedAt ?? null,
       m2NcId: rec.m2NcId ?? null,
       createdAt: rec.createdAt,
       updatedAt: rec.updatedAt,

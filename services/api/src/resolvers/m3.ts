@@ -18,6 +18,8 @@ import {
   marshalMany,
   LIST_QUERY_LIMIT,
   type AppSyncEvent,
+  type SqlParameter,
+  rollbackQuietly,
 } from './shared.js';
 import { mapEnum, FINDING_TYPE_MAP } from './enum-mappings.js';
 
@@ -118,7 +120,7 @@ async function createAuditProgramme(event: AppSyncEvent, tenantId: string, actor
     logger.info('Audit programme created', { tenantId });
     return programme;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -162,7 +164,7 @@ async function scheduleAudit(event: AppSyncEvent, tenantId: string, actor: strin
     logger.info('Audit scheduled', { tenantId });
     return audit;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -221,7 +223,7 @@ async function recordFinding(event: AppSyncEvent, tenantId: string, actor: strin
     });
     return finding;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -255,7 +257,7 @@ async function completeAudit(event: AppSyncEvent, tenantId: string, actor: strin
     });
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -270,7 +272,7 @@ async function getAudit(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -286,7 +288,7 @@ async function getAuditReadiness(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -325,23 +327,28 @@ async function agentScoreReadiness(event: AppSyncEvent, tenantId: string, actor:
     );
 
     const rows = result.records ?? [];
-    for (const row of rows) {
-      const clauseRef = (row[0] as { stringValue?: string }).stringValue!;
-      const status = (row[1] as { stringValue?: string; isNull?: boolean }).stringValue;
-      const score = status === 'prose' || status === 'na_justified' ? 100.0 : 0.0;
+    if (rows.length) {
+      const params: SqlParameter[] = [
+        { name: 'tenantId', value: { stringValue: tenantId } },
+        { name: 'standard', value: { stringValue: standard } },
+        { name: 'actor', value: { stringValue: actor } },
+      ];
+      const tuples = rows.map((row, i) => {
+        const clauseRef = (row[0] as { stringValue?: string }).stringValue!;
+        const status = (row[1] as { stringValue?: string; isNull?: boolean }).stringValue;
+        const score = status === 'prose' || status === 'na_justified' ? 100.0 : 0.0;
+        params.push(
+          { name: `clauseRef${i}`, value: { stringValue: clauseRef } },
+          { name: `score${i}`, value: { doubleValue: score } },
+        );
+        return `(:tenantId, :standard, :clauseRef${i}, :score${i}, NOW(), :actor)`;
+      });
       await txn.execute(
         `INSERT INTO m3.audit_readiness_scores (tenant_id, standard, clause_ref, score, assessed_at, created_by)
-         VALUES (:tenantId, :standard, :clauseRef, :score, NOW(), :actor)
+         VALUES ${tuples.join(', ')}
          ON CONFLICT (tenant_id, standard, clause_ref)
-         DO UPDATE SET score = EXCLUDED.score, assessed_at = NOW(), updated_at = NOW(), version = m3.audit_readiness_scores.version + 1
-         RETURNING id`,
-        [
-          { name: 'tenantId', value: { stringValue: tenantId } },
-          { name: 'standard', value: { stringValue: standard } },
-          { name: 'clauseRef', value: { stringValue: clauseRef } },
-          { name: 'score', value: { doubleValue: score } },
-          { name: 'actor', value: { stringValue: actor } },
-        ],
+         DO UPDATE SET score = EXCLUDED.score, assessed_at = NOW(), updated_at = NOW(), version = m3.audit_readiness_scores.version + 1`,
+        params,
       );
     }
 
@@ -373,7 +380,7 @@ async function agentScoreReadiness(event: AppSyncEvent, tenantId: string, actor:
     });
     return marshalMany(scoresResult);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -507,11 +514,7 @@ async function generateAuditChecklist(event: AppSyncEvent, tenantId: string, act
     });
     return marshalMany(checklistResult);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -528,11 +531,7 @@ async function listAudits(tenantId: string) {
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -554,11 +553,7 @@ async function listAuditFindings(event: AppSyncEvent, tenantId: string) {
       findingType: String(r.findingType).toUpperCase(),
     }));
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -576,11 +571,7 @@ async function listAuditChecklists(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -627,11 +618,7 @@ async function runAuditFindings(event: AppSyncEvent, tenantId: string, actor: st
     priorFindings = marshalMany(fResult);
     await txn.commit();
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 

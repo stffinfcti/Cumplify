@@ -4,7 +4,13 @@
  */
 
 import { z } from 'zod';
-import { beginTenantTransaction, marshalOne, publishAuditEvent, jsonOut } from '../shared.js';
+import {
+  beginTenantTransaction,
+  marshalOne,
+  publishAuditEvent,
+  jsonOut,
+  rollbackQuietly,
+} from '../shared.js';
 import type { AppSyncEvent } from './common.js';
 
 // ─── ORG-1 Org Profile Schema (zod — full design §2.2) ──────────────────────
@@ -61,11 +67,7 @@ export async function getOrgProfile(tenantId: string) {
     // must be the parsed object or the wire is double-encoded (2026-07-22).
     return { ...row, payload: jsonOut(row.payload) };
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -160,11 +162,7 @@ export async function saveOrgProfile(event: AppSyncEvent, tenantId: string, acto
       updatedAt: new Date().toISOString(),
     };
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }

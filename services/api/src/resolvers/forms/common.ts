@@ -212,9 +212,20 @@ export async function fetchTemplateFieldMeta(
   `,
     [{ name: 'templateId', value: { stringValue: templateId } }],
   );
-  const allKeys = extractFieldKeys(result);
-  const requiredKeys = new Set(extractRequiredFieldKeys(result));
-  return allKeys.map((k) => ({ fieldKey: k, required: requiredKeys.has(k) }));
+  const fields: Array<{ fieldKey: string; required: boolean }> = [];
+  if (!result.records || !result.columnMetadata) return fields;
+  const keyIdx = result.columnMetadata.findIndex((c) => c.name === 'field_key');
+  const reqIdx = result.columnMetadata.findIndex((c) => c.name === 'required');
+  if (keyIdx < 0 || reqIdx < 0) return fields;
+  // One pass over the records — extractFieldKeys + extractRequiredFieldKeys
+  // each walked the full set.
+  for (const row of result.records) {
+    fields.push({
+      fieldKey: unwrapField(row[keyIdx]) as string,
+      required: unwrapField(row[reqIdx]) === true,
+    });
+  }
+  return fields;
 }
 
 /** Compute FormCompletion (design §2.4) from field meta + filled keys. */
@@ -241,6 +252,7 @@ export async function getFormRecordById(
   recordId: string,
   tenantId: string,
   txn?: TenantTransaction,
+  fieldsMeta?: Array<{ fieldKey: string; required: boolean }>,
 ): Promise<unknown> {
   const ownsTxn = !txn;
   const t = txn ?? (await beginTenantTransaction(tenantId));
@@ -269,8 +281,10 @@ export async function getFormRecordById(
     );
     const values = marshalValues(valResult);
     rec.values = values; // object — AWSJSON slot serializes once
-    const fieldsMeta = await fetchTemplateFieldMeta(t, rec.templateId as string);
-    rec.completion = completionFrom(fieldsMeta, new Set(Object.keys(values)));
+    // The caller that already queried template_fields passes fieldsMeta in —
+    // no second round trip for completion on the post-write re-read.
+    const meta = fieldsMeta ?? (await fetchTemplateFieldMeta(t, rec.templateId as string));
+    rec.completion = completionFrom(meta, new Set(Object.keys(values)));
 
     if (ownsTxn) await t.commit();
     return rec;
@@ -296,7 +310,8 @@ export function buildValueParam(valueColumn: string, value: unknown): SqlParamet
     case 'value_date':
       return { name: 'val', value: { stringValue: String(value) } }; // ISO timestamp string
     case 'value_bool':
-      return { name: 'val', value: { booleanValue: Boolean(value) } };
+      // 'false' is truthy — a string 'false' would bind true without this.
+      return { name: 'val', value: { booleanValue: value === true || value === 'true' } };
     case 'value_uuid':
       return { name: 'val', value: { stringValue: String(value) } }; // UUID as string
     case 'value_json':
@@ -304,21 +319,6 @@ export function buildValueParam(valueColumn: string, value: unknown): SqlParamet
     default:
       return { name: 'val', value: { stringValue: String(value) } };
   }
-}
-
-/** Generate SET clause to null out all other value columns. */
-export function nullOtherColumns(activeColumn: string): string {
-  const ALL_VALUE_COLUMNS = [
-    'value_text',
-    'value_number',
-    'value_date',
-    'value_bool',
-    'value_uuid',
-    'value_json',
-  ];
-  return ALL_VALUE_COLUMNS.filter((c) => c !== activeColumn)
-    .map((c) => `${c} = NULL`)
-    .join(', ');
 }
 
 // ─── Data API Marshalling (forms-specific shapes over shared primitives) ─────
@@ -394,7 +394,7 @@ export function marshalRecordRows(result: DataApiResult): Record<string, unknown
     }
     // Map status to uppercase enum
     if (typeof obj.status === 'string') {
-      obj.status = obj.status.toUpperCase().replace(/_/g, '_');
+      obj.status = obj.status.toUpperCase();
     }
     return obj;
   });
@@ -485,29 +485,4 @@ export function marshalFieldMeta(result: DataApiResult): Map<string, FieldMeta> 
     if (key) map.set(key, { fieldId: id, fieldType: type, relationTarget: relTarget });
   }
   return map;
-}
-
-export function extractFieldKeys(result: DataApiResult): string[] {
-  const keys: string[] = [];
-  if (!result.records || !result.columnMetadata) return keys;
-  const keyIdx = result.columnMetadata.findIndex((c) => c.name === 'field_key');
-  if (keyIdx < 0) return keys;
-  for (const row of result.records) {
-    keys.push(unwrapField(row[keyIdx]) as string);
-  }
-  return keys;
-}
-
-export function extractRequiredFieldKeys(result: DataApiResult): string[] {
-  const keys: string[] = [];
-  if (!result.records || !result.columnMetadata) return keys;
-  const keyIdx = result.columnMetadata.findIndex((c) => c.name === 'field_key');
-  const reqIdx = result.columnMetadata.findIndex((c) => c.name === 'required');
-  if (keyIdx < 0 || reqIdx < 0) return keys;
-  for (const row of result.records) {
-    if (unwrapField(row[reqIdx]) === true) {
-      keys.push(unwrapField(row[keyIdx]) as string);
-    }
-  }
-  return keys;
 }

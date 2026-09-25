@@ -3,7 +3,13 @@
  * qms.ts.
  */
 
-import { beginTenantTransaction, marshalOne, marshalMany, publishAuditEvent } from '../shared.js';
+import {
+  beginTenantTransaction,
+  marshalOne,
+  marshalMany,
+  publishAuditEvent,
+  rollbackQuietly,
+} from '../shared.js';
 import type { SqlParameter } from '@aws-sdk/client-rds-data';
 import type { AppSyncEvent } from './common.js';
 
@@ -27,11 +33,7 @@ export async function listClauseRegistry(event: AppSyncEvent, tenantId: string) 
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -46,11 +48,7 @@ export async function listClauseApplicability(tenantId: string) {
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -116,11 +114,7 @@ export async function setClauseApplicability(event: AppSyncEvent, tenantId: stri
 
     return applicability;
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }

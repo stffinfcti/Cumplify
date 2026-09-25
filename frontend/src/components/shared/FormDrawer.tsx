@@ -4,6 +4,7 @@ import { useState, useEffect, type ReactNode, type FormEvent } from 'react';
 import { useTranslations } from 'next-intl';
 import { PrimaryButton, SecondaryButton } from './Buttons';
 import { useDialog } from '@/lib/use-dialog';
+import { errorText } from '@/lib/error-text';
 import styles from './FormDrawer.module.css';
 
 /**
@@ -77,6 +78,7 @@ export function FormDrawer({
   children,
 }: FormDrawerProps) {
   const t = useTranslations('common');
+  const tErr = useTranslations('errors');
   const [values, setValues] = useState<Record<string, string | boolean>>(() =>
     computeDefaults(fields),
   );
@@ -111,7 +113,9 @@ export function FormDrawer({
       await onSubmit(converted);
       if (!keepOpen) onClose();
     } catch (err) {
-      setError((err as Error).message || t('error'));
+      // errorText maps resolver SNAKE_CASE codes to catalog strings —
+      // err.message prose is English internals, never user-facing.
+      setError(errorText(err, tErr, 'generic'));
     } finally {
       setSubmitting(false);
     }

@@ -20,6 +20,7 @@ import {
   marshalMany,
   LIST_QUERY_LIMIT,
   type AppSyncEvent,
+  rollbackQuietly,
 } from './shared.js';
 import { mapEnum, RISK_CATEGORY_MAP } from './enum-mappings.js';
 
@@ -30,7 +31,10 @@ const RISK_SENTINEL_FN_ARN = process.env.RISK_SENTINEL_FN_ARN ?? '';
 type IsoStandard = 'ISO9001' | 'ISO14001' | 'ISO45001';
 const ISO_STANDARDS = new Set<IsoStandard>(['ISO9001', 'ISO14001', 'ISO45001']);
 function toIsoStandard(raw: unknown): IsoStandard {
-  return ISO_STANDARDS.has(raw as IsoStandard) ? (raw as IsoStandard) : 'ISO9001';
+  if (!ISO_STANDARDS.has(raw as IsoStandard)) {
+    throw new Error(`RISK_STANDARD_UNKNOWN: ${String(raw)}`);
+  }
+  return raw as IsoStandard;
 }
 
 export async function handler(event: AppSyncEvent): Promise<unknown> {
@@ -120,7 +124,7 @@ async function createRisk(event: AppSyncEvent, tenantId: string, actor: string) 
     logger.info('Risk created', { tenantId, riskId: risk?.id });
     return risk;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -184,7 +188,7 @@ async function agentAssessRisk(event: AppSyncEvent, tenantId: string, actor: str
     logger.info('Agent-assessed risk updated', { tenantId, riskId: risk?.id });
     return risk;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -210,7 +214,7 @@ async function runRiskAssessment(event: AppSyncEvent, tenantId: string, actor: s
     if (!risk) throw new Error('RISK_NOT_FOUND');
     await txn.commit();
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 
@@ -276,7 +280,7 @@ async function addRiskTreatment(event: AppSyncEvent, tenantId: string, actor: st
 
     return treatment;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -315,7 +319,7 @@ async function createChangePlan(event: AppSyncEvent, tenantId: string, actor: st
 
     return plan;
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -330,7 +334,7 @@ async function getRisk(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalOne(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -366,7 +370,7 @@ async function getCrossRegisterRiskView(event: AppSyncEvent, tenantId: string) {
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -391,11 +395,7 @@ async function refreshRiskRegisterView(tenantId: string): Promise<void> {
       await txn.execute(`SELECT m5_views.refresh_risk_register_view()`);
       await txn.commit();
     } catch (err) {
-      try {
-        await txn.rollback();
-      } catch {
-        /* never mask */
-      }
+      await rollbackQuietly(txn);
       throw err;
     }
   } catch (err) {

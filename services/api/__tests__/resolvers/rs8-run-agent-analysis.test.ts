@@ -190,8 +190,13 @@ describe('runNcIntake (m2.ts, S1 studio wave)', () => {
 describe('runDocDraft (m1.ts, S2 studio wave)', () => {
   it('dispatches the draft intent + CURRENT ORG PROFILE to DocStudio (S2.3: "[Organization Name]" shipped on a live card without it)', async () => {
     mockExecute.mockResolvedValueOnce({
-      records: [[{ stringValue: JSON.stringify({ legalName: 'Meridian Design-Build LLC' }) }]],
-      columnMetadata: [{ name: 'payload' }],
+      records: [
+        [
+          { longValue: 3 },
+          { stringValue: JSON.stringify({ legalName: 'Meridian Design-Build LLC' }) },
+        ],
+      ],
+      columnMetadata: [{ name: 'current_version' }, { name: 'payload' }],
     });
 
     const result = await m1Handler(

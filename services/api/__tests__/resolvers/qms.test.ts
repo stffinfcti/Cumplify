@@ -650,7 +650,12 @@ describe('runManualSectionDraft (S3 Manual Studio)', () => {
         columnMetadata: [{ name: 'manual_document_id' }, { name: 'payload' }],
       })
       .mockResolvedValueOnce({
-        records: [[{ stringValue: 'GAP' }, { arrayValue: { stringValues: ['c-41'] } }]],
+        records: [
+          [
+            { stringValue: 'GAP' },
+            { arrayValue: { stringValues: ['c0000000-0000-4000-a000-000000000041'] } },
+          ],
+        ],
         columnMetadata: [{ name: 'status' }, { name: 'clause_registry_ids' }],
       })
       .mockResolvedValueOnce({

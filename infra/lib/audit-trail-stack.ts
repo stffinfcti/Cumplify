@@ -121,11 +121,20 @@ export class AuditTrailStack extends cdk.Stack {
       },
     });
 
-    // Consumer needs EXACTLY: Query (prevHash lookup) + PutItem (the TransactWriteItems
-    // chain-item + dedup-marker, both conditional Puts). NOT UpdateItem/DeleteItem/
-    // BatchWriteItem — the append path never mutates existing items. (Gate FINDING-1:
-    // grantReadWriteData was over-broad, allowing UpdateItem on non-audit partitions.)
-    table.grant(consumerFn, 'dynamodb:Query', 'dynamodb:PutItem');
+    // Consumer needs EXACTLY: Query (prevHash lookup) + PutItem/TransactWriteItems
+    // (the chain item + dedup marker + AUDITMETA registration go in as
+    // conditional Puts inside TransactWriteItems — IAM evaluates the
+    // transaction action itself, not the inner ops, so the grant name is
+    // TransactWriteItems; without it every append is AccessDenied).
+    // NOT UpdateItem/DeleteItem/BatchWriteItem — the append path never
+    // mutates existing items. (Gate FINDING-1: grantReadWriteData was
+    // over-broad, allowing UpdateItem on non-audit partitions.)
+    //
+    // WORM caveat: IAM cannot inspect the op types inside a transaction —
+    // the DenyAuditLogMutation policy below still blocks direct
+    // UpdateItem/DeleteItem on AUDITLOG partitions; the Puts-only contract
+    // on the transaction path is enforced by the appender code + tests.
+    table.grant(consumerFn, 'dynamodb:Query', 'dynamodb:PutItem', 'dynamodb:TransactWriteItems');
     props.dynamodbKey.grant(
       consumerFn,
       'kms:Encrypt',

@@ -214,6 +214,7 @@ describe('publishControlledDocument sealing (STO-5)', () => {
       .mockResolvedValueOnce(approvalRow) // approval gate SELECT
       .mockResolvedValueOnce(emptyRes) // no policy row
       .mockResolvedValueOnce(emptyRes) // policy INSERT (seed)
+      .mockResolvedValueOnce(policyRow(7)) // re-read after seed — who won
       .mockResolvedValueOnce(docRow) // UPDATE approve
       .mockResolvedValueOnce(emptyRes); // m4.records INSERT
     wireRenderOk();

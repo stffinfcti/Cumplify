@@ -12,7 +12,11 @@
  */
 
 import { Logger } from '@aws-lambda-powertools/logger';
-import { beginTenantTransaction } from '../../api/src/resolvers/shared.js';
+import {
+  assertTenantIdSafe,
+  beginTenantTransaction,
+  rollbackQuietly,
+} from '../../api/src/resolvers/shared.js';
 import { publishGenerationEvent } from './appsync-publish.js';
 
 const logger = new Logger({ serviceName: 'qms-mark-run-failed' });
@@ -25,6 +29,7 @@ export interface MarkRunFailedInput {
 export async function handler(event: MarkRunFailedInput): Promise<{ marked: boolean }> {
   const { runId, tenantId } = event;
   logger.appendKeys({ runId, tenantId });
+  assertTenantIdSafe(tenantId);
 
   const txn = await beginTenantTransaction(tenantId);
   try {
@@ -51,7 +56,7 @@ export async function handler(event: MarkRunFailedInput): Promise<{ marked: bool
     }
     return { marked };
   } catch (err) {
-    await txn.rollback().catch(() => undefined);
+    await rollbackQuietly(txn);
     throw err;
   }
 }

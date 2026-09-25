@@ -30,6 +30,10 @@ import { resolveHitlItem } from '../../../agents/shared/hitl.js';
 const logger = new Logger({ serviceName: 'resolver-hitl-approval' });
 const sfnClient = new SFNClient({});
 
+// A persistently failing SFN target gets this many send attempts before the
+// item resolves TIMED_OUT instead of bouncing back to PENDING again.
+const MAX_SEND_ATTEMPTS = 3;
+
 interface ApprovalInput {
   hitlItemId: string;
   decision: 'APPROVE' | 'SEND_BACK';
@@ -224,7 +228,9 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
     }
     // Transient send failure — reset to PENDING so the card re-appears in the
     // queue for a retry instead of vanishing until the sweeper finds it.
-    await ddb
+    // sendAttempts caps the cycle: a persistently failing SFN target would
+    // otherwise loop PENDING→RESOLVING→PENDING forever.
+    const reset = await ddb
       .send(
         new UpdateItemCommand({
           TableName: TABLE_NAME,
@@ -233,12 +239,16 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
             SK: `PENDING#${hitlItemId}`,
           }),
           ConditionExpression: '#status = :resolving',
-          UpdateExpression: 'SET #status = :pending REMOVE resolvingAt',
+          UpdateExpression:
+            'SET #status = :pending, sendAttempts = if_not_exists(sendAttempts, :zero) + :one REMOVE resolvingAt',
           ExpressionAttributeNames: { '#status': 'status' },
           ExpressionAttributeValues: marshall({
             ':resolving': 'RESOLVING',
             ':pending': 'PENDING',
+            ':zero': 0,
+            ':one': 1,
           }),
+          ReturnValues: 'UPDATED_NEW',
         }),
       )
       .catch((resetErr: unknown) => {
@@ -246,7 +256,25 @@ export async function handler(event: AppSyncEvent): Promise<HitlApprovalResult> 
           hitlItemId,
           resetErr: String(resetErr),
         });
+        return undefined;
       });
+    const sendAttempts = Number(
+      (reset?.Attributes ? unmarshall(reset.Attributes) : {}).sendAttempts ?? 0,
+    );
+    if (sendAttempts >= MAX_SEND_ATTEMPTS) {
+      await resolveHitlItem(tenantId, hitlItemId, 'TIMED_OUT', 'system', ddb).catch(
+        (resolveErr: unknown) => {
+          logger.warn('Failed to mark retry-exhausted HITL item TIMED_OUT', {
+            hitlItemId,
+            resolveErr: String(resolveErr),
+          });
+        },
+      );
+      throw new ApprovalError(
+        410,
+        `HITL_TASK_EXPIRED: SFN send retry cap reached for HITL item: ${hitlItemId}`,
+      );
+    }
     throw err;
   }
 

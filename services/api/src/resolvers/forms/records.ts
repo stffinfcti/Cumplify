@@ -3,14 +3,21 @@
  * forms.ts.
  */
 
-import { beginTenantTransaction, publishAuditEvent, parseAwsJson, unwrapField } from '../shared.js';
+import {
+  beginTenantTransaction,
+  publishAuditEvent,
+  parseAwsJson,
+  unwrapField,
+  rollbackQuietly,
+} from '../shared.js';
 import type { SqlParameter } from '@aws-sdk/client-rds-data';
 import { canApprove } from '../../permissions/role-matrix.js';
 import {
-  logger,
   CONTENT_BUCKET,
   EVIDENCE_BUCKET,
+  EVIDENCE_LOCK_MODE,
   PDF_RENDER_FN,
+  DEFAULT_RETENTION_YEARS,
   marshalValues,
   marshalRecordRows,
   FormValuesSchema,
@@ -26,57 +33,14 @@ import {
   marshalFieldMetaFull,
   type AppSyncEvent,
 } from './common.js';
-import { sealApprovedRecord } from './export.js';
+import { upsertRetentionPolicy, renderAndSealRecordPdf, commitSealToM4 } from './export.js';
 
 /**
  * getFormRecord — single record with full values + server-computed completion.
  */
 export async function getFormRecord(event: AppSyncEvent, tenantId: string): Promise<unknown> {
-  const recordId = event.arguments.id as string;
-  const txn = await beginTenantTransaction(tenantId);
-  try {
-    const recResult = await txn.execute(
-      `
-      SELECT r.id, r.template_id, r.status, r.opened_by, r.completed_by,
-             r.m2_nc_id, r.created_at, r.updated_at
-      FROM forms.records r WHERE r.id = :id::uuid
-    `,
-      [{ name: 'id', value: { stringValue: recordId } }],
-    );
-
-    const rows = marshalRecordRows(recResult);
-    if (rows.length === 0) throw new Error('RECORD_NOT_FOUND');
-    const rec = rows[0];
-
-    // Fetch values
-    const valResult = await txn.execute(
-      `
-      SELECT f.field_key, rv.value_text, rv.value_number, rv.value_date,
-             rv.value_bool, rv.value_uuid, rv.value_json
-      FROM forms.record_values rv
-      JOIN forms.template_fields f ON rv.field_id = f.id
-      WHERE rv.record_id = :id::uuid
-    `,
-      [{ name: 'id', value: { stringValue: recordId } }],
-    );
-
-    const values = marshalValues(valResult);
-    rec.values = values; // object — AWSJSON slot serializes once
-    // Task 10: completion from the values already fetched + one fields query
-    // (was computeCompletion = 2 extra round trips per read).
-    const fieldsMeta = await fetchTemplateFieldMeta(txn, rec.templateId as string);
-    rec.completion = completionFrom(fieldsMeta, new Set(Object.keys(values)));
-
-    await txn.commit();
-    return rec;
-  } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask the original error */
-    }
-    throw err;
-  }
+  // Identical read path to the post-mutation re-read — one implementation.
+  return getFormRecordById(event.arguments.id as string, tenantId);
 }
 
 // ─── Mutations ───────────────────────────────────────────────────────────────
@@ -113,11 +77,7 @@ export async function createFormRecord(
     await txn.commit();
     return rec;
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask the original error */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -169,10 +129,12 @@ export async function saveFormRecordValues(
       );
     }
 
-    // Resolve field metadata for typed dispatch
+    // Resolve field metadata for typed dispatch. `required` rides along so
+    // the completion meta for the post-write re-read comes from this one
+    // query — getFormRecordById would otherwise run a second fields SELECT.
     const fieldsResult = await txn.execute(
       `
-      SELECT f.id, f.field_key, f.field_type, f.relation_target
+      SELECT f.id, f.field_key, f.field_type, f.required, f.relation_target
       FROM forms.template_fields f
       JOIN forms.template_sections s ON f.section_id = s.id
       WHERE s.template_id = :templateId::uuid
@@ -181,6 +143,10 @@ export async function saveFormRecordValues(
     );
 
     const fieldMeta = marshalFieldMeta(fieldsResult);
+    const fieldsMeta = marshalFieldMetaFull(fieldsResult).map((f) => ({
+      fieldKey: f.fieldKey,
+      required: f.required,
+    }));
 
     // Typed-column dispatch into two batched statements: one DELETE for
     // cleared fields, one multi-row upsert for written fields — was one
@@ -191,8 +157,9 @@ export async function saveFormRecordValues(
     for (const [fieldKey, value] of Object.entries(values)) {
       const meta = fieldMeta.get(fieldKey);
       if (!meta) {
-        logger.warn('Unknown fieldKey in saveFormRecordValues — skipping', { fieldKey, recordId });
-        continue;
+        // A key the template doesn't define would drop silently — refuse
+        // loudly instead (INVALID_PAYLOAD, same boundary as values shape).
+        throw new Error(`INVALID_PAYLOAD: unknown fieldKey '${fieldKey}'`);
       }
 
       // BUG-2 fix: null value → DELETE the row (clearing a field)
@@ -253,6 +220,9 @@ export async function saveFormRecordValues(
         'value_uuid',
         'value_json',
       ];
+      // IS DISTINCT FROM skips no-op rewrites — an unchanged value re-sent
+      // by a debounced autosave used to mark every row dirty (row lock +
+      // updated_at churn on the hot path).
       const rowSql = upserts
         .map((u, i) => {
           const cells = ALL_COLUMNS.map((c) =>
@@ -261,6 +231,9 @@ export async function saveFormRecordValues(
           return `(:recordId::uuid, :tenantId, :f${i}::uuid, ${cells})`;
         })
         .join(',\n        ');
+      const allColsDistinct = ALL_COLUMNS.map(
+        (c) => `forms.record_values.${c} IS DISTINCT FROM EXCLUDED.${c}`,
+      ).join(' OR ');
       await txn.execute(
         `
         INSERT INTO forms.record_values
@@ -269,6 +242,7 @@ export async function saveFormRecordValues(
         ${rowSql}
         ON CONFLICT (record_id, field_id)
         DO UPDATE SET ${ALL_COLUMNS.map((c) => `${c} = EXCLUDED.${c}`).join(', ')}
+        WHERE ${allColsDistinct}
       `,
         [
           { name: 'recordId', value: { stringValue: recordId } },
@@ -287,15 +261,11 @@ export async function saveFormRecordValues(
     ]);
 
     // Re-read inside the txn so the returned record is exactly what commits
-    const refreshed = await getFormRecordById(recordId, tenantId, txn);
+    const refreshed = await getFormRecordById(recordId, tenantId, txn, fieldsMeta);
     await txn.commit();
     return refreshed;
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask the original error */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -356,6 +326,13 @@ export async function submitFormRecord(
     const tplStandards = tplRows[0]?.standards as string[] | null;
     const tplClauseRefs = tplRows[0]?.clauseRefs as string[] | null;
 
+    // Submitting through an m2_ncr template writes an M2 nonconformity row —
+    // gate on the M2 write matrix BEFORE the heavy field/value reads (a
+    // denied caller shouldn't pay for them).
+    if (mapsTo === 'm2_ncr' && !canApprove(role, 'M2')) {
+      throw new Error('UNAUTHORIZED');
+    }
+
     // Fetch all field metadata with maps_to_column
     const fieldMetaResult = await txn.execute(
       `
@@ -408,12 +385,6 @@ export async function submitFormRecord(
 
     // NCR→M2 mapping path
     if (mapsTo === 'm2_ncr') {
-      // Submitting through this template writes an M2 nonconformity row —
-      // hold it to the M2 write matrix instead of the authenticated floor
-      // the plain-record path uses.
-      if (!canApprove(role, 'M2')) {
-        throw new Error('UNAUTHORIZED');
-      }
       // Resolve clause_ref UUID → clause_no TEXT from qms.clause_registry (pending 011)
       const clauseRefUuid = currentValues['clause_ref'] as string;
       const clauseResult = await txn.execute(
@@ -515,7 +486,12 @@ export async function submitFormRecord(
         ],
       );
 
-      refreshed = await getFormRecordById(recordId, tenantId, txn);
+      refreshed = await getFormRecordById(
+        recordId,
+        tenantId,
+        txn,
+        fieldsMeta.map((f) => ({ fieldKey: f.fieldKey, required: f.required })),
+      );
       await txn.commit();
 
       // F2: Audit event — standard + clauseRef from mapped values (no literals)
@@ -531,6 +507,14 @@ export async function submitFormRecord(
         payload: { recordId, templateId, mapsTo, ncId },
       });
     } else {
+      // Audit event — standard/clauseRef from template metadata. The check
+      // rides INSIDE the txn: a template that can't produce a truthful event
+      // must roll the status flip back, not commit state the audit never saw
+      // (TODO-011: once IMS enum lands, multi-standard templates use 'IMS').
+      if (!tplStandards?.[0] || !tplClauseRefs?.[0]) {
+        throw new Error('TEMPLATE_METADATA_MISSING');
+      }
+
       // Non-mapping template: just mark complete (no m2 writes)
       await txn.execute(
         `
@@ -544,14 +528,14 @@ export async function submitFormRecord(
         ],
       );
 
-      refreshed = await getFormRecordById(recordId, tenantId, txn);
+      refreshed = await getFormRecordById(
+        recordId,
+        tenantId,
+        txn,
+        fieldsMeta.map((f) => ({ fieldKey: f.fieldKey, required: f.required })),
+      );
       await txn.commit();
 
-      // Audit event — standard/clauseRef from template metadata (impossible path fails loudly)
-      // TODO-011: once IMS enum lands (spec-40), multi-standard templates use 'IMS'
-      if (!tplStandards?.[0] || !tplClauseRefs?.[0]) {
-        throw new Error('TEMPLATE_METADATA_MISSING');
-      }
       await publishAuditEvent({
         tenantId,
         actor,
@@ -567,11 +551,7 @@ export async function submitFormRecord(
 
     return refreshed;
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask the original error */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -589,13 +569,28 @@ export async function approveFormRecord(
 ): Promise<unknown> {
   const input = event.arguments.input as { recordId: string };
   const recordId = input.recordId;
+  const sealConfigured = !!(CONTENT_BUCKET && EVIDENCE_BUCKET && PDF_RENDER_FN);
+  // One timestamp stamps both the sealed PDF (overlay) and the row's
+  // approved_at — the artifact and the register agree to the millisecond.
+  const approvedAt = new Date();
 
-  const txn = await beginTenantTransaction(tenantId);
+  // ── Phase 1: lock the record, run every guard, seed the retention row. ──
+  // The seal's content build, PDF render, and vault copy CANNOT ride a FOR
+  // UPDATE txn (a seconds-long lock held across S3 + a Lambda render is the
+  // anti-pattern wave-1 removed from publishControlledDocument) — so the
+  // approve is three transactions: lock+checks+seed → render+seal → flip.
+  const txn1 = await beginTenantTransaction(tenantId);
+  let templateId = '';
+  let openedBy = '';
+  let completedBy: string | null = null;
+  let tplStandards: string[] | null = null;
+  let tplClauseRefs: string[] | null = null;
+  let retentionYears = DEFAULT_RETENTION_YEARS;
   try {
-    // Fetch record. FOR UPDATE: serializes concurrent approvals (and an
-    // approve/reopen race) — the loser re-reads the flipped status and fails
+    // FOR UPDATE: serializes concurrent approvals (and an approve/reopen
+    // race) — the loser re-reads the flipped status and fails
     // APPROVE_INVALID_STATUS instead of double-approving + double-sealing.
-    const recResult = await txn.execute(
+    const recResult = await txn1.execute(
       `
       SELECT r.id, r.template_id, r.status, r.opened_by, r.completed_by
       FROM forms.records r WHERE r.id = :id::uuid FOR UPDATE
@@ -605,10 +600,10 @@ export async function approveFormRecord(
     const recRows = marshalRecordRows(recResult);
     if (recRows.length === 0) throw new Error('RECORD_NOT_FOUND');
     const rec = recRows[0];
-    const templateId = rec.templateId as string;
+    templateId = rec.templateId as string;
     const currentStatus = rec.status as string;
-    const openedBy = rec.openedBy as string;
-    const completedBy = rec.completedBy as string | null;
+    openedBy = rec.openedBy as string;
+    completedBy = rec.completedBy as string | null;
 
     // Status guard: approve only from COMPLETE
     if (currentStatus !== 'COMPLETE') {
@@ -616,7 +611,7 @@ export async function approveFormRecord(
     }
 
     // Template guard: only requires_approval templates
-    const tplResult = await txn.execute(
+    const tplResult = await txn1.execute(
       `
       SELECT requires_approval, standards, clause_refs FROM forms.templates WHERE id = :id::uuid
     `,
@@ -624,34 +619,31 @@ export async function approveFormRecord(
     );
     const tplRows = marshalRecordRows(tplResult);
     const requiresApproval = tplRows[0]?.requiresApproval;
-    const tplStandards = tplRows[0]?.standards as string[] | null;
-    const tplClauseRefs = tplRows[0]?.clauseRefs as string[] | null;
+    tplStandards = tplRows[0]?.standards as string[] | null;
+    tplClauseRefs = tplRows[0]?.clauseRefs as string[] | null;
 
     if (!requiresApproval) {
       throw new Error('APPROVAL_NOT_REQUIRED');
     }
 
+    // Metadata gate BEFORE the flip and BEFORE the SoD path's own fallbacks:
+    // a template that can't produce a truthful audit event stops the approve
+    // here — the record stays COMPLETE for a retry (a post-commit throw used
+    // to leave the state flipped with no FormRecord.Approved event).
+    if (!tplStandards?.[0] || !tplClauseRefs?.[0]) {
+      throw new Error('TEMPLATE_METADATA_MISSING');
+    }
+
     // BC-4: SoD — approver ≠ completed_by AND approver ≠ opened_by
     if (actor === completedBy || actor === openedBy) {
       // Publish Security.SodViolationBlocked, write NOTHING
-      try {
-        await txn.rollback();
-      } catch {
-        /* never mask the original error */
-      }
+      await rollbackQuietly(txn1);
       await publishAuditEvent({
         tenantId,
         actor,
         module: 'M4',
-        clauseRef:
-          tplClauseRefs?.[0] ??
-          (() => {
-            throw new Error('TEMPLATE_METADATA_MISSING');
-          })(),
-        standard: (tplStandards?.[0] ??
-          (() => {
-            throw new Error('TEMPLATE_METADATA_MISSING');
-          })()) as 'ISO9001' | 'ISO14001' | 'ISO45001',
+        clauseRef: tplClauseRefs[0],
+        standard: tplStandards[0] as 'ISO9001' | 'ISO14001' | 'ISO45001',
         detailType: 'Security.SodViolationBlocked',
         source: 'cumplify.forms',
         entityId: recordId, // blocked events carry the targeted row id
@@ -666,65 +658,102 @@ export async function approveFormRecord(
       throw new Error('SOD_VIOLATION');
     }
 
+    if (sealConfigured) {
+      retentionYears = await upsertRetentionPolicy(txn1, tenantId, actor);
+    }
+    await txn1.commit();
+  } catch (err) {
+    if ((err as Error).message !== 'SOD_VIOLATION') {
+      await rollbackQuietly(txn1);
+    }
+    throw err;
+  }
+
+  // ── Phase 2: build + render + vault-copy with NO write txn open. ──────
+  // Throws before the flip → the record stays COMPLETE (retryable); an
+  // approved-but-unsealed state is impossible from this path.
+  const retainUntil = new Date(approvedAt.getTime() + retentionYears * 365.25 * 24 * 3600 * 1000);
+  let artifact: { sealedKey: string; sha256: string } | null = null;
+  if (sealConfigured) {
+    artifact = await renderAndSealRecordPdf(tenantId, recordId, actor, approvedAt, retainUntil);
+  }
+
+  // ── Phase 3: flip + m4 pointer + stamp in one txn. ────────────────────
+  // Unconfigured env (hermetic lane) skips honestly — the audit payload
+  // carries sealed:false + reason.
+  const txn3 = await beginTenantTransaction(tenantId);
+  let sealed: Record<string, unknown> = { sealed: false, reason: 'SEAL_NOT_CONFIGURED' };
+  let refreshed: unknown;
+  try {
+    // Re-verify under the lock — a concurrent reopen could have flipped the
+    // record back while phase 2 rendered.
+    const recheck = await txn3.execute(
+      `SELECT status FROM forms.records WHERE id = :id::uuid FOR UPDATE`,
+      [{ name: 'id', value: { stringValue: recordId } }],
+    );
+    const status = marshalRecordRows(recheck)[0]?.status as string | undefined;
+    if (status !== 'COMPLETE') {
+      throw new Error('APPROVE_INVALID_STATUS');
+    }
+
     // Approve: stamp approved_by/approved_at, status → approved
-    await txn.execute(
+    await txn3.execute(
       `
       UPDATE forms.records
-      SET status = 'approved', approved_by = :actor, approved_at = NOW(), updated_at = NOW()
+      SET status = 'approved', approved_by = :actor, approved_at = :approvedAt::timestamptz, updated_at = NOW()
       WHERE id = :id::uuid
     `,
       [
         { name: 'actor', value: { stringValue: actor } },
+        { name: 'approvedAt', value: { stringValue: approvedAt.toISOString() } },
         { name: 'id', value: { stringValue: recordId } },
       ],
     );
 
-    // Task 8 (REC-7): seal the approved record — PDF → EvidenceVault with
-    // per-object retention + m4.records pointer, SAME txn as the flip. A
-    // seal failure rolls the approval back (catch below): no
-    // approved-but-unsealed records. Unconfigured env (hermetic lane) skips
-    // honestly — the audit payload carries sealed:false + reason.
-    let sealed: Record<string, unknown> = { sealed: false, reason: 'SEAL_NOT_CONFIGURED' };
-    if (CONTENT_BUCKET && EVIDENCE_BUCKET && PDF_RENDER_FN) {
-      sealed = await sealApprovedRecord(
-        txn,
+    // Task 8 (REC-7): m4.records pointer + m4_record_id stamp in the SAME
+    // txn as the flip — a phase-3 failure rolls the approval back (catch
+    // below): no approved-but-unsealed records.
+    if (artifact) {
+      const m4RecordId = await commitSealToM4(
+        txn3,
         tenantId,
         recordId,
         actor,
-        (tplStandards ?? []) as string[],
+        tplStandards ?? [],
+        retentionYears,
+        artifact,
+        retainUntil,
       );
+      sealed = {
+        sealed: true,
+        sealedKey: artifact.sealedKey,
+        m4RecordId,
+        retentionYears,
+        lockMode: EVIDENCE_LOCK_MODE,
+        retainUntil: retainUntil.toISOString(),
+      };
     }
 
-    const refreshed = await getFormRecordById(recordId, tenantId, txn);
-    await txn.commit();
-
-    // Audit event — dynamic standard/clauseRef from template
-    if (!tplStandards?.[0] || !tplClauseRefs?.[0]) {
-      throw new Error('TEMPLATE_METADATA_MISSING');
-    }
-    await publishAuditEvent({
-      tenantId,
-      actor,
-      module: 'M4',
-      clauseRef: tplClauseRefs[0],
-      standard: tplStandards[0] as 'ISO9001' | 'ISO14001' | 'ISO45001',
-      detailType: 'FormRecord.Approved',
-      source: 'cumplify.forms',
-      entityId: recordId,
-      payload: { recordId, templateId, approvedBy: actor, ...sealed },
-    });
-
-    return refreshed;
+    refreshed = await getFormRecordById(recordId, tenantId, txn3);
+    await txn3.commit();
   } catch (err) {
-    if ((err as Error).message !== 'SOD_VIOLATION') {
-      try {
-        await txn.rollback();
-      } catch {
-        /* never mask the original error */
-      }
-    }
+    await rollbackQuietly(txn3);
     throw err;
   }
+
+  await publishAuditEvent({
+    tenantId,
+    actor,
+    module: 'M4',
+    clauseRef: tplClauseRefs![0],
+    standard: tplStandards![0] as 'ISO9001' | 'ISO14001' | 'ISO45001',
+    detailType: 'FormRecord.Approved',
+    source: 'cumplify.forms',
+    entityId: recordId,
+    payload: { recordId, templateId, approvedBy: actor, ...sealed },
+  });
+
+  return refreshed;
 }
 
 /**
@@ -776,6 +805,13 @@ export async function reopenFormRecord(
     const tplStandards = tplRows[0]?.standards as string[] | null;
     const tplClauseRefs = tplRows[0]?.clauseRefs as string[] | null;
 
+    // Audit metadata gate rides INSIDE the txn — a template that can't
+    // produce a truthful FormRecord.Reopened event must roll the flip back,
+    // not commit a reopen the ledger never saw (TODO-011: IMS enum).
+    if (!tplStandards?.[0] || !tplClauseRefs?.[0]) {
+      throw new Error('TEMPLATE_METADATA_MISSING');
+    }
+
     // Transition to reopened
     await txn.execute(
       `
@@ -789,11 +825,6 @@ export async function reopenFormRecord(
     const refreshed = await getFormRecordById(recordId, tenantId, txn);
     await txn.commit();
 
-    // Audit event — standard/clauseRef from template metadata (impossible path fails loudly)
-    // TODO-011: once IMS enum lands (spec-40), multi-standard templates use 'IMS'
-    if (!tplStandards?.[0] || !tplClauseRefs?.[0]) {
-      throw new Error('TEMPLATE_METADATA_MISSING');
-    }
     await publishAuditEvent({
       tenantId,
       actor,
@@ -808,11 +839,7 @@ export async function reopenFormRecord(
 
     return refreshed;
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask the original error */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }

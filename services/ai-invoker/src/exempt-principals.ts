@@ -17,6 +17,15 @@
  * Note: the AR-policy `flag_hitl` decision needs no such gate — it is
  * computed in ar-check.ts from Bedrock ApplyGuardrail findings alone and is
  * never read from the request payload.
+ *
+ * Residual (accepted, wave-2 review): `agent` is itself a caller-asserted
+ * payload field, so any internal function holding lambda:InvokeFunction on
+ * AiInvoker can claim a registered name and meter as COGS. Enforcement is
+ * only as strong as that self-asserted field — the definitive fix keys the
+ * exemption off a dedicated `op` branch the caller cannot assert (seed /
+ * index ops with their own IAM-scoped invocation path). Inside the internal
+ * trust domain the residual is cost-attribution drift, not cross-tenant
+ * write, so it is documented here rather than re-architected.
  */
 
 import { Logger } from '@aws-lambda-powertools/logger';

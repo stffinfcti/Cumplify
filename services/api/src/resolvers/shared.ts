@@ -66,6 +66,9 @@ interface CachedCredentials {
   secretAccessKey: string;
   sessionToken: string;
   expiration: number; // epoch ms
+  /** Client riding these credentials — cache-hit reuses it instead of
+   * minting a new DynamoDBClient (and its connection pool) per call. */
+  client: DynamoDBClient;
 }
 
 const credentialCache = new Map<string, CachedCredentials>();
@@ -74,8 +77,12 @@ const credentialCache = new Map<string, CachedCredentials>();
 const CREDENTIAL_CACHE_MAX = 500;
 
 function pruneCredentialCache(now: number): void {
+  const evict = (key: string) => {
+    credentialCache.get(key)?.client.destroy();
+    credentialCache.delete(key);
+  };
   for (const [key, creds] of credentialCache) {
-    if (creds.expiration - now <= 120_000) credentialCache.delete(key);
+    if (creds.expiration - now <= 120_000) evict(key);
   }
   if (credentialCache.size <= CREDENTIAL_CACHE_MAX) return;
   // Insertion-ordered: evict oldest until within cap.
@@ -83,7 +90,7 @@ function pruneCredentialCache(now: number): void {
   let removed = 0;
   for (const key of credentialCache.keys()) {
     if (removed++ >= overflow) break;
-    credentialCache.delete(key);
+    evict(key);
   }
 }
 
@@ -98,13 +105,7 @@ export async function getTenantDdbClient(tenantId: string): Promise<DynamoDBClie
 
   // Reuse if >2 min remaining (buffer for clock drift)
   if (cached && cached.expiration - now > 120_000) {
-    return new DynamoDBClient({
-      credentials: {
-        accessKeyId: cached.accessKeyId,
-        secretAccessKey: cached.secretAccessKey,
-        sessionToken: cached.sessionToken,
-      },
-    });
+    return cached.client;
   }
 
   const assumed = await stsClient.send(
@@ -116,23 +117,25 @@ export async function getTenantDdbClient(tenantId: string): Promise<DynamoDBClie
     }),
   );
 
+  const client = new DynamoDBClient({
+    credentials: {
+      accessKeyId: assumed.Credentials!.AccessKeyId!,
+      secretAccessKey: assumed.Credentials!.SecretAccessKey!,
+      sessionToken: assumed.Credentials!.SessionToken!,
+    },
+  });
   const creds: CachedCredentials = {
     accessKeyId: assumed.Credentials!.AccessKeyId!,
     secretAccessKey: assumed.Credentials!.SecretAccessKey!,
     sessionToken: assumed.Credentials!.SessionToken!,
     expiration: assumed.Credentials!.Expiration!.getTime(),
+    client,
   };
 
   pruneCredentialCache(now);
   credentialCache.set(tenantId, creds);
 
-  return new DynamoDBClient({
-    credentials: {
-      accessKeyId: creds.accessKeyId,
-      secretAccessKey: creds.secretAccessKey,
-      sessionToken: creds.sessionToken,
-    },
-  });
+  return client;
 }
 
 // ─── Aurora resume-retry (BUG-C) ─────────────────────────────────────────────
@@ -241,6 +244,16 @@ export async function beginTenantTransaction(tenantId: string): Promise<TenantTr
   return { transactionId: transactionId!, execute, commit, rollback };
 }
 
+/** Rollback for catch paths — a failed rollback (e.g. the error came after
+ * commit) must never mask the error that triggered it. */
+export async function rollbackQuietly(txn: { rollback: () => Promise<void> }): Promise<void> {
+  try {
+    await txn.rollback();
+  } catch {
+    /* never mask the triggering error */
+  }
+}
+
 // ─── Event publishing helper ─────────────────────────────────────────────────
 
 export interface PublishAuditEventOptions {
@@ -345,7 +358,11 @@ export function extractAgentContext(
   assertTenantIdSafe(tenantId);
 
   const hint = iamSessionTenantHint(identity);
-  if (hint && (hint.exact ? hint.value !== tenantId : !tenantId.startsWith(hint.value))) {
+  // `resolver-<first8>-<epoch>` hints are the stamp's first-8 chars: compare
+  // against the INPUT's first 8 — a prefix test would accept 'acme' hint for
+  // 'acme-evil' (cross-tenant), and a longer hint can never be a prefix of a
+  // legitimately-stamped shorter tenantId.
+  if (hint && (hint.exact ? hint.value !== tenantId : hint.value !== tenantId.substring(0, 8))) {
     throw new Error(
       `FORBIDDEN: input.tenantId does not match the calling principal's tenant session tag`,
     );
@@ -407,6 +424,41 @@ export function assertTenantIdSafe(tenantId: string): void {
   }
 }
 
+/** Canonical content-plane key for a document version — single writer for
+ * the `tenants/<t>/documents/<doc>/v<n>.json` convention (previously
+ * triplicated in m1/common, regenerate-section, finalize-manual). */
+export function versionContentKey(tenantId: string, documentId: string, versionNo: number): string {
+  return `tenants/${tenantId}/documents/${documentId}/v${versionNo}.json`;
+}
+
+/** The tenant's current org-profile version + parsed payload, or null when
+ * none exists. Data API returns jsonb stringified — callers get it parsed
+ * (the qms org-profile join duplicated in drafts/catalog/generation). */
+export interface OrgProfileCurrent {
+  currentVersion: number;
+  payload: Record<string, unknown>;
+}
+export async function getCurrentOrgProfile(txn: {
+  execute: (sql: string, params?: SqlParameter[]) => Promise<DataApiResult>;
+}): Promise<OrgProfileCurrent | null> {
+  const result = await txn.execute(
+    `SELECT op.current_version, opv.payload
+     FROM qms.org_profiles op
+     JOIN qms.org_profile_versions opv
+       ON opv.profile_id = op.id AND opv.version_no = op.current_version
+     LIMIT 1`,
+  );
+  const rec = result.records?.[0];
+  if (!rec) return null;
+  return {
+    currentVersion: Number((rec[0] as { longValue?: number }).longValue ?? 0),
+    payload: JSON.parse((rec[1] as { stringValue?: string }).stringValue ?? '{}') as Record<
+      string,
+      unknown
+    >,
+  };
+}
+
 // ─── Module role gate (M-effort, Part 13 floor+matrix) ───────────────────────
 /**
  * Server-side role gate for module write mutations — the same canApprove()
@@ -441,3 +493,4 @@ export {
   type JsonValue,
   type DataApiResult,
 } from './marshal.js';
+export type { SqlParameter } from '@aws-sdk/client-rds-data';

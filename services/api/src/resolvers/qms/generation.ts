@@ -7,7 +7,14 @@
 import { InvokeCommand } from '@aws-sdk/client-lambda';
 import { StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { ulid } from 'ulid';
-import { beginTenantTransaction, marshalOne, marshalMany, jsonOut } from '../shared.js';
+import {
+  beginTenantTransaction,
+  marshalOne,
+  marshalMany,
+  jsonOut,
+  getCurrentOrgProfile,
+  rollbackQuietly,
+} from '../shared.js';
 import {
   logger,
   sfnClient,
@@ -53,11 +60,7 @@ export async function getGenerationRun(event: AppSyncEvent, tenantId: string) {
 
     return { ...run, sections, gapCount };
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -80,11 +83,7 @@ export async function listGenerationRuns(event: AppSyncEvent, tenantId: string) 
     // Return without nested sections (lightweight list)
     return marshalMany(result).map((r) => ({ ...r, sections: [], gapCount: 0 }));
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -146,11 +145,7 @@ export async function markSectionReviewed(event: AppSyncEvent, tenantId: string,
     await txn.commit();
     return marshalOne(result);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -174,20 +169,11 @@ export async function generateImsManual(event: AppSyncEvent, tenantId: string, a
   const txn = await beginTenantTransaction(tenantId);
   let run: Record<string, unknown>;
   try {
-    const profileResult = await txn.execute(
-      `SELECT op.current_version, opv.payload
-       FROM qms.org_profiles op
-       JOIN qms.org_profile_versions opv
-         ON opv.profile_id = op.id AND opv.version_no = op.current_version`,
-    );
-    if (!profileResult.records?.length) throw new Error('ORG_PROFILE_REQUIRED');
-    const currentVersion = Number(
-      (profileResult.records[0][0] as { longValue?: number }).longValue ?? 0,
-    );
+    const current = await getCurrentOrgProfile(txn);
+    if (!current) throw new Error('ORG_PROFILE_REQUIRED');
+    const currentVersion = current.currentVersion;
     if (currentVersion < 1) throw new Error('ORG_PROFILE_REQUIRED');
-    const payload = JSON.parse(
-      (profileResult.records[0][1] as { stringValue?: string }).stringValue ?? '{}',
-    ) as { standardsInScope?: string[] };
+    const payload = current.payload as { standardsInScope?: string[] };
 
     const standards = input.standards?.length ? input.standards : (payload.standardsInScope ?? []);
     if (standards.length === 0) throw new Error('NO_STANDARDS_IN_SCOPE');
@@ -212,11 +198,7 @@ export async function generateImsManual(event: AppSyncEvent, tenantId: string, a
     run = marshalOne(runResult)!;
     await txn.commit();
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 
@@ -240,11 +222,7 @@ export async function generateImsManual(event: AppSyncEvent, tenantId: string, a
       );
       await stamp.commit();
     } catch (err) {
-      try {
-        await stamp.rollback();
-      } catch {
-        /* never mask */
-      }
+      await rollbackQuietly(stamp);
       logger.warn('Failed to stamp sfn_execution_arn (run continues)', { runId });
     }
   } catch (err) {
@@ -257,11 +235,7 @@ export async function generateImsManual(event: AppSyncEvent, tenantId: string, a
       );
       await mark.commit();
     } catch (markErr) {
-      try {
-        await mark.rollback();
-      } catch {
-        /* never mask */
-      }
+      await rollbackQuietly(mark);
     }
     logger.error('StartExecution failed', { runId, error: (err as Error).message });
     throw new Error('GENERATION_UNAVAILABLE');
@@ -305,11 +279,7 @@ export async function requestImsExport(event: AppSyncEvent, tenantId: string) {
     candidates = marshalMany(candRes) as Record<string, unknown>[];
     await txn.commit();
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 
@@ -346,13 +316,13 @@ export async function requestImsExport(event: AppSyncEvent, tenantId: string) {
     const raw = new TextDecoder().decode(invoke.Payload);
     logger.error('ExportFn failed', { raw });
     // Relay ExportFn's typed errors (EXPORT_SET_NOT_FOUND etc.) to the client
+    let errorMessage: string | undefined;
     try {
-      const parsed = JSON.parse(raw) as { errorMessage?: string };
-      throw new Error(parsed.errorMessage ?? 'EXPORT_FAILED');
-    } catch (e) {
-      if (e instanceof Error && e.message !== raw) throw e;
-      throw new Error('EXPORT_FAILED');
+      errorMessage = (JSON.parse(raw) as { errorMessage?: string }).errorMessage;
+    } catch {
+      /* non-JSON payload — generic failure */
     }
+    throw new Error(errorMessage ?? 'EXPORT_FAILED');
   }
   return JSON.parse(new TextDecoder().decode(invoke.Payload)) as { url: string; expiresAt: string };
 }
@@ -386,13 +356,13 @@ export async function regenerateSection(event: AppSyncEvent, tenantId: string, a
     logger.error('RegenerateSectionFn failed', { raw });
     // Relay the worker's typed errors (RUN_NOT_FOUND, RUN_NOT_FINALIZED,
     // SECTION_NOT_FOUND, ...) to the client
+    let errorMessage: string | undefined;
     try {
-      const parsed = JSON.parse(raw) as { errorMessage?: string };
-      throw new Error(parsed.errorMessage ?? 'REGENERATE_FAILED');
-    } catch (e) {
-      if (e instanceof Error && e.message !== raw) throw e;
-      throw new Error('REGENERATE_FAILED');
+      errorMessage = (JSON.parse(raw) as { errorMessage?: string }).errorMessage;
+    } catch {
+      /* non-JSON payload — generic failure */
     }
+    throw new Error(errorMessage ?? 'REGENERATE_FAILED');
   }
   return JSON.parse(new TextDecoder().decode(invoke.Payload));
 }
@@ -457,6 +427,11 @@ export async function runManualSectionDraft(event: AppSyncEvent, tenantId: strin
     if (sectionKind === 'pending') throw new Error('SECTION_STILL_COMPOSING');
 
     const clauseIds = (section.clauseRegistryIds ?? []).filter(Boolean);
+    // The ids land inside a quoted `{...}` array literal — a corrupt
+    // clause_registry_ids element containing `,`/`}` would break out of it.
+    if (clauseIds.some((id) => !/^[0-9a-f-]{36}$/i.test(id))) {
+      throw new Error('INVALID_PAYLOAD: clause_registry_ids element is not a uuid');
+    }
     if (clauseIds.length) {
       const clausesResult = await txn.execute(
         `SELECT standard, clause_no, clause_title, intent_paraphrase, required_sources
@@ -469,11 +444,7 @@ export async function runManualSectionDraft(event: AppSyncEvent, tenantId: strin
     }
     await txn.commit();
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 

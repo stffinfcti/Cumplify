@@ -14,8 +14,6 @@ export const EXPORT_FN = process.env.EXPORT_FN ?? '';
 // name (same no-cycle pattern as DOCGEN_SFN_ARN).
 export const REGEN_FN = process.env.REGEN_FN ?? '';
 
-export interface AppSyncEvent {
-  info: { fieldName: string };
-  arguments: Record<string, unknown>;
-  identity?: { resolverContext?: Record<string, string> };
-}
+// The canonical AppSyncEvent lives in shared.ts — re-export so the
+// `./common.js` import sites keep working.
+export type { AppSyncEvent } from '../shared.js';

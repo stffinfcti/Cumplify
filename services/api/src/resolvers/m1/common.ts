@@ -32,6 +32,7 @@ import {
   PDF_RENDER_FN,
   DEFAULT_RETENTION_YEARS,
   LIST_QUERY_LIMIT,
+  versionContentKey,
   type AppSyncEvent,
 } from '../shared.js';
 export {
@@ -44,9 +45,9 @@ export {
   type AppSyncEvent,
 };
 
-export function versionContentKey(tenantId: string, documentId: string, versionNo: number): string {
-  return `tenants/${tenantId}/documents/${documentId}/v${versionNo}.json`;
-}
+// Canonical content-key derivation lives in shared.ts (regenerate-section
+// used to carry a third copy) — re-exported here for existing import sites.
+export { versionContentKey };
 
 export interface Sentence {
   text: string;

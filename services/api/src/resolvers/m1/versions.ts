@@ -13,6 +13,7 @@ import {
   marshalOne,
   marshalMany,
   parseAwsJson,
+  rollbackQuietly,
 } from '../shared.js';
 import { mapEnum, APPROVAL_DECISION_MAP } from '../enum-mappings.js';
 import {
@@ -112,11 +113,7 @@ export async function submitDocumentForApproval(
     });
     return marshalOne(result);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -147,7 +144,7 @@ export async function approveDocumentVersion(event: AppSyncEvent, tenantId: stri
     }
     if (createdBy === actor) {
       // Rollback BEFORE publishing (lesson: attempt is logged, write is not)
-      await txn.rollback();
+      await rollbackQuietly(txn);
       await publishAuditEvent({
         tenantId,
         actor,
@@ -198,16 +195,18 @@ export async function approveDocumentVersion(event: AppSyncEvent, tenantId: stri
       detailType: 'Document.Approved',
       source: 'cumplify.m1.document-studio',
       entityId: String(approval?.id ?? ''), // the DocumentApproval row the mutation returns
-      payload: { approvalId: approval?.id, versionId: input.versionId, decision: input.decision },
+      // Log the STORED decision (mapped enum), not the raw input — the audit
+      // payload must reflect what actually landed in document_approvals.
+      payload: {
+        approvalId: approval?.id,
+        versionId: input.versionId,
+        decision: approval?.decision,
+      },
     });
     return approval;
   } catch (err) {
     if ((err as Error).message !== 'SOD_VIOLATION') {
-      try {
-        await txn.rollback();
-      } catch {
-        /* never mask */
-      }
+      await rollbackQuietly(txn);
     }
     throw err;
   }
@@ -273,6 +272,8 @@ export async function publishControlledDocument(
       if (!approvalRes.records?.length) throw new Error('APPROVAL_REQUIRED');
 
       // Tenant retention policy (RLS-scoped); seed the default row if absent.
+      // Two publishers racing the seed land on the (tenant_id, record_type)
+      // UNIQUE index (migration 020) — DO NOTHING, then read whoever won.
       if (m.contentRef && EVIDENCE_BUCKET && PDF_RENDER_FN) {
         const polRes = await txn.execute(
           `SELECT retention_years FROM m4.retention_policies
@@ -284,24 +285,27 @@ export async function publishControlledDocument(
         } else {
           await txn.execute(
             `INSERT INTO m4.retention_policies (tenant_id, record_type, retention_years, disposition_rule, created_by)
-             VALUES (:tenantId, 'controlled_document', :years, 'review_before_disposal', :actor)`,
+             VALUES (:tenantId, 'controlled_document', :years, 'review_before_disposal', :actor)
+             ON CONFLICT (tenant_id, record_type) DO NOTHING`,
             [
               { name: 'tenantId', value: { stringValue: tenantId } },
               { name: 'years', value: { longValue: DEFAULT_RETENTION_YEARS } },
               { name: 'actor', value: { stringValue: actor } },
             ],
           );
+          const reread = await txn.execute(
+            `SELECT retention_years FROM m4.retention_policies
+             WHERE record_type = 'controlled_document' LIMIT 1`,
+          );
+          const winner = marshalOne(reread) as { retentionYears: number } | null;
+          if (winner) years = winner.retentionYears;
         }
         wantsSeal = true;
       }
       await txn.commit();
       return m;
     } catch (err) {
-      try {
-        await txn.rollback();
-      } catch {
-        /* never mask */
-      }
+      await rollbackQuietly(txn);
       throw err;
     }
   })();
@@ -369,7 +373,7 @@ export async function publishControlledDocument(
     const result = await txn.execute(
       `UPDATE m1.documents d SET status = 'approved', updated_at = NOW()
        FROM m1.document_versions v WHERE v.id = :versionId::uuid AND v.document_id = d.id
-         AND d.status <> 'obsolete'
+         AND d.status = 'in_review'
        RETURNING d.*`,
       [{ name: 'versionId', value: { stringValue: versionId } }],
     );
@@ -410,11 +414,7 @@ export async function publishControlledDocument(
     });
     return marshalOne(result);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -429,7 +429,7 @@ export async function listDocumentVersions(event: AppSyncEvent, tenantId: string
     await txn.commit();
     return marshalMany(result);
   } catch (err) {
-    await txn.rollback();
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -467,11 +467,7 @@ export async function getDocumentVersionDiff(event: AppSyncEvent, tenantId: stri
     // Align sections by harmonizationKey and compute diff
     return computeSectionDiff(content1, content2);
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -501,11 +497,7 @@ export async function getDocumentContent(event: AppSyncEvent, tenantId: string) 
     // 2026-07-22 at the design gate.
     return content;
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }
@@ -528,63 +520,85 @@ export async function saveDocumentSectionEdit(
   const input = event.arguments.input as Record<string, unknown>;
   const versionId = input.versionId as string;
   const harmonizationKey = input.harmonizationKey as string;
-  const txn = await beginTenantTransaction(tenantId);
+
+  // AWSJSON arrives parsed (object) from AppSync, as a string from hermetic
+  // fixtures — accept both (same wire-shape class as saveOrgProfile, found
+  // live 2026-07-22). Boundary zod: ChangeEntry[] array (item 8) — the
+  // elements are stored verbatim, so only the array/object shape is gated.
+  const trackedChanges = parseAwsJson(TrackedChangesSchema, input.trackedChanges, 'trackedChanges');
+
+  // ── Phase 1 (read txn): meta + guards — released BEFORE the content load
+  // so the S3 GetObject never holds a Data-API session slot.
+  const metaTxn = await beginTenantTransaction(tenantId);
+  let meta: { documentId: string; status: string; contentRef: string | null };
   try {
-    const metaResult = await txn.execute(
+    const metaResult = await metaTxn.execute(
       `SELECT d.id AS document_id, d.status, v.content_ref
        FROM m1.document_versions v JOIN m1.documents d ON d.id = v.document_id
        WHERE v.id = :versionId::uuid`,
       [{ name: 'versionId', value: { stringValue: versionId } }],
     );
-    const meta = marshalOne(metaResult) as {
+    const m = marshalOne(metaResult) as {
       documentId: string;
       status: string;
       contentRef: string | null;
     } | null;
-    if (!meta) throw new Error('VERSION_NOT_FOUND');
+    if (!m) throw new Error('VERSION_NOT_FOUND');
     // 7.5.2 versioning law: a sealed (approved) or obsolete document's
     // record-of-truth is never mutated — every edit lands in a NEW version,
     // but only while the document is still in an editable lifecycle state.
-    if (meta.status === 'APPROVED' || meta.status === 'OBSOLETE') {
+    if (m.status === 'APPROVED' || m.status === 'OBSOLETE') {
       throw new Error('SEALED_VERSION_REJECTED');
     }
-    if (!meta.contentRef) throw new Error('CONTENT_UNAVAILABLE');
+    if (!m.contentRef) throw new Error('CONTENT_UNAVAILABLE');
+    meta = m;
+    await metaTxn.commit();
+  } catch (err) {
+    await rollbackQuietly(metaTxn);
+    throw err;
+  }
 
-    const content = await loadContentJson(meta.contentRef);
-    const sectionIdx = content.sections.findIndex((s) => s.harmonizationKey === harmonizationKey);
-    if (sectionIdx === -1) throw new Error('SECTION_NOT_FOUND');
+  // ── Phase 2 (no txn): load + merge + hash the content JSON.
+  const content = await loadContentJson(meta.contentRef!);
+  const sectionIdx = content.sections.findIndex((s) => s.harmonizationKey === harmonizationKey);
+  if (sectionIdx === -1) throw new Error('SECTION_NOT_FOUND');
 
-    // AWSJSON arrives parsed (object) from AppSync, as a string from hermetic
-    // fixtures — accept both (same wire-shape class as saveOrgProfile, found
-    // live 2026-07-22). Boundary zod: ChangeEntry[] array (item 8) — the
-    // elements are stored verbatim, so only the array/object shape is gated.
-    const trackedChanges = parseAwsJson(
-      TrackedChangesSchema,
-      input.trackedChanges,
-      'trackedChanges',
+  const newContent: ContentJson = {
+    ...content,
+    sections: content.sections.map((s, i) =>
+      i === sectionIdx ? { ...s, humanEditedBody: input.body as string, trackedChanges } : s,
+    ),
+  };
+  const body = JSON.stringify(newContent);
+  const contentSha = createHash('sha256').update(body).digest('hex');
+
+  // ── Phase 3 (write txn): lock the parent document row so concurrent edits
+  // serialize — two writers reading MAX(version_no)+1 in the same window would
+  // otherwise insert duplicate version numbers AND overwrite each other's S3
+  // content key. Migration 022's UNIQUE(document_id, version_no) is the belt
+  // under this lock for any writer that forgets it. The status guard is
+  // re-checked under the lock — a concurrent publish between phase 1 and the
+  // lock acquisition must reject the edit (sealed docs never reopen via an
+  // in-flight mutation).
+  const txn = await beginTenantTransaction(tenantId);
+  try {
+    const lockResult = await txn.execute(
+      `SELECT status FROM m1.documents WHERE id = :docId::uuid FOR UPDATE`,
+      [{ name: 'docId', value: { stringValue: meta.documentId } }],
     );
-    const newContent: ContentJson = {
-      ...content,
-      sections: content.sections.map((s, i) =>
-        i === sectionIdx ? { ...s, humanEditedBody: input.body as string, trackedChanges } : s,
-      ),
-    };
+    const liveStatus = (marshalOne(lockResult) as { status: string } | null)?.status;
+    if (!liveStatus) throw new Error('VERSION_NOT_FOUND');
+    if (liveStatus === 'approved' || liveStatus === 'obsolete') {
+      throw new Error('SEALED_VERSION_REJECTED');
+    }
 
-    // Lock the parent document row so concurrent edits serialize — two writers
-    // reading MAX(version_no)+1 in the same window would otherwise insert
-    // duplicate version numbers AND overwrite each other's S3 content key.
-    await txn.execute(`SELECT id FROM m1.documents WHERE id = :docId::uuid FOR UPDATE`, [
-      { name: 'docId', value: { stringValue: meta.documentId } },
-    ]);
     const versionResult = await txn.execute(
       `SELECT COALESCE(MAX(version_no), 0) + 1 AS next FROM m1.document_versions WHERE document_id = :docId::uuid`,
       [{ name: 'docId', value: { stringValue: meta.documentId } }],
     );
     const versionNo = Number((marshalOne(versionResult) as { next: number }).next);
 
-    const body = JSON.stringify(newContent);
     const contentRef = versionContentKey(tenantId, meta.documentId, versionNo);
-    const contentSha = createHash('sha256').update(body).digest('hex');
     await s3.send(
       new PutObjectCommand({
         Bucket: CONTENT_BUCKET,
@@ -644,11 +658,7 @@ export async function saveDocumentSectionEdit(
     });
     return version;
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 }

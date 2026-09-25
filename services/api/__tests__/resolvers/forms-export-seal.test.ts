@@ -202,6 +202,10 @@ function wireSql(fx: FixtureState) {
         [[RECORD_ID, TEMPLATE_ID, fx.status, 'user-a', 'user-b']],
       );
     }
+    // approveFormRecord phase-3 status re-check (SELECT status … FOR UPDATE)
+    if (sql.includes('SELECT status FROM forms.records')) {
+      return rows(['status'], [[fx.status]]);
+    }
     if (sql.includes('FROM forms.templates')) {
       return rows(
         ['key', 'title_key', 'category', 'clause_refs', 'standards', 'requires_approval'],
@@ -251,8 +255,8 @@ function wireSql(fx: FixtureState) {
     }
     if (sql.includes('FROM qms.clause_registry')) {
       return rows(
-        ['standard', 'clause_no', 'clause_title'],
-        [['ISO9001', '8.7', 'Nonconforming outputs']],
+        ['id', 'standard', 'clause_no', 'clause_title'],
+        [[CLAUSE_UUID, 'ISO9001', '8.7', 'Nonconforming outputs']],
       );
     }
     if (sql.includes('FROM m4.retention_policies')) {
@@ -486,7 +490,9 @@ describe('approveFormRecord sealing (REC-7/ACC-7)', () => {
     expect(params.retClass).toBe('3y');
     expect(params.objectRef).toBe(`s3://test-evidence-vault/${copy.Key}`);
 
-    // forms.records.m4_record_id stamped in the SAME txn (before the commit)
+    // forms.records.m4_record_id stamped in the SAME txn as the flip
+    // (approve is 3 txns: lock+guards → render/seal → flip+m4 — the pointer
+    // must land before the LAST commit, not the first).
     const stampIdx = mockExecute.mock.calls.findIndex((c) =>
       (c[0] as string).includes('SET m4_record_id'),
     );
@@ -501,19 +507,20 @@ describe('approveFormRecord sealing (REC-7/ACC-7)', () => {
     );
     expect(stampParams.m4Id).toBe('m4-rec-77');
     expect(mockExecute.mock.calls[stampIdx][0]).toContain(':m4Id::uuid');
-    expect(mockExecute.mock.invocationCallOrder[stampIdx]).toBeLessThan(
-      mockCommit.mock.invocationCallOrder[0],
-    );
+    const lastCommit = mockCommit.mock.invocationCallOrder.at(-1)!;
+    expect(mockExecute.mock.invocationCallOrder[stampIdx]).toBeLessThan(lastCommit);
 
-    // Sealed content reflects the APPROVED row (post-flip re-read)
+    // Sealed content carries the APPROVED overlay (the row reads 'complete'
+    // in the build txn — the seal can't wait for the flip, so the approver
+    // and stamp are injected).
     const put = mockS3Send.mock.calls.find((c) => c[0].constructor.name === 'PutObjectCommand')![0]
       .input as { Body: string };
-    expect(JSON.parse(put.Body).record.status).toBe('APPROVED');
+    const sealedContent = JSON.parse(put.Body);
+    expect(sealedContent.record.status).toBe('APPROVED');
+    expect(sealedContent.record.approvedBy).toBe('approver-1');
 
-    // Audit: after commit, carries the seal
-    expect(mockCommit.mock.invocationCallOrder[0]).toBeLessThan(
-      mockPublishAudit.mock.invocationCallOrder[0],
-    );
+    // Audit: after the final commit, carries the seal
+    expect(lastCommit).toBeLessThan(mockPublishAudit.mock.invocationCallOrder[0]);
     expect(mockPublishAudit.mock.calls[0][0]).toMatchObject({ detailType: 'FormRecord.Approved' });
     expect(mockPublishAudit.mock.calls[0][0].payload).toMatchObject({
       sealed: true,
@@ -578,8 +585,14 @@ describe('approveFormRecord sealing (REC-7/ACC-7)', () => {
     await expect(
       handler(event('approveFormRecord', { input: { recordId: RECORD_ID } })),
     ).rejects.toThrow('RENDER_FAILED');
-    expect(mockCommit).not.toHaveBeenCalled();
-    expect(mockRollback).toHaveBeenCalled();
+    // The 3-phase approve commits phase 1 (guards + retention seed — status
+    // untouched) plus the read-only content-build txn BEFORE the render; the
+    // failure then never reaches the flip txn — two commits, zero record
+    // writes, no rollback because no write txn is open when it throws.
+    expect(mockCommit).toHaveBeenCalledTimes(2);
+    expect(
+      mockExecute.mock.calls.some((c) => (c[0] as string).includes("SET status = 'approved'")),
+    ).toBe(false);
     expect(mockPublishAudit).not.toHaveBeenCalled();
     // No sealed copy, no pointer row
     expect(mockS3Send.mock.calls.some((c) => c[0].constructor.name === 'CopyObjectCommand')).toBe(

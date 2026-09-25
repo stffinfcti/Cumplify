@@ -20,6 +20,7 @@ import {
   beginTenantTransaction,
   marshalMany,
   publishAuditEvent,
+  rollbackQuietly,
 } from '../../api/src/resolvers/shared.js';
 import { DOC_COMPOSER_OUTPUT_SCHEMA } from '../../ai-invoker/src/doc-composer-schema.js';
 import type { InvokeRequest, InvokeResponse, ContentBlock } from '../../ai-invoker/src/types.js';
@@ -349,11 +350,7 @@ export async function handler(event: ComposeInput): Promise<{ sectionId: string;
 
     await txn.commit();
   } catch (err) {
-    try {
-      await txn.rollback();
-    } catch {
-      /* never mask */
-    }
+    await rollbackQuietly(txn);
     throw err;
   }
 

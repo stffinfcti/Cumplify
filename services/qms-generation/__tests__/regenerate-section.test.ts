@@ -214,14 +214,39 @@ function wire(fx: Fx) {
         ],
       );
     }
-    if (sql.includes('COALESCE(MAX(version_no), 0) + 1')) {
-      return { records: [[{ longValue: 2 }]], columnMetadata: [{ name: 'next' }] };
+    if (sql.includes('d.harmonization_key IN (')) {
+      // Sentinel-key doc resolution (019 unique index): master + matrix +
+      // this section's clause doc (only when fx.clauseDocMatches).
+      const docRows: unknown[][] = [
+        ['__MASTER_LIST__', MASTER, 'master_list', `tenants/${T}/documents/${MASTER}/v1.json`],
+        [
+          '__CORRELATION_MATRIX__',
+          MATRIX,
+          'correlation_matrix',
+          `tenants/${T}/documents/${MATRIX}/v1.json`,
+        ],
+      ];
+      if (fx.clauseDocMatches) {
+        docRows.push([
+          HKEY,
+          CLAUSE_DOC,
+          'procedure',
+          `tenants/${T}/documents/${CLAUSE_DOC}/v1.json`,
+        ]);
+      }
+      return rows(['harmonization_key', 'id', 'doc_type', 'content_ref'], docRows);
     }
-    if (sql.includes("d.doc_type = 'master_list'")) {
-      return rows(['id', 'content_ref'], [[MASTER, `tenants/${T}/documents/${MASTER}/v1.json`]]);
-    }
-    if (sql.includes('ORDER BY version_no DESC LIMIT 1')) {
-      return rows(['content_ref'], [[`tenants/${T}/documents/${CLAUSE_DOC}/v1.json`]]);
+    if (sql.includes('GROUP BY v.document_id')) {
+      // Batched lock+MAX(version_no)+1 for every doc being versioned
+      return rows(
+        ['document_id', 'next'],
+        [
+          [MANUAL, 2],
+          [CLAUSE_DOC, 2],
+          [MATRIX, 2],
+          [MASTER, 2],
+        ],
+      );
     }
     if (sql.includes('DISTINCT ON (v.document_id)')) {
       return rows(

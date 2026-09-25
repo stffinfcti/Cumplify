@@ -158,14 +158,19 @@ describe('m2 createCorrectiveAction — stale-schema fix regression', () => {
 
 describe('m2 closeCapa — stale-schema fix regression', () => {
   it('sets only real columns (no closed_at/closed_by) and reads input.id', async () => {
-    // RETURNING must yield the closed row — an empty result means the
-    // status predicate rejected the write (not found / already closed).
-    mockExecute.mockResolvedValueOnce({
-      records: [[{ stringValue: 'ca-1' }]],
-      columnMetadata: [{ name: 'id' }],
-    });
+    // Call 1: existence/status read; call 2: UPDATE ... RETURNING must yield
+    // the closed row — an empty result means the predicate rejected the write.
+    mockExecute
+      .mockResolvedValueOnce({
+        records: [[{ stringValue: 'open' }]],
+        columnMetadata: [{ name: 'status' }],
+      })
+      .mockResolvedValueOnce({
+        records: [[{ stringValue: 'ca-1' }]],
+        columnMetadata: [{ name: 'id' }],
+      });
     await m2Handler(makeEvent('closeCapa', { input: { id: 'ca-1', closureNotes: 'done' } }));
-    const [sql, params] = mockExecute.mock.calls[0];
+    const [sql, params] = mockExecute.mock.calls[1];
     expect(sql).toContain(`SET status = 'closed'`);
     expect(sql).toContain(`AND status <> 'closed'`); // check-then-act predicate rides the UPDATE
     expect(sql).not.toContain('closed_at');
@@ -173,9 +178,20 @@ describe('m2 closeCapa — stale-schema fix regression', () => {
     expect(params).toEqual([{ name: 'id', value: { stringValue: 'ca-1' } }]);
   });
 
-  it('rejects a double-close — empty RETURNING throws CAPA_NOT_FOUND_OR_ALREADY_CLOSED', async () => {
+  it('rejects a double-close — status predicate empties RETURNING', async () => {
+    mockExecute.mockResolvedValueOnce({
+      records: [[{ stringValue: 'closed' }]],
+      columnMetadata: [{ name: 'status' }],
+    });
+    // Second execute (the UPDATE) falls back to empty RETURNING.
     await expect(m2Handler(makeEvent('closeCapa', { input: { id: 'ca-1' } }))).rejects.toThrow(
-      'CAPA_NOT_FOUND_OR_ALREADY_CLOSED',
+      'CAPA_ALREADY_CLOSED',
+    );
+  });
+
+  it('unknown CAPA — empty status read throws CAPA_NOT_FOUND', async () => {
+    await expect(m2Handler(makeEvent('closeCapa', { input: { id: 'ca-1' } }))).rejects.toThrow(
+      'CAPA_NOT_FOUND',
     );
   });
 });

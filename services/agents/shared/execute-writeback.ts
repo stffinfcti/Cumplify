@@ -37,6 +37,7 @@ import { Logger } from '@aws-lambda-powertools/logger';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { publish } from '../../eventing/src/publisher.js';
+import { assertTenantIdSafe } from '../../api/src/resolvers/shared.js';
 import type { Context } from 'aws-lambda';
 import { ulid } from 'ulid';
 
@@ -144,6 +145,9 @@ export async function handler(
   // input (the wrapper exists only in state OUTPUT). Accept both shapes.
   const input: WritebackInput = 'Payload' in event ? event.Payload : event;
   const { tenantId, agentName, proposedAction, approvalResult } = input;
+  // Fail-loud boundary — tenantId arrives via the SFN/DDB chain and feeds
+  // set_config below; reject wildcard/tag-meta characters at the entry.
+  assertTenantIdSafe(tenantId);
 
   if (approvalResult.decision !== 'APPROVE') {
     logger.info('Writeback rejected by human', {

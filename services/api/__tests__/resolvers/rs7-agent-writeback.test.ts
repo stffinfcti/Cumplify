@@ -334,9 +334,7 @@ describe('agentScoreReadiness (m3, LeadAuditor) — upsert from generation-secti
         ],
         columnMetadata: [{ name: 'clause_no' }, { name: 'status' }],
       })
-      .mockResolvedValueOnce(EMPTY_RESULT) // upsert 4.1
-      .mockResolvedValueOnce(EMPTY_RESULT) // upsert 4.2
-      .mockResolvedValueOnce(EMPTY_RESULT) // upsert 4.3
+      .mockResolvedValueOnce(EMPTY_RESULT) // one batched upsert for all clauses
       .mockResolvedValueOnce({
         records: [
           [{ stringValue: '4.1' }, { doubleValue: 100.0 }],
@@ -355,13 +353,15 @@ describe('agentScoreReadiness (m3, LeadAuditor) — upsert from generation-secti
       { clauseRef: '4.3', score: 0.0 },
     ]);
 
-    const [upsert41Sql, upsert41Params] = mockExecute.mock.calls[1];
-    expect(upsert41Sql).toContain('ON CONFLICT (tenant_id, standard, clause_ref)');
-    expect(upsert41Params).toContainEqual({ name: 'score', value: { doubleValue: 100.0 } });
-    const [, upsert42Params] = mockExecute.mock.calls[2];
-    expect(upsert42Params).toContainEqual({ name: 'score', value: { doubleValue: 0.0 } });
-    const [, upsert43Params] = mockExecute.mock.calls[3];
-    expect(upsert43Params).toContainEqual({ name: 'score', value: { doubleValue: 0.0 } });
+    // One statement upserts all three clauses — named params score<i>/<clauseRef<i>.
+    const [upsertSql, upsertParams] = mockExecute.mock.calls[1];
+    expect(upsertSql).toContain('ON CONFLICT (tenant_id, standard, clause_ref)');
+    expect(upsertSql).toContain('VALUES (:tenantId, :standard, :clauseRef0, :score0');
+    expect(upsertSql).toContain('clauseRef2');
+    expect(upsertParams).toContainEqual({ name: 'score0', value: { doubleValue: 100.0 } });
+    expect(upsertParams).toContainEqual({ name: 'score1', value: { doubleValue: 0.0 } });
+    expect(upsertParams).toContainEqual({ name: 'score2', value: { doubleValue: 0.0 } });
+    expect(upsertParams).toContainEqual({ name: 'clauseRef0', value: { stringValue: '4.1' } });
 
     expect(mockPublishAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({ detailType: 'Readiness.Scored' }),

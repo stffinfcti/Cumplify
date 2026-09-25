@@ -113,7 +113,14 @@ export async function incrementMeter(
   const pk = `TENANT#${tenantId}#METER`;
   const sk = `MONTH#${yyyymm}`;
 
+  if (cap?.hardCap !== undefined && !Number.isFinite(cap.hardCap)) {
+    throw new Error(`Refusing to meter against non-finite hardCap: ${cap.hardCap}`);
+  }
   const capped = cap?.hardCap !== undefined;
+  // One rounding, shared by the ADD and the cap condition — credits written
+  // at toFixed(6) while the condition computed unrounded used to drift
+  // ≤5e-7 at the cap edge.
+  const creditsN = Number(credits.toFixed(6));
   try {
     await ddb.send(
       new UpdateItemCommand({
@@ -135,12 +142,12 @@ export async function incrementMeter(
           : {}),
         UpdateExpression: 'ADD creditsUsed :credits SET lastUpdated = :ts',
         ExpressionAttributeValues: {
-          ':credits': { N: credits.toFixed(6) },
+          ':credits': { N: creditsN.toFixed(6) },
           ':ts': { S: new Date().toISOString() },
           ...(capped
             ? {
                 ':cap': { N: String(cap!.hardCap) },
-                ':capMinusCredits': { N: String(cap!.hardCap! - credits) },
+                ':capMinusCredits': { N: String(cap!.hardCap! - creditsN) },
               }
             : {}),
         },
