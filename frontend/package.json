@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22 <25"
+  },
   "scripts": {
     "predev": "node scripts/load-env.mjs",
     "dev": "next dev",
@@ -10,7 +13,7 @@
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
-    "deploy:bundle": "node scripts/amplify-bundle.mjs",
+    "test:cov": "vitest run --coverage",
     "i18n:check": "node scripts/check-hardcoded-strings.mjs"
   },
   "dependencies": {
@@ -36,6 +39,7 @@
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^6.0.3",
+    "@vitest/coverage-v8": "^4.1.10",
     "jsdom": "^29.1.1",
     "sharp": "^0.35.3",
     "typescript": "^5.5.0",

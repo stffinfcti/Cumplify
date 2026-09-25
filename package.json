@@ -3,10 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22 <25"
+  },
   "scripts": {
     "verify": "tsx scripts/verify.ts",
     "readback": "vitest run --config infra/readback/vitest.config.ts --reporter=verbose",
     "test": "vitest run && cd frontend && npx vitest run",
+    "test:cov": "vitest run --coverage && cd frontend && npx vitest run --coverage",
     "test:int": "vitest run --config vitest.int.config.ts",
     "lint": "eslint . --ext .ts,.tsx",
     "format:check": "prettier --check .",
@@ -20,6 +24,7 @@
     "@types/source-map-support": "^0.5.10",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
+    "@vitest/coverage-v8": "^4.1.9",
     "aws-cdk": "^2.1129.0",
     "aws-cdk-lib": "^2.261.0",
     "aws-sdk-client-mock": "^4.1.0",
@@ -46,8 +51,10 @@
     "@aws-sdk/client-sfn": "^3.1083.0",
     "@aws-sdk/client-sqs": "^3.1079.0",
     "@aws-sdk/client-ssm": "^3.1079.0",
+    "@aws-sdk/credential-provider-node": "^3.972.66",
     "@aws-sdk/s3-request-presigner": "^3.1088.0",
     "@aws-sdk/util-dynamodb": "^3.996.5",
+    "@smithy/signature-v4": "^5.6.5",
     "@sparticuz/chromium": "^149.0.0",
     "@types/aws-lambda": "^8.10.162",
     "fflate": "^0.8.3",
